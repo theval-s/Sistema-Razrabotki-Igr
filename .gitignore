@@ -1,0 +1,34 @@
+# Build output
+/build/
+/install/
+/out/
+compile_commands.json
+
+# vcpkg manifest-mode artifacts
+/vcpkg_installed/
+/external/vcpkg/buildtrees/
+/external/vcpkg/packages/
+/external/vcpkg/downloads/
+/external/vcpkg/installed/
+
+# Qt / autogen
+*.moc
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+/**/.qt/
+
+# IDE
+/.vs/
+/.vscode/*
+!/.vscode/settings.json.example
+/.idea/
+CMakeUserPresets.json
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Any executables
+*.exe
