@@ -28,7 +28,7 @@ For CMake to find Qt properly you might need to also add an environment variable
 ## 1. Clone
 
 ```
-git clone --recurse-submodules <repo>
+git clone --recurse-submodules https://github.com/theval-s/Sistema-Razrabotki-Igr
 cd SRI
 ```
 
