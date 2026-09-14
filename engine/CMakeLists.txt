@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(spdlog CONFIG REQUIRED)
+find_package(directxtk CONFIG REQUIRED)
 
 set(ENGINE_PUBLIC_HEADERS
     include/engine/engine.hpp
@@ -44,7 +45,7 @@ target_include_directories(engine
 # editor does not have to find_package() our implementation details.
 target_link_libraries(engine
     PRIVATE
-        spdlog::spdlog
+        spdlog::spdlog Microsoft::DirectXTK d3d11 dxgi
 )
 
 set_target_properties(engine PROPERTIES

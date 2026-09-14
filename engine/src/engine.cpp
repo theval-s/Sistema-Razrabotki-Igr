@@ -1,6 +1,7 @@
 #include <engine/engine.hpp>
 
 #include <spdlog/spdlog.h>
+#include <SimpleMath.h>
 
 namespace engine {
 
@@ -15,6 +16,8 @@ std::string_view version() noexcept {
 
 Engine::Engine() : impl_(std::make_unique<Impl>()) {
     spdlog::info("aboba");
+    DirectX::SimpleMath::Vector3 vec = DirectX::SimpleMath::Vector3::Zero;
+    spdlog::warn(vec.x);
 }
 
 // Defined here, not in the header: the destructor of unique_ptr<Impl> needs the
