@@ -65,6 +65,16 @@ and then open .sln file in 'build/windows-vs2022/'.
 
 If you don't want to build editor, or don't want to deal with installing Qt for building editor - change SRI_BUILD_EDITOR to OFF in your CMake preset.
 
+For engine development, build the standalone example game without configuring
+or building the Qt editor:
+
+```
+cmake --preset windows-example-game
+cmake --build --preset windows-example-game-debug
+```
+
+`ExampleGame` links the engine statically through `Engine::EngineStatic`.
+
 ## 4. Package for release if needed
 
 ```
