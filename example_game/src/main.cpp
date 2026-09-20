@@ -1,9 +1,10 @@
-#include <engine/engine.hpp>
 
-#include <iostream>
+#include "engine/RenderingSystem.hpp"
 
 int main() {
-    engine::Engine engine;
-    std::cout << "SRI Engine " << engine::version() << '\n';
+    engine::RenderingSystem renderingSystem;
+    renderingSystem.Initialize();
+    
+    renderingSystem.RenderFrame();
     return 0;
 }
