@@ -9,7 +9,7 @@ struct RenderedMesh {
     BufferHandle vertexBuffer;
     BufferHandle indexBuffer;
     MeshLayoutHandle meshLayout;
-    uint32_t vertexCount;
+    uint32_t indexCount;
 };
 
 using MeshHandle = HandleMap<RenderedMesh>::Handle;

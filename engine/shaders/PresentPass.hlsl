@@ -29,3 +29,24 @@ PS_IN VSMain(uint vertexId : SV_VertexID) {
     output.tex = uvs[vertexId];
     return output;
 }
+
+Texture2D SceneResult : register(t5);
+// Texture2D particleTex : register(t1);
+
+SamplerState PointClampSampler : register(s0);
+
+float3 ReinhardTonemap(float3 color)
+{
+    return color / (1.0f + color);
+}
+
+float4 PSMain(PS_IN input) : SV_Target
+{
+    float4 sceneColor = SceneResult.Sample(PointClampSampler, input.tex);
+    //float4 particleColor = particleTex.Sample(pointSampler, input.tex);
+    
+    float3 result = sceneColor.rgb;
+    //float3 result = particleColor.rgb * particleColor.a + sceneColor.rgb * (1.0 - particleColor.a);
+    result = ReinhardTonemap(result);
+    return float4(result, 1.0f);
+}

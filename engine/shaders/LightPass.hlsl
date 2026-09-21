@@ -36,18 +36,18 @@ struct EngineObjectData {
     float4x4 normalMatrix; //todo: may be split to separate object as only GBuffer and CS passes currently need this
 };
 
-cbuffer EngineObject : register(b2) {
+cbuffer EngineObject : register(b3) {
     EngineObjectData Object;
 }
 
 
-struct ShadowCascades {
+struct ShadowCascadesData {
     float4x4 viewProjections[4];
     float4 distances;
 };
 
 cbuffer EngineCascades : register(b4) {
-    ShadowCascades ShadowCascades;
+    ShadowCascadesData ShadowCascades;
 }
 
 SamplerState PointClampSampler : register(s0);

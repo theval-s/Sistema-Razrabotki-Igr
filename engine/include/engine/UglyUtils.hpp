@@ -39,7 +39,7 @@ struct ObjIndexTriplet {
 };
 
 inline void CenterModel(ObjModel& model, bool normalize = true) {
-    float maxF = 1e30;
+    float maxF = 1e30f;
     Vector3 minV{maxF, maxF, maxF}, maxV{};
     maxV = -minV;
     for (auto& vertex : model.vertices) {
@@ -47,7 +47,7 @@ inline void CenterModel(ObjModel& model, bool normalize = true) {
         maxV = Vector3::Max(maxV, vertex.position);
     }
     Vector3 center = (minV + maxV) * 0.5f;
-    if ((center - Vector3::Zero).Length() < 1e-6) {
+    if ((center - Vector3::Zero).Length() < 1e-6f) {
         return; // already centered
     }
     Vector3 offset = center - Vector3::Zero;
@@ -61,11 +61,11 @@ inline void CenterModel(ObjModel& model, bool normalize = true) {
     for (auto& vertex : model.vertices) {
         maxV2 = Vector3::Max(maxV2, vertex.position);
     }
-    float maxDim = max(max(maxV2.x, maxV2.y), maxV2.z);
-    if (abs(maxDim - 0.5) < 1e-6) {
+    float maxDim = (std::max)((std::max)(maxV2.x, maxV2.y), maxV2.z);
+    if (abs(maxDim - 0.5f) < 1e-6f) {
         return; //already normalized
     }
-    float divisor = maxDim / 0.5;
+    float divisor = maxDim / 0.5f;
     for (auto& vertex : model.vertices) {
         vertex.position /= divisor;
     }
@@ -292,7 +292,7 @@ struct RawMesh {
     std::vector<uint32_t> indicies;
 };
 
-MeshHandle FromRawMesh(RenderingResourceManager& resourceManager, const RawMesh& rawMesh) {
+inline MeshHandle FromRawMesh(RenderingResourceManager& resourceManager, const RawMesh& rawMesh) {
     auto vertexBuffer = resourceManager.CreateVertexBuffer<VertData>(rawMesh.vertexes);
     auto indexBuffer = resourceManager.CreateIndexBuffer<uint32_t>(rawMesh.indicies);
     VertexLayout layout;

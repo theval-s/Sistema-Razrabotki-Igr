@@ -7,7 +7,7 @@ struct LightPass : RenderPass {
     ShaderHandle vertexShader, pixelShader, dirLightVertexShader;
     MeshHandle lightSphere;
 
-    void Initialize(RenderingResourceManager& resourceManager, RenderingResources& resources) override {
+    void Initialize(RenderingResourceManager& resourceManager, RenderingContext&, RenderingResources&) override {
         vertexShader = resourceManager.CompileShader(L"LightPass.hlsl", ShaderType::Vertex);
         pixelShader = resourceManager.CompileShader(L"LightPass.hlsl", ShaderType::Pixel);
         dirLightVertexShader = resourceManager.CompileShader(L"DirectionalLightVS.hlsl", ShaderType::Vertex);
@@ -40,11 +40,11 @@ struct LightPass : RenderPass {
         context.SetShader(vertexShader);
         context.SetShader(pixelShader);
 
-        context.SetShaderResources(BindSlot::Texture::Albedo, gBuffer.albedoTexture);
-        context.SetShaderResources(BindSlot::Texture::Normal, gBuffer.normalTexture);
-        context.SetShaderResources(BindSlot::Texture::Material, gBuffer.materialTexture);
-        context.SetShaderResources(BindSlot::Texture::Depth, gBuffer.depthTexture);
-        context.SetShaderResources(BindSlot::Texture::Shadow, resources.shadowTexture);
+        context.SetShaderResources(BindSlots::Texture::Albedo, gBuffer.albedoTexture);
+        context.SetShaderResources(BindSlots::Texture::Normal, gBuffer.normalTexture);
+        context.SetShaderResources(BindSlots::Texture::Material, gBuffer.materialTexture);
+        context.SetShaderResources(BindSlots::Texture::Depth, gBuffer.depthTexture);
+        context.SetShaderResources(BindSlots::Texture::Shadow, resources.shadowTexture);
         
         for (const auto & light : world.lights) {
             UpdateLight(context, resources, light);
@@ -71,6 +71,7 @@ struct LightPass : RenderPass {
         }
         
         UpdateLight(context, resources, world.directionalLight);
+        context.SetShader(dirLightVertexShader);
         context.RawDraw(6, 0);
     }
 };

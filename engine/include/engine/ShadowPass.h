@@ -7,16 +7,16 @@ namespace engine {
 CascadeInfo GetCascadeData(Vector3 lightDirection, Matrix cameraView, float fov, float aspect, float nearPlane,
                            float farPlane);
 
-CascadeInfo GetCascadeData(Vector3 lightDirection, const FPSCamera& camera) {
+inline CascadeInfo GetCascadeData(Vector3 lightDirection, const FPSCamera& camera) {
     return GetCascadeData(lightDirection, camera.GetViewMatrix(), camera.fov, camera.aspectRatio, camera.nearPlane,
                           camera.farPlane);
 }
 
 struct ShadowCSMPass : RenderPass {
-    constexpr uint32_t mapSize = 1024;
+    static constexpr uint32_t mapSize = 1024;
     ShaderHandle vertexShader, geometryShader;
 
-    void Initialize(RenderingResourceManager& resourceManager, RenderingResources& resources) override {
+    void Initialize(RenderingResourceManager& resourceManager, RenderingContext&, RenderingResources& resources) override {
         vertexShader = resourceManager.CompileShader(L"ShadowCSMPass.hlsl", ShaderType::Vertex);
         geometryShader = resourceManager.CompileShader(L"ShadowCSMPass.hlsl", ShaderType::Geometry);
         const TextureDesc shadowTextureDesc{
@@ -32,8 +32,10 @@ struct ShadowCSMPass : RenderPass {
     void Render(RenderWorld& world, RenderingContext& context, RenderingResources& resources) override {
         context.SetViewport(mapSize, mapSize);
         context.SetRasterizerState(RasterizerState::CullBackWithBias);
-        context.ClearDepthView(resources.shadowTexture, 1.0, std::nullopt);
+        context.ClearDepthView(resources.shadowTexture, 1.0f, std::nullopt);
         context.SetRenderTargets({TextureHandle{}}, resources.shadowTexture);
+        context.SetShader(vertexShader);
+        context.SetShader(geometryShader);
 
         world.BindDirectionalLightView(context, resources);
         resources.cascadeInfo = GetCascadeData(world.directionalLight.direction, world.camera);
@@ -80,7 +82,7 @@ inline std::vector<Vector4> GetFrustumCorners(const Matrix& viewMatrix, const Ma
     return frustumCorners;
 }
 
-std::pair<Vector4, Vector4> GetMinMaxVector(const std::vector<Vector4>& frustumCorners) {
+inline std::pair<Vector4, Vector4> GetMinMaxVector(const std::vector<Vector4>& frustumCorners) {
     float maxF = 1e30f;
     Vector4 minV{maxF, maxF, maxF, maxF};
     Vector4 maxV = -minV;
@@ -93,7 +95,7 @@ std::pair<Vector4, Vector4> GetMinMaxVector(const std::vector<Vector4>& frustumC
 }
 
 
-CascadeInfo GetCascadeData(Vector3 lightDirection, Matrix cameraView, float fov, float aspect, float nearPlane,
+inline CascadeInfo GetCascadeData(Vector3 lightDirection, Matrix cameraView, float fov, float aspect, float nearPlane,
                            float farPlane) {
     std::array<float, 5> distances{nearPlane, 0, 0, 0, farPlane};
     for (int i = 4; i >= 1; i--) {

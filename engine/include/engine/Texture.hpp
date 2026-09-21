@@ -1,9 +1,12 @@
 ﻿#pragma once
+#include <cassert>
 #include <cstdint>
 #include <d3d11.h>
 #include <dxgiformat.h>
 #include <wrl/client.h>
 #include <winnt.h>
+
+#include "HandleMap.hpp"
 
 
 namespace engine {
@@ -19,7 +22,7 @@ enum class TextureUsage : uint32_t {
 
 DEFINE_ENUM_FLAG_OPERATORS(TextureUsage);
 
-inline boolean HasFlag(const TextureUsage usage, const TextureUsage flag) {
+inline bool HasFlag(const TextureUsage usage, const TextureUsage flag) {
     return (usage & flag) != TextureUsage::None;
 }
 
@@ -100,6 +103,10 @@ struct Texture {
     explicit Texture(ComPtr<ID3D11ShaderResourceView> && view) : srv_(std::move(view)) {
         
     }
+    
+    explicit Texture(ComPtr<ID3D11RenderTargetView> && view) : rtv_(std::move(view)) {
+        
+    }
 private:
     TextureDesc desc_;
     ComPtr<ID3D11Texture2D> resource_;
@@ -172,7 +179,7 @@ private:
     }
     
     HRESULT CreateDefaultDSV(ID3D11Device* device) {
-        const DXGI_FORMAT format = desc_.rtvFormat;
+        const DXGI_FORMAT format = desc_.dsvFormat;
         if (format == DXGI_FORMAT_UNKNOWN) {
             //read only depth is not constructed in default case
             return device->CreateDepthStencilView(

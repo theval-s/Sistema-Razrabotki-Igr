@@ -1,7 +1,12 @@
 ﻿#pragma once
+#include <cassert>
+#include <cstddef>
 #include <d3d11.h>
 #include <spdlog/spdlog.h>
 #include <wrl/client.h>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "HandleMap.hpp"
 #include "VertexLayout.hpp"
@@ -13,10 +18,23 @@ namespace engine {
  * This class handles vertex layout signatures for meshes and shaders and also creates and caches DX11 InputLayouts
  */
 struct InputLayoutCache {
+    struct LayoutKey {
+        MeshLayoutHandle mesh;
+        ShaderLayoutHandle shader;
+
+        bool operator==(const LayoutKey&) const = default;
+    };
+
+    struct LayoutKeyHash {
+        size_t operator()(const LayoutKey& key) const noexcept {
+            return (static_cast<size_t>(key.mesh.id) << 32) ^ key.shader.id;
+        }
+    };
+
     HandleMap<VertexLayout> meshVertexLayouts{};
     HandleMap<ShaderVertexLayout> shaderVertexLayouts{};
 
-    std::unordered_map<std::pair<MeshLayoutHandle, ShaderLayoutHandle>, ComPtr<ID3D11InputLayout>> inputLayoutCache{};
+    std::unordered_map<LayoutKey, ComPtr<ID3D11InputLayout>, LayoutKeyHash> inputLayoutCache{};
 
     MeshLayoutHandle RegisterMeshLayout(VertexLayout&& vertexLayout) {
         if (const auto result = meshVertexLayouts.Find(vertexLayout)) {
@@ -42,12 +60,13 @@ struct InputLayoutCache {
     ID3D11InputLayout* GetInputLayout(ID3D11Device* device, MeshLayoutHandle meshLayout, ShaderLayoutHandle shaderLayout) {
         assert(meshLayout);
         assert(shaderLayout);
-        if (const auto result = inputLayoutCache.find(std::make_pair(meshLayout, shaderLayout)); result != inputLayoutCache.
+        const LayoutKey key{meshLayout, shaderLayout};
+        if (const auto result = inputLayoutCache.find(key); result != inputLayoutCache.
             end()) {
             return result->second.Get();
         }
         auto layout = CreateInputLayout(device, meshVertexLayouts.Get(meshLayout), shaderVertexLayouts.Get(shaderLayout));
-        inputLayoutCache.insert({std::make_pair(meshLayout, shaderLayout), layout});
+        inputLayoutCache.insert({key, layout});
         return layout.Get();
     }
 

@@ -1,8 +1,13 @@
 ﻿#pragma once
+#include <algorithm>
+#include <cstdint>
+#include <d3d11shader.h>
+#include <d3dcompiler.h>
 #include <dxgiformat.h>
 #include <string>
-#include <unordered_map>
+#include <utility>
 #include <vector>
+#include <wrl/client.h>
 
 #include "HandleMap.hpp"
 
@@ -15,10 +20,14 @@ struct VertexAttribute {
     uint32_t semanticIndex;
     DXGI_FORMAT format;
     uint32_t offset;
+
+    bool operator==(const VertexAttribute&) const = default;
 };
 
 struct VertexLayout {
     std::vector<VertexAttribute> attributes{};
+
+    bool operator==(const VertexLayout&) const = default;
 
     void Add(const std::string& semantic,
              uint32_t semanticIndex,
@@ -46,6 +55,8 @@ struct ShaderVertexAttribute {
     uint32_t semanticIndex;
     D3D_REGISTER_COMPONENT_TYPE type;
     uint8_t mask;
+
+    bool operator==(const ShaderVertexAttribute&) const = default;
 };
 
 struct ShaderVertexLayout {

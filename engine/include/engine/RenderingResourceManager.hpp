@@ -1,5 +1,9 @@
 ﻿#pragma once
+#include <cstdlib>
 #include <span>
+#include <type_traits>
+#include <utility>
+#include <string>
 #include <spdlog/spdlog.h>
 
 #include "Buffer.hpp"
@@ -13,6 +17,10 @@ namespace engine {
 struct RenderingContext;
 
 struct RenderingResourceManager {
+
+    void Initialize(ID3D11Device* device) {
+        device_ = device;
+    }
 
     TextureHandle CreateTexture(const TextureDesc& desc, const std::span<const D3D11_SUBRESOURCE_DATA> data = {}) {
         const D3D11_TEXTURE2D_DESC dxDesc{
@@ -68,14 +76,14 @@ struct RenderingResourceManager {
     }
 
     ShaderHandle CompileShader(const std::wstring& fileName, const ShaderType shaderType) {
-        std::wstring path = L"./shaders/";
+        std::wstring path = L"./engine/shaders/";
         path += fileName;
-        auto shader = ShaderContext::CompileShader(device_.Get(), path, shaderType);
+        auto shader = ShaderContext::CompileShader(device_.Get(), inputLayoutCache_, path, shaderType);
         if (!shader) {
-            spdlog::critical("Failed to compile shader: {}", path);
+            spdlog::critical("Failed to compile shader");
             std::exit(1);
         }
-        return shaders_.Add(std::move(shader));
+        return shaders_.Add(std::move(*shader));
     }
 
     //todo: maybe buffer creation should be in separate object
@@ -150,7 +158,7 @@ struct RenderingResourceManager {
     }
 
     template <typename T>
-    [[nodiscard]] BufferHandle CreateIndexBuffer(std::span<const T> indices) const {
+    [[nodiscard]] BufferHandle CreateIndexBuffer(std::span<const T> indices) {
         static_assert(std::is_same_v<T, uint16_t> || std::is_same_v<T, uint32_t>);
 
         return CreateBuffer(
@@ -192,7 +200,7 @@ private:
     static void checkResult(const HRESULT result, const char* message) {
         if (FAILED(result)) {
             //ass error handling, needs a solution
-            spdlog::critical(message);
+            spdlog::critical("{} {}", message, result);
             std::exit(1);
         }
     }

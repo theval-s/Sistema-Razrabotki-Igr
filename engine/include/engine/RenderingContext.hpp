@@ -1,9 +1,13 @@
 ﻿#pragma once
+#include <array>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <d3d11.h>
 #include <dxgi.h>
 #include <span>
+#include <optional>
 #include <engine/engine_export.hpp>
 #include <spdlog/spdlog.h>
 #include <wrl/client.h>
@@ -71,19 +75,21 @@ struct RenderingContext {
             nullptr,
             deviceContext_.GetAddressOf());
         checkResult(r, "D3D11CreateDeviceAndSwapChain");
+        resourceManager_.Initialize(device_.Get());
+        renderingStates_.Initialize(device_.Get());
     }
 
     void SetShader(const ShaderHandle h) {
         switch (auto& shader = resourceManager_.shaders_.Get(h); shader.type) {
         case ShaderType::Vertex:
-            deviceContext_->VSGetShader(shader.shader.vertexShader.GetAddressOf(), nullptr, nullptr);
-
+            deviceContext_->VSSetShader(shader.shader.vertexShader.Get(), nullptr, 0);
+            vsInputLayout_ = shader.layoutHandle;
             break;
         case ShaderType::Pixel:
-            deviceContext_->PSGetShader(shader.shader.pixelShader.GetAddressOf(), nullptr, nullptr);
+            deviceContext_->PSSetShader(shader.shader.pixelShader.Get(), nullptr, 0);
             break;
         case ShaderType::Geometry:
-            deviceContext_->GSGetShader(shader.shader.geometryShader.GetAddressOf(), nullptr, nullptr);
+            deviceContext_->GSSetShader(shader.shader.geometryShader.Get(), nullptr, 0);
             break;
         }
     }
@@ -118,14 +124,18 @@ struct RenderingContext {
         deviceContext_->IASetVertexBuffers(0, 1, vertexBuffer.buffer.GetAddressOf(), strides, offsets);
     }
     
-    void RawDraw(const uint32_t vertexCount, const uint32_t baseVertex) const {
+    void RawDrawIndexed(const uint32_t indexCount, const uint32_t baseIndex = 0, const uint32_t baseVertex = 0) const {
+        deviceContext_->DrawIndexed(indexCount, baseIndex, baseVertex);
+    }
+    
+    void RawDraw(const uint32_t vertexCount, const uint32_t baseVertex = 0) const {
         deviceContext_->Draw(vertexCount, baseVertex);
     }
     
     void DrawMesh(const MeshHandle h) {
         BindMesh(h);
         const auto& mesh = resourceManager_.meshes_.Get(h);
-        deviceContext_->Draw(mesh.vertexCount, 0);
+        deviceContext_->DrawIndexed(mesh.indexCount, 0, 0);
     }
 
     void BindCBuffer(const BindSlot slot, const BufferHandle h) {
@@ -165,7 +175,7 @@ struct RenderingContext {
                 renderTargetViews[i] = nullptr;
             }
         }
-        deviceContext_->OMSetRenderTargets(targets.size(), renderTargetViews.data(), dsv);
+        deviceContext_->OMSetRenderTargets(static_cast<UINT>(targets.size()), renderTargetViews.data(), dsv);
     }
 
     //99% of calls would only set pixel shader resources...
@@ -242,13 +252,21 @@ struct RenderingContext {
 
         static constexpr ID3D11UnorderedAccessView* const nullUAVs[8] = {};
         deviceContext_->CSSetUnorderedAccessViews(0, 8, nullUAVs, nullptr);
+        
+        deviceContext_->VSSetShader(nullptr, nullptr, 0);
+        deviceContext_->HSSetShader(nullptr, nullptr, 0);
+        deviceContext_->DSSetShader(nullptr, nullptr, 0);
+        deviceContext_->GSSetShader(nullptr, nullptr, 0);
+        deviceContext_->PSSetShader(nullptr, nullptr, 0);
+        deviceContext_->CSSetShader(nullptr, nullptr, 0);
     }
 
     void ClearDepthView(const TextureHandle h, const std::optional<float> depth = 1.f, const std::optional<UINT> stencil = std::nullopt) {
         UINT flags = depth ? D3D11_CLEAR_DEPTH : 0;
         flags |= stencil ? D3D11_CLEAR_STENCIL : 0;
         const auto& texture = resourceManager_.textures_.Get(h);
-        deviceContext_->ClearDepthStencilView(texture.GetDSV(), flags, depth.value_or(0.f), stencil.value_or(0));
+        deviceContext_->ClearDepthStencilView(
+            texture.GetDSV(), flags, depth.value_or(0.f), static_cast<UINT8>(stencil.value_or(0)));
     }
     
     void ClearRenderTargetView(const TextureHandle h, const std::array<float, 4> color = {0.f, 0.f, 0.f, 0.f}) {
@@ -265,13 +283,19 @@ struct RenderingContext {
     }
     
     template<typename T>
-    void UpdateCBuffer(const GpuBuffer& buffer, T data) {
+    void UpdateCBuffer(const BufferHandle handle, const T& data) {
+        const auto& buffer = resourceManager_.buffers_.Get(handle);
         UpdateBuffer(buffer, reinterpret_cast<const void*>(&data), sizeof(T));
+    }
+    
+    void Present() const {
+        const auto res = swapChain_->Present(1, 0);
+        assert(SUCCEEDED(res));
     }
 
 
     ~RenderingContext() {
-        if (!deviceContext_) {
+        if (deviceContext_) {
             deviceContext_->Flush();
             deviceContext_->ClearState();
         }

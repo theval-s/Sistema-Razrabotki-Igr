@@ -7,7 +7,7 @@ struct GBufferPass : RenderPass {
     ShaderHandle vertexShader, pixelShader;
     
     
-    void Initialize(RenderingResourceManager& resourceManager, RenderingResources& resources) override {
+    void Initialize(RenderingResourceManager& resourceManager, RenderingContext&, RenderingResources& resources) override {
         vertexShader = resourceManager.CompileShader(L"GBufferPass.hlsl", ShaderType::Vertex);
         pixelShader = resourceManager.CompileShader(L"GBufferPass.hlsl", ShaderType::Pixel);
         
@@ -16,8 +16,8 @@ struct GBufferPass : RenderPass {
                 .width = resources.screenWith, .height = resources.screenHeight,
                 .format = format,
                 .usage = TextureUsage::RenderTarget | TextureUsage::ShaderResource,
-                .srvFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS,
-                .dsvFormat = DXGI_FORMAT_D24_UNORM_S8_UINT,
+                .srvFormat = format,
+                .dsvFormat = format,
             }; 
         };
         auto & gBuffer = resources.gBuffer;
@@ -61,7 +61,7 @@ struct GBufferPass : RenderPass {
                 data.normalMatrix = ri.worldMatrix.Invert().Transpose();
             });
             
-            context.SetShaderResources(BindSlot::Texture::Albedo, ri.texture);
+            context.SetShaderResources(BindSlots::Texture::Albedo, ri.texture);
             
             context.DrawMesh(ri.mesh);
         }

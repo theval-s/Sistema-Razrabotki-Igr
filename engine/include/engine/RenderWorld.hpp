@@ -3,7 +3,7 @@
 
 #include "FPSCamera.hpp"
 #include "RenderingContext.hpp"
-#include "RenderingResources.h"
+#include "engine/RenderingResources.h"
 
 namespace engine {
 using DirectX::SimpleMath::Vector3;
@@ -51,7 +51,7 @@ struct RenderWorld {
     void BindDirectionalLightView(RenderingContext& context, RenderingResources& resources) {
         resources.viewCBuffer.Update(context, [&](ViewBufferData& data){
             float sceneRadius = 10;
-            constexpr Vector3 sceneCenter{0, 1, 0};
+            constexpr Vector3 sceneCenter{0, 0, 0};
             const auto lightPos = sceneCenter - directionalLight.direction * sceneRadius;
             data.viewMatrix = Matrix::CreateLookAt(lightPos, sceneCenter, Vector3::Up);
             sceneRadius *= 1.2f;

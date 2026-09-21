@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include "RenderingResources.h"
+#include "engine/RenderingResources.h"
 #include "RenderWorld.hpp"
 
 
@@ -12,7 +12,7 @@ struct RenderPass {
 
     virtual void Render(RenderWorld & world, RenderingContext & context, RenderingResources & resources) = 0;
     
-    virtual void Initialize(RenderingResourceManager & resourceManager, RenderingResources & resources) = 0;
+    virtual void Initialize(RenderingResourceManager & resourceManager, RenderingContext & context, RenderingResources & resources) = 0;
 };
 
 
