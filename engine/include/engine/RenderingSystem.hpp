@@ -1,7 +1,8 @@
 ﻿#pragma once
 #include <memory>
 #include <vector>
-#include <wrl/client.h>
+
+#include <engine/engine_export.hpp>
 
 #include "GBufferPass.hpp"
 #include "LightPass.hpp"
@@ -13,44 +14,21 @@
 
 namespace engine {
 
-using Microsoft::WRL::ComPtr;
-
-struct RenderingSystem {
+struct ENGINE_API RenderingSystem {
     static RenderingSystem instance;
-    RenderingContext renderingContext{};
-    RenderingResourceManager& resourceManager = renderingContext.resourceManager_;
-    RenderWorld world{};
-    std::unique_ptr<RenderingResources> resources;
-    
-    std::vector<std::unique_ptr<RenderPass>> renderPasses{};
-    
-    void Initialize(uint32_t screenWidth, uint32_t screenHeight) {
-        renderingContext.Initialize();
-        resources = std::make_unique<RenderingResources>(screenWidth, screenHeight, resourceManager);
-        renderPasses.push_back(std::make_unique<ShadowCSMPass>());
-        renderPasses.push_back(std::make_unique<GBufferPass>());
-        renderPasses.push_back(std::make_unique<LightPass>());
-        renderPasses.push_back(std::make_unique<PresentPass>());
-        
-        for (const auto& renderPass : renderPasses) {
-            renderPass->Initialize(resourceManager, renderingContext, *resources);
-        }
-    }
-    
-    
-    void RenderFrame() {
-        renderingContext.ClearState();
-        resources->BindCBuffers(renderingContext);
-        renderingContext.BindSamplers();
-        
-        for (const auto& renderPass : renderPasses) {
-            renderPass->Render(world, renderingContext, *resources);
-            renderingContext.ClearHazardousState();
-        }
-    }
 
-    ~RenderingSystem() {
-    }
+    void Initialize(uint32_t screenWidth, uint32_t screenHeight);
+    void RenderFrame();
+
+    [[nodiscard]] RenderingContext& GetRenderingContext();
+    [[nodiscard]] RenderingResourceManager& GetResourceManager();
+    [[nodiscard]] RenderWorld& GetWorld();
+
+private:
+    RenderingContext renderingContext_{};
+    RenderWorld world_{};
+    std::unique_ptr<RenderingResources> resources_;
+    std::vector<std::unique_ptr<RenderPass>> renderPasses_{};
 };
 
 }

@@ -1,1 +1,143 @@
-﻿#include "engine/ShaderContext.hpp"
+#include "engine/ShaderContext.hpp"
+
+#include <filesystem>
+#include <utility>
+#include <spdlog/spdlog.h>
+
+namespace engine {
+
+const char* GetEntryPoint(const ShaderType type) {
+    switch (type) {
+    case ShaderType::Vertex: return "VSMain";
+    case ShaderType::Pixel: return "PSMain";
+    case ShaderType::Geometry: return "GSMain";
+    }
+    return "";
+}
+
+const char* GetDX11Target(const ShaderType type) {
+    switch (type) {
+    case ShaderType::Vertex: return "vs_5_0";
+    case ShaderType::Pixel: return "ps_5_0";
+    case ShaderType::Geometry: return "gs_5_0";
+    }
+    return "";
+}
+
+ShaderVertexLayout ShaderContext::ParseVertexShaderInputs(
+    const ComPtr<ID3D11ShaderReflection>& reflection, const D3D11_SHADER_DESC& shaderDesc,
+    const ComPtr<ID3DBlob>& blob) {
+    ShaderVertexLayout result{blob};
+    for (UINT i = 0; i < shaderDesc.InputParameters; ++i) {
+        D3D11_SIGNATURE_PARAMETER_DESC desc{};
+        if (const auto res = reflection->GetInputParameterDesc(i, &desc); FAILED(res)) {
+            spdlog::error("Unexpected error cannot get input parameter desc {}", i);
+            continue;
+        }
+        if (desc.SystemValueType != D3D_NAME_UNDEFINED) // Skip as it doesn't affect shader signature
+            continue;
+        result.Add(desc.SemanticName, desc.SemanticIndex, desc.ComponentType, desc.Mask);
+    }
+    return result;
+}
+
+std::optional<ShaderContext> ShaderContext::CompileShader(ID3D11Device* device, InputLayoutCache& layoutCache,
+                                                           const std::wstring& fileName,
+                                                           const ShaderType shaderType) {
+    ShaderContext result{};
+    result.type = shaderType;
+    const auto displayName = std::filesystem::path(fileName).string();
+    ID3DBlob* errorCode = nullptr;
+    auto res = D3DCompileFromFile(fileName.c_str(),
+                                  nullptr,
+                                  nullptr,
+                                  GetEntryPoint(shaderType),
+                                  GetDX11Target(shaderType),
+                                  D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION, // todo: should be toggleable
+                                  0,
+                                  result.blob.GetAddressOf(),
+                                  &errorCode);
+    if (res < 0) {
+        if (errorCode) {
+            auto compileErrors = static_cast<char*>(errorCode->GetBufferPointer());
+            spdlog::error("Could not compile shader: {}", compileErrors);
+        } else {
+            spdlog::error("Missing Shader File: {}", displayName);
+        }
+        return std::nullopt;
+    }
+
+    ComPtr<ID3D11ShaderReflection> reflection;
+    res = D3DReflect(
+        result.blob->GetBufferPointer(),
+        result.blob->GetBufferSize(),
+        IID_ID3D11ShaderReflection,
+        reinterpret_cast<void**>(reflection.GetAddressOf()));
+    if (FAILED(res)) {
+        spdlog::error("Could not get shader reflection for shader: {}", displayName);
+        return std::nullopt;
+    }
+
+    D3D11_SHADER_DESC shaderDesc{};
+    if (const auto r = res = reflection->GetDesc(&shaderDesc); FAILED(r)) {
+        spdlog::error("Could not get shader description for shader: {}", displayName);
+    }
+
+    for (UINT i = 0; i < shaderDesc.BoundResources; ++i) {
+        D3D11_SHADER_INPUT_BIND_DESC bind{};
+        if (const auto r = reflection->GetResourceBindingDesc(i, &bind); FAILED(r)) {
+            spdlog::error("Could not get resource binding description for shader: {}", displayName);
+            continue;
+        }
+        if (bind.BindCount != 1) {
+            spdlog::error("Array bindings are unsupported: {}", displayName);
+            continue;
+        }
+        result.bindings.emplace_back(bind.Name, static_cast<uint8_t>(bind.BindPoint),
+                                     static_cast<uint8_t>(bind.Type));
+    }
+
+    if (shaderType == ShaderType::Vertex) {
+        auto layout = ParseVertexShaderInputs(reflection, shaderDesc, result.blob);
+        result.layoutHandle = layoutCache.RegisterShaderLayout(std::move(layout));
+    }
+
+    switch (shaderType) {
+    case ShaderType::Vertex: {
+        ComPtr<ID3D11VertexShader> vs;
+        if (const auto r = device->CreateVertexShader(
+            result.blob->GetBufferPointer(),
+            result.blob->GetBufferSize(),
+            nullptr, &vs); FAILED(r)) {
+            spdlog::error("Could make vertex shader for: {}", displayName);
+        }
+        result.shader.vertexShader = std::move(vs);
+        break;
+    }
+    case ShaderType::Pixel: {
+        ComPtr<ID3D11PixelShader> ps;
+        if (const auto r = device->CreatePixelShader(
+            result.blob->GetBufferPointer(),
+            result.blob->GetBufferSize(),
+            nullptr, &ps); FAILED(r)) {
+            spdlog::error("Could make pixel shader for: {}", displayName);
+        }
+        result.shader.pixelShader = std::move(ps);
+        break;
+    }
+    case ShaderType::Geometry: {
+        ComPtr<ID3D11GeometryShader> gs;
+        if (const auto r = device->CreateGeometryShader(
+            result.blob->GetBufferPointer(),
+            result.blob->GetBufferSize(),
+            nullptr, &gs); FAILED(r)) {
+            spdlog::error("Could make geometry shader for: {}", displayName);
+        }
+        result.shader.geometryShader = std::move(gs);
+        break;
+    }
+    }
+    return result;
+}
+
+}

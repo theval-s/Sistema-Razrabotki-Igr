@@ -1,12 +1,14 @@
 ﻿#pragma once
 
+#include <engine/engine_export.hpp>
+
 #include "engine/RenderingResources.h"
 #include "RenderWorld.hpp"
 
 
 namespace engine {
 
-struct RenderPass {
+struct ENGINE_API RenderPass {
     
     virtual ~RenderPass() = default;
 

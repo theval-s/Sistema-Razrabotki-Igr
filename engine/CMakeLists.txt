@@ -59,6 +59,7 @@ set(ENGINE_SOURCES
     src/UglyUtils.cpp
     src/VertexLayout.cpp
     src/VertexLayoutCache.cpp
+    src/window.cpp
 )
 
 set(ENGINE_SHADERS

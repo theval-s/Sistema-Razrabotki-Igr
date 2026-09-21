@@ -13,6 +13,22 @@ void RenderStates::Initialize(ID3D11Device* device) {
     InitializeSamplerStates(device);
 }
 
+ID3D11BlendState* RenderStates::GetBlendState(const BlendState blendState) const {
+    return blendStates_[static_cast<size_t>(blendState)].Get();
+}
+
+ID3D11DepthStencilState* RenderStates::GetDepthState(const DepthState depthState) const {
+    return depthStates_[static_cast<size_t>(depthState)].Get();
+}
+
+ID3D11RasterizerState* RenderStates::GetRasterizerState(const RasterizerState rasterizerState) const {
+    return rasterizerStates_[static_cast<size_t>(rasterizerState)].Get();
+}
+
+ID3D11SamplerState* RenderStates::GetSamplerState(const SamplerState samplerState) const {
+    return samplerStates_[static_cast<size_t>(samplerState)].Get();
+}
+
 void RenderStates::InitializeBlendStates(ID3D11Device* device) {
     auto init = [&](const D3D11_BLEND_DESC& desc, BlendState type){
         const HRESULT hr = device->CreateBlendState(

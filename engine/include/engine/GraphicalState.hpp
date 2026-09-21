@@ -4,6 +4,8 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
+#include <engine/engine_export.hpp>
+
 namespace engine {
 using Microsoft::WRL::ComPtr;
 
@@ -52,19 +54,11 @@ enum class SamplerState
 };
 
 struct RenderStates {
-    void Initialize(ID3D11Device* device);
-    ID3D11BlendState * GetBlendState(BlendState blendState) const {
-        return blendStates_[static_cast<size_t>(blendState)].Get();
-    }
-    ID3D11DepthStencilState * GetDepthState(DepthState depthState) const {
-        return depthStates_[static_cast<size_t>(depthState)].Get();
-    }
-    ID3D11RasterizerState * GetRasterizerState(RasterizerState rasterizerState) const {
-        return rasterizerStates_[static_cast<size_t>(rasterizerState)].Get();
-    }
-    ID3D11SamplerState * GetSamplerState(SamplerState samplerState) const {
-        return samplerStates_[static_cast<size_t>(samplerState)].Get();
-    }
+    ENGINE_API void Initialize(ID3D11Device* device);
+    ENGINE_API ID3D11BlendState* GetBlendState(BlendState blendState) const;
+    ENGINE_API ID3D11DepthStencilState* GetDepthState(DepthState depthState) const;
+    ENGINE_API ID3D11RasterizerState* GetRasterizerState(RasterizerState rasterizerState) const;
+    ENGINE_API ID3D11SamplerState* GetSamplerState(SamplerState samplerState) const;
 
 private:
     void InitializeBlendStates(ID3D11Device* device);
