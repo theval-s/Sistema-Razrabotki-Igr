@@ -36,6 +36,7 @@ struct ShadowCSMPass : RenderPass {
         context.SetRenderTargets({TextureHandle{}}, resources.shadowTexture);
         context.SetShader(vertexShader);
         context.SetShader(geometryShader);
+        context.SetDepthState(DepthState::ReadWrite);
 
         world.BindDirectionalLightView(context, resources);
         resources.cascadeInfo = GetCascadeData(world.directionalLight.direction, world.camera);

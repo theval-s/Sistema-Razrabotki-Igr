@@ -11,8 +11,7 @@ struct LightPass : RenderPass {
         vertexShader = resourceManager.CompileShader(L"LightPass.hlsl", ShaderType::Vertex);
         pixelShader = resourceManager.CompileShader(L"LightPass.hlsl", ShaderType::Pixel);
         dirLightVertexShader = resourceManager.CompileShader(L"DirectionalLightVS.hlsl", ShaderType::Vertex);
-        auto rawMesh = ugly_utils::CreateSphere(1.f);
-        
+        lightSphere = ugly_utils::FromRawMesh(resourceManager, ugly_utils::CreateSphere(1.0f));
     }
 
     static void UpdateLight(RenderingContext& context, RenderingResources& resources, const std::vector<LightInfo>::value_type& light) {
@@ -22,6 +21,7 @@ struct LightPass : RenderPass {
             data.lightType = light.type;
             data.position = light.position;
             data.direction = light.direction;
+            data.range = light.range;
             if (light.type == LightInfo::Spot) {
                 data.spotInnerAngle = light.lightParameters.spotLight.innerAngle;
                 data.spotOuterAngle = light.lightParameters.spotLight.outerAngle;
@@ -34,7 +34,9 @@ struct LightPass : RenderPass {
         context.SetViewport(resources.screenWith, resources.screenHeight);
         context.SetRasterizerState(RasterizerState::CullFront);
         context.SetBlendState(BlendState::Additive);
+        context.SetDepthState(DepthState::ReadOnly);
         context.ClearRenderTargetView(gBuffer.resultTexture, {0, 0, 0, 1});
+        
         context.SetRenderTargets({gBuffer.resultTexture}, gBuffer.depthTexture, true);
 
         context.SetShader(vertexShader);
@@ -48,15 +50,19 @@ struct LightPass : RenderPass {
         
         for (const auto & light : world.lights) {
             UpdateLight(context, resources, light);
-            
-            const auto scaleMatrix = light.type == LightInfo::Point
-                                 ? Matrix::CreateScale(light.range, light.range, light.range)
-                                 : Matrix::CreateScale(1, 1, 1);
-            const auto rotationMatrix = Matrix::CreateFromYawPitchRoll(0, 0, 0);
-            const auto positionMatrix = Matrix::CreateTranslation(light.position.x,
-                                                                  light.position.y,
-                                                                  light.position.z);
-            auto lightWorldMatrix = scaleMatrix * rotationMatrix * positionMatrix;
+
+            Matrix lightWorldMatrix;
+            if (light.type == LightInfo::Spot) {
+                Vector3 direction = light.direction;
+                direction.Normalize();
+                const Vector3 up = std::abs(direction.Dot(Vector3::Up)) > 0.99f
+                                       ? Vector3::Right
+                                       : Vector3::Up;
+                const Vector3 boxCenter = light.position + direction * (light.range * 0.5f);
+                lightWorldMatrix = Matrix::CreateWorld(boxCenter, direction, up);
+            } else {
+                lightWorldMatrix = Matrix::CreateScale(light.range) * Matrix::CreateTranslation(light.position);
+            }
             resources.objectCBuffer.Update(context, [&](ObjectBufferData & data){
                 data.worldMatrix = lightWorldMatrix;
                 data.normalMatrix = lightWorldMatrix.Invert().Transpose();
@@ -69,7 +75,8 @@ struct LightPass : RenderPass {
                 context.DrawMesh(bb);
             }
         }
-        
+        // context.SetRenderTargets({gBuffer.resultTexture}, TextureHandle{});
+        context.SetRasterizerState(RasterizerState::CullNone);
         UpdateLight(context, resources, world.directionalLight);
         context.SetShader(dirLightVertexShader);
         context.RawDraw(6, 0);

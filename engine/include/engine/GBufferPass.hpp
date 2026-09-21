@@ -1,11 +1,12 @@
 ﻿#pragma once
 #include "RenderPass.hpp"
+#include "UglyUtils.hpp"
 
 namespace engine {
 struct GBufferPass : RenderPass {
 
     ShaderHandle vertexShader, pixelShader;
-    
+    MeshHandle lightSphere;
     
     void Initialize(RenderingResourceManager& resourceManager, RenderingContext&, RenderingResources& resources) override {
         vertexShader = resourceManager.CompileShader(L"GBufferPass.hlsl", ShaderType::Vertex);
@@ -30,6 +31,8 @@ struct GBufferPass : RenderPass {
         desc.dsvFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
         desc.srvFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
         gBuffer.depthTexture = resourceManager.CreateTexture(desc);
+        
+        lightSphere = ugly_utils::FromRawMesh(resourceManager, ugly_utils::CreateSphere(1.0f));
     }
     
     void Render(RenderWorld& world, RenderingContext& context, RenderingResources& resources) override {
@@ -64,6 +67,34 @@ struct GBufferPass : RenderPass {
             context.SetShaderResources(BindSlots::Texture::Albedo, ri.texture);
             
             context.DrawMesh(ri.mesh);
+        }
+        
+        //debug code
+        for (const auto & light : world.lights) {
+            Matrix lightWorldMatrix;
+            if (light.type == LightInfo::Spot) {
+                Vector3 direction = light.direction;
+                direction.Normalize();
+                const Vector3 up = std::abs(direction.Dot(Vector3::Up)) > 0.99f
+                                       ? Vector3::Right
+                                       : Vector3::Up;
+                const Vector3 boxCenter = light.position + direction * (light.range * 0.5f);
+                lightWorldMatrix = Matrix::CreateWorld(boxCenter, direction, up);
+            } else {
+                lightWorldMatrix = Matrix::CreateScale(light.range) * Matrix::CreateTranslation(light.position);
+            }
+            resources.objectCBuffer.Update(context, [&](ObjectBufferData & data){
+                data.worldMatrix = lightWorldMatrix;
+                data.normalMatrix = lightWorldMatrix.Invert().Transpose();
+            });
+            continue;
+            if (light.type == LightInfo::Point) {
+               
+                context.DrawMesh(lightSphere);
+            } else if (light.type == LightInfo::Spot) {
+                const auto bb = light.lightParameters.spotLight.boundingBox;
+                context.DrawMesh(bb);
+            }
         }
     }
     

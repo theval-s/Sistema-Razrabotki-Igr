@@ -85,7 +85,7 @@ GS_IN VSMain(VS_IN input) {
 void GSMain(triangle GS_IN p[3], in uint id : SV_GSInstanceID, inout TriangleStream<GS_OUT> stream) {
     for (int i = 0; i < 3; i++) {
         GS_OUT gs = (GS_OUT)0;
-        gs.pos = mul(float4(p[i].worldPos.xyz, 1.0f), ShadowCascades.distances[id]);
+        gs.pos = mul(float4(p[i].worldPos.xyz, 1.0f), ShadowCascades.viewProjections[id]);
         gs.arrInd = id;
         stream.Append(gs);
     }

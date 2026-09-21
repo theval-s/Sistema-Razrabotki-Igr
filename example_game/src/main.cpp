@@ -85,6 +85,21 @@ engine::TextureHandle MakeCheckerTexture(engine::RenderingResourceManager& resou
     return resourceManager.CreateTexture(description, std::span<const D3D11_SUBRESOURCE_DATA>{&data, 1});
 }
 
+engine::TextureHandle MakeSolidTexture(engine::RenderingResourceManager& resourceManager, uint32_t color) {
+    const D3D11_SUBRESOURCE_DATA data{
+        .pSysMem = &color,
+        .SysMemPitch = sizeof(color),
+        .SysMemSlicePitch = 0
+    };
+    const engine::TextureDesc description{
+        .width = 1,
+        .height = 1,
+        .format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+        .usage = engine::TextureUsage::ShaderResource
+    };
+    return resourceManager.CreateTexture(description, std::span<const D3D11_SUBRESOURCE_DATA>{&data, 1});
+}
+
 SceneObject LoadObject(engine::RenderingSystem& renderer, const wchar_t* folder, const Matrix& transform,
                        float shininess) {
     engine::ugly_utils::RenderingState state{
@@ -172,6 +187,33 @@ void FillRenderWorld(engine::RenderWorld& world, const std::vector<SceneObject>&
     }
 }
 
+void UpdateLights(engine::RenderWorld& world, float time) {
+    world.lights[0].position = Vector3{
+        std::cos(time * 0.8f) * 4.0f,
+        2.2f + std::sin(time * 1.7f) * 0.4f,
+        std::sin(time * 0.8f) * 4.0f
+    };
+    world.lights[1].position = Vector3{
+        std::cos(-time * 0.55f) * 3.0f,
+        1.4f,
+        std::sin(-time * 0.55f) * 3.0f
+    };
+    world.lights[1].intensity = 4.0f + std::sin(time * 2.2f) * 1.5f;
+
+    Vector3 sweepingDirection{std::sin(time * 0.7f) * 0.8f, -1.0f, std::cos(time * 0.7f) * 0.8f};
+    sweepingDirection.Normalize();
+    world.lights[2].direction = sweepingDirection;
+
+    world.lights[3].position = Vector3{
+        std::cos(time * 0.45f) * 5.0f,
+        4.5f,
+        std::sin(time * 0.45f) * 5.0f
+    };
+    Vector3 trackingDirection = Vector3::Zero - world.lights[3].position;
+    trackingDirection.Normalize();
+    world.lights[3].direction = trackingDirection;
+}
+
 } // namespace
 
 int main(int argumentCount, char**) {
@@ -195,6 +237,60 @@ int main(int argumentCount, char**) {
         .range = 0.0f,
         .type = engine::LightInfo::Directional
     };
+    constexpr float firstSpotOuterHalfAngle = Pi / 7.0f;
+    constexpr float secondSpotOuterHalfAngle = Pi / 6.0f;
+    const engine::MeshHandle firstSpotBoundingBox = engine::ugly_utils::FromRawMesh(
+        renderer.resourceManager,
+        engine::ugly_utils::CreateSpotLightBoundingBox(10.0f, firstSpotOuterHalfAngle * 2.0f));
+    const engine::MeshHandle secondSpotBoundingBox = engine::ugly_utils::FromRawMesh(
+        renderer.resourceManager,
+        engine::ugly_utils::CreateSpotLightBoundingBox(8.0f, secondSpotOuterHalfAngle * 2.0f));
+    renderer.world.lights = {
+        {
+            .position = Vector3{4.0f, 2.2f, 0.0f},
+            .direction = Vector3::Zero,
+            .color = Vector3{1.0f, 0.25f, 0.08f},
+            .intensity = 5.0f,
+            .range = 5.5f,
+            .type = engine::LightInfo::Point
+        },
+        {
+            .position = Vector3{-3.0f, 1.4f, 0.0f},
+            .direction = Vector3::Zero,
+            .color = Vector3{0.08f, 0.35f, 1.0f},
+            .intensity = 4.0f,
+            .range = 4.5f,
+            .type = engine::LightInfo::Point
+        },
+        {
+            .position = Vector3{0.0f, 6.0f, 0.0f},
+            .direction = Vector3{0.0f, -1.0f, 0.0f},
+            .color = Vector3{0.2f, 1.0f, 0.35f},
+            .intensity = 7.0f,
+            .range = 10.0f,
+            .type = engine::LightInfo::Spot,
+            .lightParameters = {.spotLight = {
+                .innerAngle = std::cos(Pi / 12.0f),
+                .outerAngle = std::cos(firstSpotOuterHalfAngle),
+                .range = 10.0f,
+                .boundingBox = firstSpotBoundingBox
+            }}
+        },
+        {
+            .position = Vector3{5.0f, 4.5f, 0.0f},
+            .direction = Vector3{-1.0f, -1.0f, 0.0f},
+            .color = Vector3{0.85f, 0.15f, 1.0f},
+            .intensity = 6.0f,
+            .range = 8.0f,
+            .type = engine::LightInfo::Spot,
+            .lightParameters = {.spotLight = {
+                .innerAngle = std::cos(Pi / 10.0f),
+                .outerAngle = std::cos(secondSpotOuterHalfAngle),
+                .range = 8.0f,
+                .boundingBox = secondSpotBoundingBox
+            }}
+        }
+    };
 
     const engine::TextureHandle groundTexture = MakeCheckerTexture(renderer.resourceManager);
     std::vector<SceneObject> objects;
@@ -211,12 +307,40 @@ int main(int argumentCount, char**) {
     objects.push_back(LoadObject(renderer, L"models/Hammer", Matrix::CreateScale(2.0f) *
         Matrix::CreateRotationZ(-0.65f) * Matrix::CreateTranslation(0.0f, 1.0f, 1.5f), 96.0f));
 
+    const auto orbitingSign = objects.size();
+    objects.push_back(objects[2]);
+    const auto bobbingHammer = objects.size();
+    objects.push_back(objects[3]);
+    const auto spinningHammer = objects.size();
+    objects.push_back(objects[3]);
+
+    const engine::MeshHandle lightMarkerMesh = engine::ugly_utils::FromRawMesh(
+        renderer.resourceManager, engine::ugly_utils::CreateSphere(0.15f));
+    const std::vector<engine::TextureHandle> lightMarkerTextures{
+        MakeSolidTexture(renderer.resourceManager, 0xff1440ffu),
+        MakeSolidTexture(renderer.resourceManager, 0xffff5914u),
+        MakeSolidTexture(renderer.resourceManager, 0xff59ff33u),
+        MakeSolidTexture(renderer.resourceManager, 0xffff26d9u)
+    };
+    std::vector<size_t> lightMarkers;
+    lightMarkers.reserve(renderer.world.lights.size());
+    for (size_t i = 0; i < renderer.world.lights.size(); ++i) {
+        lightMarkers.push_back(objects.size());
+        objects.push_back({
+            .transform = Matrix::CreateTranslation(renderer.world.lights[i].position),
+            .mesh = lightMarkerMesh,
+            .texture = lightMarkerTextures[i],
+            .material = {Vector3{0.4f, 0.4f, 0.4f}, 96.0f, 0}
+        });
+    }
+
     DXGI_SWAP_CHAIN_DESC swapChainDescription{};
     renderer.renderingContext.swapChain_->GetDesc(&swapChainDescription);
     const HWND window = swapChainDescription.OutputWindow;
     CaptureMouse(window);
 
-    auto previousTime = std::chrono::steady_clock::now();
+    const auto startTime = std::chrono::steady_clock::now();
+    auto previousTime = startTime;
     bool running = true;
     while (running && IsWindow(window)) {
         MSG message{};
@@ -233,8 +357,24 @@ int main(int argumentCount, char**) {
 
         const auto now = std::chrono::steady_clock::now();
         const float deltaTime = (std::min)(std::chrono::duration<float>(now - previousTime).count(), 0.05f);
+        const float elapsedTime = std::chrono::duration<float>(now - startTime).count();
         previousTime = now;
         UpdateCamera(renderer.world.camera, window, deltaTime);
+        objects[orbitingSign].transform = Matrix::CreateScale(1.5f) *
+            Matrix::CreateRotationY(-elapsedTime * 1.2f) *
+            Matrix::CreateTranslation(std::cos(elapsedTime) * 5.0f, 1.25f,
+                                      std::sin(elapsedTime) * 5.0f);
+        objects[bobbingHammer].transform = Matrix::CreateScale(1.4f) *
+            Matrix::CreateRotationX(elapsedTime * 1.8f) *
+            Matrix::CreateRotationY(elapsedTime * 0.9f) *
+            Matrix::CreateTranslation(-4.5f, 1.5f + std::sin(elapsedTime * 2.0f), 3.0f);
+        objects[spinningHammer].transform = Matrix::CreateScale(1.2f) *
+            Matrix::CreateRotationZ(elapsedTime * 2.5f) *
+            Matrix::CreateTranslation(4.5f, 1.2f, 2.5f + std::sin(elapsedTime) * 1.5f);
+        UpdateLights(renderer.world, elapsedTime);
+        for (size_t i = 0; i < lightMarkers.size(); ++i) {
+            objects[lightMarkers[i]].transform = Matrix::CreateTranslation(renderer.world.lights[i].position);
+        }
         FillRenderWorld(renderer.world, objects);
         renderer.RenderFrame();
     }

@@ -300,7 +300,8 @@ inline MeshHandle FromRawMesh(RenderingResourceManager& resourceManager, const R
     layout.Add("NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 16);
     layout.Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 16 + 12);
 
-    return resourceManager.CreateMesh(vertexBuffer, indexBuffer, std::move(layout), static_cast<uint32_t>(rawMesh.indicies.size()));
+    return resourceManager.CreateMesh(vertexBuffer, indexBuffer, std::move(layout),
+                                      static_cast<uint32_t>(rawMesh.indicies.size()));
 }
 
 
@@ -367,15 +368,15 @@ inline RawMesh CreateSphere(float size) {
             // Avoid degenerate triangles at the top pole.
             if (y != 0) {
                 mesh.indicies.push_back(a);
-                mesh.indicies.push_back(c);
                 mesh.indicies.push_back(b);
+                mesh.indicies.push_back(c);
             }
 
             // Avoid degenerate triangles at the bottom pole.
             if (y != stacks - 1) {
                 mesh.indicies.push_back(c);
-                mesh.indicies.push_back(d);
                 mesh.indicies.push_back(b);
+                mesh.indicies.push_back(d);
             }
         }
     }
@@ -429,12 +430,12 @@ inline RawMesh CreateCube(float sizeX, float sizeY, float sizeZ) {
         });
 
         mesh.indicies.push_back(base + 0);
-        mesh.indicies.push_back(base + 1);
         mesh.indicies.push_back(base + 2);
+        mesh.indicies.push_back(base + 1);
 
         mesh.indicies.push_back(base + 0);
-        mesh.indicies.push_back(base + 2);
         mesh.indicies.push_back(base + 3);
+        mesh.indicies.push_back(base + 2);
     };
 
     // +Z front
@@ -492,6 +493,11 @@ inline RawMesh CreateCube(float sizeX, float sizeY, float sizeZ) {
     );
 
     return mesh;
+}
+
+inline RawMesh CreateSpotLightBoundingBox(const float range, const float spotOuterAngle) {
+    const float halfExtent = range * std::tan(spotOuterAngle * 0.5f);
+    return CreateCube(halfExtent * 2.0f, halfExtent * 2.0f, range);
 }
 }
 }

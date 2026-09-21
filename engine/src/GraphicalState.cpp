@@ -119,7 +119,7 @@ void RenderStates::InitializeDepthStates(ID3D11Device* device) {
 
         desc.DepthEnable = TRUE;
         desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-        desc.DepthFunc = D3D11_COMPARISON_LESS;
+        desc.DepthFunc = D3D11_COMPARISON_GREATER;
 
         desc.StencilEnable = FALSE;
 

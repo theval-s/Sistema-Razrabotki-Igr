@@ -25,7 +25,7 @@ PS_IN VSMain(uint vertexId : SV_VertexID) {
     };
 
     PS_IN output = (PS_IN)0;
-    output.pos = float4(positions[vertexId], 0.0f, 1.0f);
+    output.pos = float4(positions[vertexId], 1.0f, 1.0f);
     output.tex = uvs[vertexId];
     return output;
 }
