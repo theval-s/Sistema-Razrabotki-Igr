@@ -5,7 +5,7 @@ namespace engine {
 RenderingSystem RenderingSystem::instance{};
 
 void RenderingSystem::Initialize(const uint32_t screenWidth, const uint32_t screenHeight) {
-    renderingContext_.Initialize();
+    renderingContext_.Initialize(screenWidth, screenHeight);
     auto& resourceManager = renderingContext_.GetResourceManager();
     resources_ = std::make_unique<RenderingResources>(screenWidth, screenHeight, resourceManager);
     renderPasses_.push_back(std::make_unique<ShadowCSMPass>());
