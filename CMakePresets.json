@@ -49,6 +49,15 @@
         "lhs": "${hostSystemName}",
         "rhs": "Windows"
       }
+    },
+    {
+      "name": "windows-example-game",
+      "displayName": "Windows / Example Game / MSVC 2022 / x64",
+      "inherits": "windows-vs2022",
+      "cacheVariables": {
+        "SRI_BUILD_EDITOR": "OFF",
+        "SRI_BUILD_EXAMPLE_GAME": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -61,6 +70,14 @@
       "name": "windows-release",
       "configurePreset": "windows-msvc",
       "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "windows-example-game-debug",
+      "configurePreset": "windows-example-game",
+      "configuration": "Debug",
+      "targets": [
+        "ExampleGame"
+      ]
     }
   ]
 }
