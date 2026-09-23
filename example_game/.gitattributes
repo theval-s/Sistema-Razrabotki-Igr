@@ -1,0 +1,40 @@
+# Git LFS tracking for ExampleGame runtime assets.
+#
+# Patterns below are relative to this directory (example_game/), so they
+# cannot affect engine/, editor/ or anything else in the tree.
+#
+# Requires `git lfs install` once per machine. Without it, a clone gets
+# small text pointer files instead of real assets and the game will fail
+# to load its models.
+
+# --- Textures -------------------------------------------------------------
+*.png       filter=lfs diff=lfs merge=lfs -text
+*.jpg       filter=lfs diff=lfs merge=lfs -text
+*.jpeg      filter=lfs diff=lfs merge=lfs -text
+*.tga       filter=lfs diff=lfs merge=lfs -text
+*.dds       filter=lfs diff=lfs merge=lfs -text
+*.hdr       filter=lfs diff=lfs merge=lfs -text
+*.exr       filter=lfs diff=lfs merge=lfs -text
+*.psd       filter=lfs diff=lfs merge=lfs -text
+
+# --- Meshes ---------------------------------------------------------------
+# Scoped to Models/ on purpose: a bare *.obj would also match MSVC object
+# files if anyone ever configures an in-source build under example_game/.
+# .obj/.gltf are plain text, but they are generated exports that never diff
+# usefully -- Sign/model.obj alone is 3.7 MB of ASCII.
+Models/**/*.obj     filter=lfs diff=lfs merge=lfs -text
+Models/**/*.fbx     filter=lfs diff=lfs merge=lfs -text
+Models/**/*.glb     filter=lfs diff=lfs merge=lfs -text
+Models/**/*.gltf    filter=lfs diff=lfs merge=lfs -text
+Models/**/*.bin     filter=lfs diff=lfs merge=lfs -text
+Models/**/*.blend   filter=lfs diff=lfs merge=lfs -text
+
+# --- Audio ----------------------------------------------------------------
+*.wav       filter=lfs diff=lfs merge=lfs -text
+*.ogg       filter=lfs diff=lfs merge=lfs -text
+*.mp3       filter=lfs diff=lfs merge=lfs -text
+*.flac      filter=lfs diff=lfs merge=lfs -text
+
+# --- Small text companions stay in plain Git ------------------------------
+# .mtl files are tiny and human-readable; the loader skips mtllib anyway.
+*.mtl       text
