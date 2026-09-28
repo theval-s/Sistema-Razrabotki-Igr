@@ -12,6 +12,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(spdlog CONFIG REQUIRED)
 
 # Turns on AUTOMOC / AUTOUIC / AUTORCC and a few sane defaults. Qt 6.3+.
 qt_standard_project_setup()
@@ -19,7 +20,9 @@ qt_standard_project_setup()
 qt_add_executable(editor
     src/main.cpp
     src/main_window.cpp
+    src/viewport_widget.cpp
     include/editor/main_window.hpp
+    include/editor/viewport_widget.hpp
 )
 
 target_include_directories(editor PRIVATE
@@ -29,6 +32,9 @@ target_include_directories(editor PRIVATE
 
 target_link_libraries(editor PRIVATE
     Engine::Engine     # brings engine's include dirs along as usage requirements
+    # Must be the same shared spdlog the engine uses, so both log into one
+    # default logger and the editor's Log dock sees engine messages.
+    spdlog::spdlog
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
