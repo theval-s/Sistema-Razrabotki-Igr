@@ -175,3 +175,36 @@ install(EXPORT EngineTargets
     NAMESPACE Engine::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Engine
 )
+
+# --- Core kernel -------------------------------------------------------------
+# Engine lifecycle, subsystems, events and the scene model -- the API
+# every other system (rendering, input, audio, editor, ...) builds on.
+
+find_package(EnTT CONFIG REQUIRED)
+find_package(enkiTS CONFIG REQUIRED)
+
+set(ENGINE_CORE_HEADERS
+    include/engine/core/CoreEvents.hpp
+    include/engine/core/FrameContext.hpp
+    include/engine/core/Subsystem.hpp
+    include/engine/core/Surface.hpp
+    include/engine/scene/Components.hpp
+    include/engine/scene/Scene.hpp
+    include/engine/scene/Transform.hpp
+)
+
+set(ENGINE_CORE_SOURCES
+    src/core/Subsystem.cpp
+    src/scene/Scene.cpp
+)
+
+foreach(engine_target IN ITEMS engine engine_static)
+    if(TARGET ${engine_target})
+        target_sources(${engine_target} PRIVATE ${ENGINE_CORE_SOURCES} ${ENGINE_CORE_HEADERS})
+        # All of these appear in public headers (SimpleMath in Transform, EnTT in
+        # Scene/Engine, enkiTS via Engine::GetTaskScheduler()), so consumers need them too.
+        target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
+    endif()
+endforeach()
+
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${ENGINE_CORE_HEADERS} ${ENGINE_CORE_SOURCES})
