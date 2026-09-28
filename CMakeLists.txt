@@ -22,6 +22,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # --- Options ---------------------------------------------------------------
 option(SRI_BUILD_EDITOR "Build the Qt editor" ON)
+option(SRI_BUILD_EXAMPLE_GAME "Build the standalone example game" ON)
 option(SRI_BUILD_TESTS  "Build tests"         OFF) # We have no tests currently lol
 
 # --- Output layout ---------------------------------------------------------
@@ -51,6 +52,10 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 add_subdirectory(external)   # git submodules
 add_subdirectory(engine)     # shared library (the SDK)
 
+if(SRI_BUILD_EXAMPLE_GAME)
+    add_subdirectory(example_game)
+endif()
+
 if(SRI_BUILD_EDITOR)
     add_subdirectory(editor) # Qt app, links against Engine::Engine
 endif()
@@ -64,4 +69,7 @@ endif()
 if(SRI_BUILD_EDITOR)
     set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         PROPERTY VS_STARTUP_PROJECT editor)
+elseif(SRI_BUILD_EXAMPLE_GAME)
+    set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        PROPERTY VS_STARTUP_PROJECT ExampleGame)
 endif()

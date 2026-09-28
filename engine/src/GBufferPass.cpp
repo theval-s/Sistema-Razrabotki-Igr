@@ -1,0 +1,98 @@
+#include "engine/GBufferPass.hpp"
+
+#include "engine/UglyUtils.hpp"
+
+namespace engine {
+
+void GBufferPass::Initialize(RenderingResourceManager& resourceManager, RenderingContext&,
+                             RenderingResources& resources) {
+    vertexShader_ = resourceManager.CompileShader(L"GBufferPass.hlsl", ShaderType::Vertex);
+    pixelShader_ = resourceManager.CompileShader(L"GBufferPass.hlsl", ShaderType::Pixel);
+
+    const auto textureDesc = [&](const DXGI_FORMAT format){
+        return TextureDesc{
+            .width = resources.screenWith, .height = resources.screenHeight,
+            .format = format,
+            .usage = TextureUsage::RenderTarget | TextureUsage::ShaderResource,
+            .srvFormat = format,
+            .dsvFormat = format,
+        };
+    };
+    auto & gBuffer = resources.gBuffer;
+    gBuffer.albedoTexture = resourceManager.CreateTexture(textureDesc(DXGI_FORMAT_R8G8B8A8_UNORM));
+    gBuffer.normalTexture = resourceManager.CreateTexture(textureDesc(DXGI_FORMAT_R16G16B16A16_FLOAT));
+    gBuffer.materialTexture = resourceManager.CreateTexture(textureDesc(DXGI_FORMAT_R8G8B8A8_UNORM));
+    gBuffer.resultTexture = resourceManager.CreateTexture(textureDesc(DXGI_FORMAT_R16G16B16A16_FLOAT));
+    auto desc = textureDesc(DXGI_FORMAT_R24G8_TYPELESS);
+    desc.usage = TextureUsage::DepthStencil | TextureUsage::ShaderResource;
+    desc.dsvFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+    desc.srvFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+    gBuffer.depthTexture = resourceManager.CreateTexture(desc);
+
+    lightSphere_ = ugly_utils::FromRawMesh(resourceManager, ugly_utils::CreateSphere(1.0f));
+}
+
+void GBufferPass::Render(RenderWorld& world, RenderingContext& context, RenderingResources& resources) {
+    auto & gBuffer = resources.gBuffer;
+    context.SetViewport(resources.screenWith, resources.screenHeight);
+    context.SetRasterizerState(RasterizerState::CullBack);
+    context.ClearRenderTargetView(gBuffer.albedoTexture);
+    context.ClearRenderTargetView(gBuffer.normalTexture);
+    context.ClearRenderTargetView(gBuffer.materialTexture);
+    context.ClearDepthView(gBuffer.depthTexture);
+
+    context.SetRenderTargets({gBuffer.albedoTexture, gBuffer.normalTexture, gBuffer.materialTexture}, gBuffer.depthTexture);
+    context.SetShader(vertexShader_);
+    context.SetShader(pixelShader_);
+
+    context.SetDepthState(DepthState::ReadWrite);
+    world.BindCameraView(context, resources);
+
+    //todo: generalize with other passes
+    for (const auto & ri : world.renderItems) {
+        resources.materialCBuffer.Update(context, [&](MaterialBufferData & data){
+            data.specularColor = ri.material.specularColor;
+            data.shininess = ri.material.shininess;
+            data.specialType = ri.material.specialType;
+        });
+
+        resources.objectCBuffer.Update(context, [&](ObjectBufferData & data){
+            data.worldMatrix = ri.worldMatrix;
+            data.normalMatrix = ri.worldMatrix.Invert().Transpose();
+        });
+
+        context.SetShaderResources(BindSlots::Texture::Albedo, ri.texture);
+
+        context.DrawMesh(ri.mesh);
+    }
+
+    //debug code
+    for (const auto & light : world.lights) {
+        Matrix lightWorldMatrix;
+        if (light.type == LightInfo::Spot) {
+            Vector3 direction = light.direction;
+            direction.Normalize();
+            const Vector3 up = std::abs(direction.Dot(Vector3::Up)) > 0.99f
+                                   ? Vector3::Right
+                                   : Vector3::Up;
+            const Vector3 boxCenter = light.position + direction * (light.range * 0.5f);
+            lightWorldMatrix = Matrix::CreateWorld(boxCenter, direction, up);
+        } else {
+            lightWorldMatrix = Matrix::CreateScale(light.range) * Matrix::CreateTranslation(light.position);
+        }
+        resources.objectCBuffer.Update(context, [&](ObjectBufferData & data){
+            data.worldMatrix = lightWorldMatrix;
+            data.normalMatrix = lightWorldMatrix.Invert().Transpose();
+        });
+        continue;
+        if (light.type == LightInfo::Point) {
+
+            context.DrawMesh(lightSphere_);
+        } else if (light.type == LightInfo::Spot) {
+            const auto bb = light.lightParameters.spotLight.boundingBox;
+            context.DrawMesh(bb);
+        }
+    }
+}
+
+}

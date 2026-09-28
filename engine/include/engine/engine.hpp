@@ -18,6 +18,7 @@ public:
     Engine& operator=(const Engine&) = delete;
     ENGINE_API Engine(Engine&&) noexcept;
     ENGINE_API Engine& operator=(Engine&&) noexcept;
+    
 private:
     //pimpl
     struct Impl;
