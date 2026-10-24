@@ -7,6 +7,7 @@ cbuffer Enchantment : register(b8) {
 };
 
 
+#if defined(MATERIAL_GBUFFER_VS) || defined(MATERIAL_SHADOW_VS)
 void TwistCube(inout MaterialVertex vertex) {
     float3 p = vertex.position.xyz;
     // Top and bottom rotate in opposite directions; every duplicate corner
@@ -21,18 +22,24 @@ void TwistCube(inout MaterialVertex vertex) {
     float3 n = vertex.normal;
     vertex.normal = float3(c * n.x + s * n.z, n.y, -s * n.x + c * n.z);
 }
+#endif
 
 
+#if defined(MATERIAL_GBUFFER_VS)
 void PatchGBufferVertex(inout MaterialVertex vertex) {
     TwistCube(vertex);
 }
+#endif
 
 
+#if defined(MATERIAL_SHADOW_VS)
 void PatchShadowVertex(inout MaterialVertex vertex) {
     TwistCube(vertex);
 }
+#endif
 
 
+#if defined(MATERIAL_GBUFFER_PS)
 void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) {
     float2 uv = input.tex;
     float drift = enchantmentTime * 0.45;
@@ -55,4 +62,5 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) {
     surface.specularColor = float3(0.75, 0.48, 0.95);
     surface.shininess = 100.0;
 }
+#endif
 
