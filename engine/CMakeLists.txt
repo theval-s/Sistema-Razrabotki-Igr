@@ -221,6 +221,7 @@ set(ENGINE_CORE_SOURCES
     src/rendering/RenderingSubsystem.cpp
     src/input/InputSubsystem.cpp
     src/rendering/SceneRenderSubsystem.cpp
+    src/assets/AssetPathResolver.cpp
     src/assets/AssetSystem.cpp
     src/assets/AssimpMeshImporter.cpp
     src/assets/ShaderImporter.cpp
