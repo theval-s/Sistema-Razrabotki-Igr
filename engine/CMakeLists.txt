@@ -193,6 +193,7 @@ install(EXPORT EngineTargets
 find_package(EnTT CONFIG REQUIRED)
 find_package(enkiTS CONFIG REQUIRED)
 find_package(assimp CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 set(ENGINE_CORE_HEADERS
     include/engine/input/InputSubsystem.hpp
@@ -238,7 +239,7 @@ foreach(engine_target IN ITEMS engine engine_static)
         target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
         # Assimp is PRIVATE on purpose: AssimpMeshImporter.cpp is its only user and no
         # public header mentions it. Static consumers still get it via the link-only interface.
-        target_link_libraries(${engine_target} PRIVATE assimp::assimp)
+        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json)
     endif()
 endforeach()
 
