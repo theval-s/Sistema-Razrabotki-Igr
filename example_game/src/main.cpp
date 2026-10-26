@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include <engine/rendering/RenderingSubsystem.hpp>
+#include <engine/rendering/RenderComponents.hpp>
 #include <engine/rendering/UglyUtils.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/core/FrameContext.hpp>
@@ -320,6 +321,7 @@ public:
         tableMesh_ = assets_->RequestMesh("models/Table", true);
         signMesh_ = assets_->RequestMesh("models/Sign", true);
         hammerMesh_ = assets_->RequestMesh("models/Hammer", true);
+        editorCubeMesh_ = assets_->RequestMesh(engine::BuiltinAssets::CubeMesh);
         tableTexture_ = assets_->RequestTexture("models/Table");
         signTexture_ = assets_->RequestTexture("models/Sign");
         hammerTexture_ = assets_->RequestTexture("models/Hammer");
@@ -411,10 +413,11 @@ private:
         const auto tableMesh = assets_->Peek(tableMesh_);
         const auto signMesh = assets_->Peek(signMesh_);
         const auto hammerMesh = assets_->Peek(hammerMesh_);
+        const auto editorCubeMesh = assets_->Peek(editorCubeMesh_);
         const auto tableTexture = assets_->Peek(tableTexture_);
         const auto signTexture = assets_->Peek(signTexture_);
         const auto hammerTexture = assets_->Peek(hammerTexture_);
-        if (!tableMesh || !signMesh || !hammerMesh ||
+        if (!tableMesh || !signMesh || !hammerMesh || !editorCubeMesh ||
             !tableTexture || !signTexture || !hammerTexture) {
             return;
         }
@@ -445,6 +448,12 @@ private:
         objects_.push_back(table);
         objects_.push_back(sign);
         objects_.push_back(hammer);
+        // Same mesh, dimensions and default white material as the editor's Add Cube action.
+        objects_.push_back({
+            .transform = Matrix::CreateTranslation(-5.0f, 0.5f, -4.0f),
+            .mesh = editorCubeMesh->mesh,
+            .materialInstance = MakeInstance(defaultMaterial_, {}, {})
+        });
 
         orbitingSign_ = objects_.size();
         objects_.push_back(sign);
@@ -482,6 +491,7 @@ private:
     engine::AssetHandle<engine::MeshAsset> tableMesh_;
     engine::AssetHandle<engine::MeshAsset> signMesh_;
     engine::AssetHandle<engine::MeshAsset> hammerMesh_;
+    engine::AssetHandle<engine::MeshAsset> editorCubeMesh_;
     engine::AssetHandle<engine::TextureAsset> tableTexture_;
     engine::AssetHandle<engine::TextureAsset> signTexture_;
     engine::AssetHandle<engine::TextureAsset> hammerTexture_;

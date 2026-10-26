@@ -1,4 +1,5 @@
-﻿#include <engine/rendering/GraphicalState.hpp>
+﻿#include <bit>
+#include <engine/rendering/GraphicalState.hpp>
 
 #include <cassert>
 #include <stdexcept>
@@ -179,8 +180,9 @@ void RenderStates::InitializeRasterizerStates(ID3D11Device* device) {
 
         desc.FrontCounterClockwise = FALSE;
 
-        // Reverse-Z: push shadow-map depths away from the light (toward 0).
-        desc.DepthBias = -1;
+        // Receiver-plane PCF handles depth variation across taps; avoid shifting
+        // shadow casters away from small surfaces in the distant cascades.
+        desc.DepthBias = -5000;
         desc.DepthBiasClamp = 0.0f;
         desc.SlopeScaledDepthBias = -1.0f;
 
