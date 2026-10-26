@@ -1,5 +1,7 @@
 #include <engine/input/InputSubsystem.hpp>
 
+#include "engine/rendering/UglyUtils.hpp"
+
 namespace engine {
 
 std::string_view InputSubsystem::GetName() const {
@@ -13,7 +15,7 @@ void InputSubsystem::Update(const FrameContext&) {
     pending_.keysReleased.reset();
     pending_.buttonsPressed.reset();
     pending_.buttonsReleased.reset();
-    pending_.mouseDelta = {};
+    pending_.mouseDelta = DirectX::SimpleMath::Vector2();
     pending_.wheelDelta = 0.0f;
 }
 
