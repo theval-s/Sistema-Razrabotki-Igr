@@ -13,16 +13,32 @@
 namespace engine {
 namespace {
 
+// DirectXTK caches its WIC factory process-wide. Releasing the last MTA reference
+// after a single decode tears down that apartment and leaves the cached factory
+// pointing at dead COM state. Keep the MTA alive for the lifetime of this module,
+// including periods when no worker is currently decoding and engine restarts.
+class WicApartment {
+public:
+    WicApartment() : ok_(SUCCEEDED(CoIncrementMTAUsage(&cookie_))) {}
+    ~WicApartment() { if (ok_) CoDecrementMTAUsage(cookie_); }
+    WicApartment(const WicApartment&) = delete;
+    WicApartment& operator=(const WicApartment&) = delete;
+    explicit operator bool() const noexcept { return ok_; }
+private:
+    CO_MTA_USAGE_COOKIE cookie_ = nullptr;
+    bool ok_;
+};
+
 /// WIC is COM and COM is initialized per thread, so a scheduler worker that nobody initialized
 /// would fail every decode. CoInitializeEx returns S_FALSE when the thread already was, meaning
 /// this call took a refcount, so the matching CoUninitialize stays balanced either way.
 class ScopedCom {
 public:
-    ScopedCom() : ok_(SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {
+    ScopedCom() : result_(CoInitializeEx(nullptr, COINIT_MULTITHREADED)) {
     }
 
     ~ScopedCom() {
-        if (ok_) {
+        if (SUCCEEDED(result_)) {
             CoUninitialize();
         }
     }
@@ -31,11 +47,11 @@ public:
     ScopedCom& operator=(const ScopedCom&) = delete;
 
     [[nodiscard]] explicit operator bool() const noexcept {
-        return ok_;
+        return SUCCEEDED(result_) || result_ == RPC_E_CHANGED_MODE; // an existing STA is usable too
     }
 
 private:
-    bool ok_ = false;
+    HRESULT result_;
 };
 
 } // namespace
@@ -63,8 +79,9 @@ bool TextureImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPa
         res = DirectX::CreateDDSTextureFromMemory(
             device, fileBytes.data(), fileBytes.size(), nullptr, view.GetAddressOf());
     } else {
+        static const WicApartment apartment;
         const ScopedCom com;
-        if (!com) {
+        if (!apartment || !com) {
             error = std::format("cannot initialize COM on this thread to decode '{}'", path.string());
             return false;
         }
