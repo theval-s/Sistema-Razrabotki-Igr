@@ -1,23 +1,5 @@
 ﻿#include "Common.hlsl"
-
-struct MaterialVertex {
-    float4 position;
-    float3 normal;
-    float2 uv;
-};
-
-struct MaterialVertexInput {
-    float4 pos : POSITION0;
-    float3 normal : NORMAL0;
-    float2 tex : TEXCOORD0;
-};
-
-struct GBufferInput {
-    float4 pos : SV_POSITION;
-    float3 normal : NORMAL0;
-    float2 tex : TEXCOORD0;
-    float3 worldPos : TEXCOORD1;
-};
+#include "ShaderTypes.hlsl"
 
 #ifdef MATERIAL_HAS_HOOK
 void PatchGBufferVertex(inout MaterialVertex vertex);
@@ -25,7 +7,7 @@ void PatchGBufferVertex(inout MaterialVertex vertex);
 void PatchGBufferVertex(inout MaterialVertex vertex) {}
 #endif
 
-GBufferInput VSMain(MaterialVertexInput input) {
+GBufferInput VSMain(GBufferVertexInput input) {
     MaterialVertex vertex = {input.pos, input.normal, input.tex};
     PatchGBufferVertex(vertex);
     float4 worldSpace = mul(vertex.position, Object.worldMatrix);
