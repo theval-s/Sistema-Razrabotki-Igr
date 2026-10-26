@@ -193,6 +193,7 @@ install(EXPORT EngineTargets
 find_package(EnTT CONFIG REQUIRED)
 find_package(enkiTS CONFIG REQUIRED)
 find_package(assimp CONFIG REQUIRED)
+find_package(RapidJSON CONFIG REQUIRED)
 
 set(ENGINE_CORE_HEADERS
     include/engine/input/InputSubsystem.hpp
@@ -208,6 +209,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/assets/AssetTable.hpp
     include/engine/assets/AssetTypes.hpp
     include/engine/assets/AssetPipeline.hpp
+    include/engine/assets/MaterialDefinition.hpp
     include/engine/core/CoreEvents.hpp
     include/engine/core/FrameContext.hpp
     include/engine/core/Subsystem.hpp
@@ -225,6 +227,8 @@ set(ENGINE_CORE_SOURCES
     src/assets/AssimpMeshImporter.cpp
     src/assets/ShaderImporter.cpp
     src/assets/TextureImporter.cpp
+    src/assets/MaterialDefinition.cpp
+    src/assets/MaterialImporter.cpp
     src/core/Subsystem.cpp
     src/scene/Scene.cpp
 )
@@ -237,7 +241,7 @@ foreach(engine_target IN ITEMS engine engine_static)
         target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
         # Assimp is PRIVATE on purpose: AssimpMeshImporter.cpp is its only user and no
         # public header mentions it. Static consumers still get it via the link-only interface.
-        target_link_libraries(${engine_target} PRIVATE assimp::assimp)
+        target_link_libraries(${engine_target} PRIVATE assimp::assimp RapidJSON)
     endif()
 endforeach()
 

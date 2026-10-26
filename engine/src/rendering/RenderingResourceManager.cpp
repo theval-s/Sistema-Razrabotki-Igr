@@ -7,6 +7,12 @@
 #include <engine/assets/AssetPathResolver.hpp>
 
 namespace engine {
+namespace {
+std::string Utf8Name(const std::wstring& name) {
+    const auto utf8 = std::filesystem::path(name).u8string();
+    return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+}
+} // namespace
 
 void RenderingResourceManager::Initialize(ID3D11Device* device) {
     device_ = device;
@@ -90,7 +96,7 @@ bool RenderingResourceManager::DestroyMesh(const MeshHandle meshHandle, const bo
 ShaderHandle RenderingResourceManager::CompileShader(const std::wstring& fileName, const ShaderType shaderType,
                                                       const ShaderCompileOptions& options) {
     AssetDesc desc;
-    desc.path = AssetPathResolver::DefaultPath(std::filesystem::path(fileName).string(), AssetKind::Shader);
+    desc.path = AssetPathResolver::DefaultPath(Utf8Name(fileName), AssetKind::Shader);
     auto shader = ShaderContext::CompileShader(device_.Get(), inputLayoutCache_,
                                                 AssetPathResolver::ResolveShader(desc), shaderType, options);
     if (!shader) {
@@ -134,7 +140,7 @@ MaterialHandle RenderingResourceManager::CreateMaterial(const MaterialDesc& desc
     auto compile = [&](MaterialHook hook, ShaderType type, const char* define, ShaderHandle& target) {
         if (!HasHook(desc.hooks, hook)) return true;
         const auto path = AssetPathResolver::ResolveShader({
-            .path = AssetPathResolver::DefaultPath(std::filesystem::path(desc.shaderFile).string(), AssetKind::Shader)});
+            .path = AssetPathResolver::DefaultPath(Utf8Name(desc.shaderFile), AssetKind::Shader)});
         auto compiled = ShaderContext::CompileCpu(path, type, {.defines = {{define, "1"}, {"MATERIAL_HAS_HOOK", "1"}}});
         if (!compiled) return false;
         target = RegisterCompiledShader(*compiled);
@@ -148,9 +154,36 @@ MaterialHandle RenderingResourceManager::CreateMaterial(const MaterialDesc& desc
         shaders_.Remove(shaders.gBufferPassPS);
         return {};
     }
-    Material material{.shaders = shaders, .defaultParameters = desc.defaults, .instanceCount = 1};
+    const auto result = RegisterMaterial(shaders, desc.defaults);
+    if (!result) {
+        shaders_.Remove(shaders.shadowPassVS);
+        shaders_.Remove(shaders.gBufferPassVS);
+        shaders_.Remove(shaders.gBufferPassPS);
+    }
+    return result;
+}
+
+MaterialHandle RenderingResourceManager::RegisterMaterial(const ShaderSet& shaders, const MaterialParameters& defaults) {
+    const auto validShader = [&](ShaderHandle handle, ShaderType type) {
+        const auto* shader = shaders_.TryGet(handle);
+        return !handle || (shader && shader->type == type);
+    };
+    if (!validShader(shaders.shadowPassVS, ShaderType::Vertex) ||
+        !validShader(shaders.gBufferPassVS, ShaderType::Vertex) ||
+        !validShader(shaders.gBufferPassPS, ShaderType::Pixel) ||
+        (defaults.albedoTexture && !textures_.Contains(defaults.albedoTexture)) ||
+        (defaults.customBuffer && (!buffers_.Contains(defaults.customBuffer) ||
+                                  buffers_.Get(defaults.customBuffer).type != BufferType::Constant))) return {};
+    for (const auto& [id, instanceHandle] : defaultInstances_) {
+        const auto& owned = materials_.Get(materialInstances_.Get(instanceHandle).material).shaders;
+        for (auto candidate : {shaders.shadowPassVS, shaders.gBufferPassVS, shaders.gBufferPassPS}) {
+            if (candidate && (candidate == owned.shadowPassVS || candidate == owned.gBufferPassVS ||
+                              candidate == owned.gBufferPassPS)) return {};
+        }
+    }
+    Material material{.shaders = shaders, .defaultParameters = defaults, .instanceCount = 1};
     const auto handle = materials_.Add(std::move(material));
-    const auto instance = materialInstances_.Add(MaterialInstance{handle, desc.defaults});
+    const auto instance = materialInstances_.Add(MaterialInstance{handle, defaults});
     defaultInstances_.emplace(handle.id, instance);
     return handle;
 }

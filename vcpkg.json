@@ -4,6 +4,6 @@
   "version": "0.1.0",
   "description": "Sistema Razrabotki Igr",
   "dependencies": [
-    "spdlog", "directxtk", "entt", "enkits", "assimp"
+    "spdlog", "directxtk", "entt", "enkits", "assimp", "rapidjson"
   ]
 }

@@ -36,6 +36,9 @@ struct ENGINE_API RenderingResourceManager {
     bool DestroyShader(ShaderHandle shaderHandle);
     /// Compiles declared hooks and creates a default instance. Empty handle on failure.
     MaterialHandle CreateMaterial(const MaterialDesc& desc);
+    /// Main-thread upload path for the asset importer: no file I/O or compilation.
+    /// Takes ownership of the shader handles on success; they must not be shared.
+    MaterialHandle RegisterMaterial(const ShaderSet& shaders, const MaterialParameters& defaults);
     bool DestroyMaterial(MaterialHandle material);
     [[nodiscard]] MaterialInstanceHandle GetDefaultMaterialInstance(MaterialHandle material) const;
     [[nodiscard]] MaterialInstanceHandle CreateMaterialInstance(MaterialHandle material);

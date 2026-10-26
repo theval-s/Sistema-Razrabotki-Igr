@@ -4,6 +4,7 @@
 #include <engine/rendering/resources/ShaderContext.hpp>
 #include <engine/rendering/resources/Texture.hpp>
 #include <engine/assets/AssetCommon.hpp>
+#include <engine/assets/MaterialDefinition.hpp>
 
 namespace engine {
 
@@ -24,6 +25,16 @@ struct ShaderAsset {
     ShaderType stage;
 };
 
+struct MaterialAsset {
+    MaterialHandle material;
+    MaterialDefinition definition; // authored references/defaults for editor inspection and saving
+};
+
+struct MaterialInstanceAsset {
+    MaterialInstanceHandle instance;
+    MaterialInstanceDefinition definition; // sparse overrides, not flattened runtime parameters
+};
+
 /// Which table each asset type lives in; used by the templated lookup helpers.
 template <typename T>
 struct AssetValueKind;
@@ -41,6 +52,16 @@ struct AssetValueKind<TextureAsset> {
 template <>
 struct AssetValueKind<ShaderAsset> {
     static constexpr AssetKind value = AssetKind::Shader;
+};
+
+template <>
+struct AssetValueKind<MaterialAsset> {
+    static constexpr AssetKind value = AssetKind::Material;
+};
+
+template <>
+struct AssetValueKind<MaterialInstanceAsset> {
+    static constexpr AssetKind value = AssetKind::MaterialInstance;
 };
 
 }  // namespace engine

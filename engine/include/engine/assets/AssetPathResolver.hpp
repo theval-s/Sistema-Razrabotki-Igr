@@ -28,6 +28,9 @@ namespace engine {
 /// assets are found.
 class AssetPathResolver {
 public:
+    [[nodiscard]] static std::filesystem::path Utf8Path(std::string_view name) {
+        return std::filesystem::path(std::u8string(name.begin(), name.end()));
+    }
     /// Mesh assets address a folder that holds model.<ext> (and optionally texture.png);
     /// a name ending in a model extension addresses that file directly. Assimp chooses the
     /// reader from the extension, so the file format itself is not fixed to .obj.
@@ -65,21 +68,27 @@ public:
         return path;
     }
 
+    [[nodiscard]] static std::filesystem::path ResolveMaterial(const AssetDesc& desc, bool instance = false) {
+        auto path = MakeAbsolute(desc.path);
+        if (path.extension().empty()) path += instance ? L".material-instance.json" : L".material.json";
+        return path;
+    }
+
     /// Default on-disk location for a kind when the caller gave only a logical name.
     [[nodiscard]] static std::filesystem::path DefaultPath(std::string_view name, AssetKind kind) {
         if (kind == AssetKind::Shader) {
             if (name.starts_with("engine/")) {
-                return std::filesystem::path("engine") / "shaders" / std::filesystem::path(name.substr(7));
+                return std::filesystem::path("engine") / "shaders" / Utf8Path(name.substr(7));
             }
             if (name.starts_with("game/")) {
-                return std::filesystem::path("game") / "shaders" / std::filesystem::path(name.substr(5));
+                return std::filesystem::path("game") / "shaders" / Utf8Path(name.substr(5));
             }
             if (name.starts_with("shaders/")) {
-                return std::filesystem::path("engine") / "shaders" / std::filesystem::path(name.substr(8));
+                return std::filesystem::path("engine") / "shaders" / Utf8Path(name.substr(8));
             }
-            return std::filesystem::path("game") / "shaders" / std::filesystem::path(name);
+            return std::filesystem::path("game") / "shaders" / Utf8Path(name);
         }
-        return std::filesystem::path(name);
+        return Utf8Path(name);
     }
 
     [[nodiscard]] static const std::filesystem::path& GetRoot() {

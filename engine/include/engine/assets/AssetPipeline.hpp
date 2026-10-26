@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -16,6 +17,7 @@
 #include <engine/rendering/UglyUtils.hpp>
 #include <engine/assets/AssetCommon.hpp>
 #include <engine/assets/AssetTypes.hpp>
+#include <engine/assets/AssetHandle.hpp>
 
 namespace engine {
 
@@ -34,13 +36,21 @@ struct TextureCpu {
     ComPtr<ID3D11ShaderResourceView> view;
 };
 
+struct MaterialCpu {
+    MaterialDefinition definition;
+    // ShadowVS, GBufferVS, GBufferPS. An undeclared hook has no bytecode.
+    std::array<CompiledShader, 3> shaders;
+};
+
 struct CpuPayload {
-    enum class Kind : uint8_t { None, Mesh, Texture, Shader };
+    enum class Kind : uint8_t { None, Mesh, Texture, Shader, Material, MaterialInstance };
 
     Kind kind = Kind::None;
     MeshCpu mesh;
     TextureCpu texture;
     CompiledShader shader;
+    MaterialCpu material;
+    MaterialInstanceDefinition materialInstance;
 };
 
 /// Output of the GPU phase (main thread): handles of the resources that were created.
@@ -49,6 +59,8 @@ struct GpuPayload {
     MeshHandle mesh;
     TextureHandle texture;
     ShaderHandle shader;
+    MaterialHandle material;
+    MaterialInstanceHandle materialInstance;
 };
 
 /// Everything the upload phase may need, resolved on the main thread before the call.
@@ -56,6 +68,8 @@ struct UploadTransfer {
     ID3D11Device* device = nullptr;
     ID3D11DeviceContext* context = nullptr;
     RenderingResourceManager* resources = nullptr;
+    MaterialParameters materialParameters; // resolved dependencies and inherited values; main thread only
+    MaterialHandle material;              // parent of a material instance
 };
 
 /// Two-phase importer: ReadCpu is thread-safe and may run on a worker; UploadGpu must run
@@ -97,6 +111,22 @@ public:
                                  GpuPayload& result, std::string& error) const override;
 };
 
+class MaterialImporter final : public IAssetImporter {
+public:
+    bool ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPayload& payload,
+                 std::string& error) const override;
+    bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
+                   GpuPayload& result, std::string& error) const override;
+};
+
+class MaterialInstanceImporter final : public IAssetImporter {
+public:
+    bool ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPayload& payload,
+                 std::string& error) const override;
+    bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
+                   GpuPayload& result, std::string& error) const override;
+};
+
 inline bool ReadWholeFileInto(const std::filesystem::path& path, std::vector<uint8_t>& out,
                               std::string& error) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -134,6 +164,11 @@ struct LoadJob final : public enki::ITaskSet {
     CpuPayload payload;
     std::string error;
     bool cpuOk = false;
+    bool dependenciesRequested = false;
+    AssetHandle<MaterialAsset> materialDependency;
+    AssetHandle<TextureAsset> textureDependency;
+    MaterialParameters resolvedParameters;
+    MaterialHandle resolvedMaterial;
     std::chrono::steady_clock::time_point queuedAt{};
 
     void ExecuteRange(enki::TaskSetPartition /*range*/, uint32_t threadnum) override {

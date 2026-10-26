@@ -25,6 +25,9 @@ For CMake to find Qt properly you might need to also add an environment variable
 
 # Build and setup
 
+Material and material-instance JSON formats, editor serialization API, and streaming
+examples: [material asset contract](docs/material-assets.md).
+
 ## 1. Clone
 
 ```

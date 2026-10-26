@@ -24,7 +24,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # --- Options ---------------------------------------------------------------
 option(SRI_BUILD_EDITOR "Build the Qt editor" ON)
 option(SRI_BUILD_EXAMPLE_GAME "Build the standalone example game" ON)
-option(SRI_BUILD_TESTS  "Build tests"         OFF) # We have no tests currently lol
+option(SRI_BUILD_TESTS  "Build tests"         OFF)
 
 # --- Output layout ---------------------------------------------------------
 # Everything runtime-ish lands in one directory so that editor(.exe) sits next
@@ -63,7 +63,7 @@ endif()
 
 if(SRI_BUILD_TESTS)
     enable_testing()
-    # add_subdirectory(tests)
+    add_subdirectory(tests)
 endif()
 
 # Make "editor" the thing F5 starts in Visual Studio.

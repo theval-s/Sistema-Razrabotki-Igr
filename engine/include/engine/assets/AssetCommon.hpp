@@ -14,6 +14,8 @@ enum class AssetKind : uint8_t {
     Mesh,
     Texture,
     Shader,
+    Material,
+    MaterialInstance,
     Count
 };
 

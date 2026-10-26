@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "hooks": [],
+  "defaults": {
+    "albedoTexture": "engine/primitives/white",
+    "specularColor": [0.25, 0.25, 0.25],
+    "shininess": 32
+  }
+}
