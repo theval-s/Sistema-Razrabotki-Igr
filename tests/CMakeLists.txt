@@ -1,5 +1,7 @@
+find_package(GTest CONFIG REQUIRED)
+
 add_executable(material_assets_tests material_assets_tests.cpp)
-target_link_libraries(material_assets_tests PRIVATE Engine::Engine user32)
+target_link_libraries(material_assets_tests PRIVATE Engine::Engine GTest::gtest user32)
 set_project_warnings(material_assets_tests)
 set_target_properties(material_assets_tests PROPERTIES FOLDER tests)
 
@@ -12,7 +14,3 @@ add_custom_command(TARGET material_assets_tests POST_BUILD
         "${PROJECT_SOURCE_DIR}/engine/primitives" "$<TARGET_FILE_DIR:material_assets_tests>/engine/primitives"
     COMMAND_EXPAND_LISTS VERBATIM
 )
-
-add_test(NAME material_definitions COMMAND material_assets_tests --definitions)
-add_test(NAME material_assets_integration COMMAND material_assets_tests --integration)
-set_tests_properties(material_assets_integration PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77 TIMEOUT 60)

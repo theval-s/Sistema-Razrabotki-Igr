@@ -9,33 +9,41 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
+#include <gtest/gtest.h>
 #include <limits>
-#include <stdexcept>
 #include <thread>
 #include <vector>
 
 namespace {
 using namespace engine;
-void Check(bool condition, const std::string& message) {
-    if (!condition) throw std::runtime_error(message);
-}
 
-void Definitions() {
+TEST(MaterialDefinitions, MaterialRoundTrip) {
     MaterialDefinition material;
     std::string error, json;
-    Check(ParseMaterialDefinition(R"({"version":1,"shaderFile":"game/test.hlsl",
-        "hooks":["GBufferPS"],"defaults":{"albedoTexture":"game/white.png","shininess":8}})", material, error),
-        error);
-    Check(material.hooks == MaterialHook::GBufferPS && material.defaults.shininess == 8, "parsed material");
-    Check(SerializeMaterialDefinition(material, json, error), error);
+    ASSERT_TRUE(ParseMaterialDefinition(R"({"version":1,"shaderFile":"game/test.hlsl",
+        "hooks":["GBufferPS"],"defaults":{"albedoTexture":"game/white.png","shininess":8}})", material, error)) << error;
+    EXPECT_EQ(material.hooks, MaterialHook::GBufferPS);
+    EXPECT_EQ(material.defaults.shininess, 8);
+    ASSERT_TRUE(SerializeMaterialDefinition(material, json, error)) << error;
     MaterialDefinition roundTrip;
-    Check(ParseMaterialDefinition(json, roundTrip, error), error);
-    Check(roundTrip.shaderFile == material.shaderFile && roundTrip.hooks == material.hooks &&
-          roundTrip.defaults.albedoTexture == material.defaults.albedoTexture, "material round trip");
-    Check(ParseMaterialDefinition("\xEF\xBB\xBF" R"({"version":1,"hooks":[]})", material, error), "UTF-8 BOM");
-    Check(material.hooks == MaterialHook::None && material.shaderFile.empty(), "built-in defaults");
+    ASSERT_TRUE(ParseMaterialDefinition(json, roundTrip, error)) << error;
+    EXPECT_EQ(roundTrip.shaderFile, material.shaderFile);
+    EXPECT_EQ(roundTrip.hooks, material.hooks);
+    EXPECT_EQ(roundTrip.defaults.albedoTexture, material.defaults.albedoTexture);
+    EXPECT_EQ(roundTrip.defaults.shininess, material.defaults.shininess);
+}
 
+TEST(MaterialDefinitions, AcceptsUtf8BomAndBuiltinDefaults) {
+    MaterialDefinition material;
+    std::string error;
+    ASSERT_TRUE(ParseMaterialDefinition("\xEF\xBB\xBF" R"({"version":1,"hooks":[]})", material, error)) << "UTF-8 BOM";
+    EXPECT_EQ(material.hooks, MaterialHook::None);
+    EXPECT_TRUE(material.shaderFile.empty());
+}
+
+TEST(MaterialDefinitions, RejectsInvalidMaterialWithoutChangingOutput) {
+    MaterialDefinition material;
+    std::string error;
     const std::vector<std::string> invalidMaterials{
         R"({"version":1})", R"({"version":2,"hooks":[]})",
         R"({"version":1,"hooks":["GBufferPS"]})",
@@ -62,45 +70,74 @@ void Definitions() {
         std::string("{\"version\":1,\"hooks\":[],\"shaderFile\":\"game/") + "\xFF" + "\"}"
     };
     for (const auto& invalid : invalidMaterials) {
+        SCOPED_TRACE(invalid);
         material.shaderFile = "unchanged";
-        Check(!ParseMaterialDefinition(invalid, material, error) && !error.empty(), "invalid material accepted");
-        Check(material.shaderFile == "unchanged", "failed parse overwrote the output");
+        EXPECT_FALSE(ParseMaterialDefinition(invalid, material, error));
+        EXPECT_FALSE(error.empty());
+        EXPECT_EQ(material.shaderFile, "unchanged");
     }
+}
+
+TEST(MaterialDefinitions, PreservesSparseNullAndZeroOverrides) {
+    std::string error, json;
     MaterialInstanceDefinition instance;
-    Check(ParseMaterialInstanceDefinition(R"({"version":1,"material":"game/base","parameters":{}})", instance, error),
-          error);
-    Check(!instance.parameters.albedoTexture && !instance.parameters.shininess, "absent overrides inherit");
-    Check(ParseMaterialInstanceDefinition(R"({"version":1,"material":"game/base","parameters":{
-        "albedoTexture":null,"shininess":0,"specularColor":[0,0,0]}})", instance, error), error);
-    Check(instance.parameters.albedoTexture && instance.parameters.albedoTexture->empty() &&
-          instance.parameters.shininess == 0, "explicit null and zero are overrides");
-    Check(SerializeMaterialInstanceDefinition(instance, json, error), error);
+    ASSERT_TRUE(ParseMaterialInstanceDefinition(R"({"version":1,"material":"game/base","parameters":{}})", instance, error)) << error;
+    EXPECT_FALSE(instance.parameters.albedoTexture);
+    EXPECT_FALSE(instance.parameters.shininess);
+    ASSERT_TRUE(ParseMaterialInstanceDefinition(R"({"version":1,"material":"game/base","parameters":{
+        "albedoTexture":null,"shininess":0,"specularColor":[0,0,0]}})", instance, error)) << error;
+    ASSERT_TRUE(instance.parameters.albedoTexture);
+    EXPECT_TRUE(instance.parameters.albedoTexture->empty());
+    EXPECT_EQ(instance.parameters.shininess, 0);
+    ASSERT_TRUE(SerializeMaterialInstanceDefinition(instance, json, error)) << error;
     MaterialInstanceDefinition decoded;
-    Check(ParseMaterialInstanceDefinition(json, decoded, error), error);
-    Check(decoded.parameters.albedoTexture && decoded.parameters.albedoTexture->empty(), "null round trip");
+    ASSERT_TRUE(ParseMaterialInstanceDefinition(json, decoded, error)) << error;
+    ASSERT_TRUE(decoded.parameters.albedoTexture);
+    EXPECT_TRUE(decoded.parameters.albedoTexture->empty());
+    EXPECT_EQ(decoded.parameters.shininess, 0);
+}
+
+TEST(MaterialDefinitions, RejectsInvalidInstance) {
+    MaterialInstanceDefinition decoded;
+    std::string error;
     for (const auto& invalid : {
         R"({"version":1,"material":""})", R"({"version":1,"material":"../base"})",
         R"({"version":1,"material":"game/base","parameters":{"albedoTexture":""}})",
         R"({"version":1,"material":"game/base","hooks":[]})",
         R"({"version":1,"material":"game/base","parameters":{"shininess":null}})"}) {
-        Check(!ParseMaterialInstanceDefinition(invalid, decoded, error), "invalid instance accepted");
+        SCOPED_TRACE(invalid);
+        EXPECT_FALSE(ParseMaterialInstanceDefinition(invalid, decoded, error));
     }
+}
+
+TEST(MaterialDefinitions, RejectsUnserializableValuesWithoutChangingOutput) {
+    MaterialInstanceDefinition instance;
+    MaterialDefinition material;
+    std::string error, json;
     instance.parameters.shininess = std::numeric_limits<float>::infinity();
     json = "unchanged";
-    Check(!SerializeMaterialInstanceDefinition(instance, json, error) && json == "unchanged", "infinite value saved");
-    material = {};
+    EXPECT_FALSE(SerializeMaterialInstanceDefinition(instance, json, error));
+    EXPECT_EQ(json, "unchanged");
     material.hooks = static_cast<MaterialHook>(0x80);
-    Check(!SerializeMaterialDefinition(material, json, error), "unknown hook bits saved");
-    material = {};
-    material.shaderFile = "game/материалы/цвет.hlsl";
-    Check(SerializeMaterialDefinition(material, json, error), "UTF-8 reference serialization");
-    Check(ParseMaterialDefinition(json, roundTrip, error) && roundTrip.shaderFile == material.shaderFile, "UTF-8 round trip");
+    EXPECT_FALSE(SerializeMaterialDefinition(material, json, error));
+    EXPECT_EQ(json, "unchanged");
+}
 
+TEST(MaterialDefinitions, Utf8ReferenceRoundTrip) {
+    MaterialDefinition material, roundTrip;
+    std::string error, json;
+    material.shaderFile = "game/материалы/цвет.hlsl";
+    ASSERT_TRUE(SerializeMaterialDefinition(material, json, error)) << "UTF-8 reference serialization";
+    ASSERT_TRUE(ParseMaterialDefinition(json, roundTrip, error)) << error;
+    EXPECT_EQ(roundTrip.shaderFile, material.shaderFile);
+}
+
+TEST(AssetTable, FailedLoadsNeverReuseStaleGenerations) {
     AssetTable<MaterialAsset> table;
     std::vector<AssetHandle<MaterialAsset>> stale;
     for (int i = 0; i < 5; ++i) {
         const auto handle = table.Acquire(AssetDesc{.name = "retry"});
-        for (auto old : stale) Check(table.Get(old) == nullptr, "stale generation was reused");
+        for (auto old : stale) EXPECT_EQ(table.Get(old), nullptr) << "stale generation was reused";
         stale.push_back(handle);
         table.Fail(handle, "test");
     }
@@ -117,7 +154,6 @@ struct Fixture {
         std::filesystem::create_directories(shaders);
         window = CreateWindowExW(0, L"STATIC", L"Material asset tests", WS_OVERLAPPEDWINDOW,
                                  0, 0, 64, 64, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-        Check(window != nullptr, "could not create hidden D3D test surface");
     }
     ~Fixture() {
         if (window) DestroyWindow(window);
@@ -128,16 +164,16 @@ struct Fixture {
     void Write(const std::string& name, const std::string& text) {
         std::ofstream output(root / name, std::ios::binary);
         output << text;
-        Check(static_cast<bool>(output), "could not write test fixture");
+        ASSERT_TRUE(static_cast<bool>(output)) << "could not write test fixture";
     }
     void MaterialFile(const std::string& name, MaterialDefinition definition) {
         std::string json, error;
-        Check(SerializeMaterialDefinition(definition, json, error), error);
+        ASSERT_TRUE(SerializeMaterialDefinition(definition, json, error)) << error;
         Write(name + ".material.json", json);
     }
     void InstanceFile(const std::string& name, MaterialInstanceDefinition definition) {
         std::string json, error;
-        Check(SerializeMaterialInstanceDefinition(definition, json, error), error);
+        ASSERT_TRUE(SerializeMaterialInstanceDefinition(definition, json, error)) << error;
         Write(name + ".material-instance.json", json);
     }
 };
@@ -158,17 +194,17 @@ void WaitFor(AssetSystem& assets, AssetHandle<T> handle, Events& events) {
         ++frame.frameIndex;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    Check(events.failed.empty(), events.failed.empty() ? "" : events.failed.back().error);
-    Check(assets.IsReady(handle), "asynchronous dependency graph never reached Ready");
+    ASSERT_TRUE(events.failed.empty()) << (events.failed.empty() ? "" : events.failed.back().error);
+    ASSERT_TRUE(assets.IsReady(handle)) << "asynchronous dependency graph never reached Ready";
 }
 
-int Integration() {
+void Integration() {
     Fixture fixture;
+    ASSERT_NE(fixture.window, nullptr) << "could not create hidden D3D test surface";
     Engine engine({.applicationName = "Material tests", .surface = {fixture.window, 64, 64}, .taskThreads = 2});
     auto* rendering = engine.AddSubsystem<RenderingSubsystem>();
     if (!engine.Initialize()) {
-        std::cerr << "D3D11 hardware/debug layer unavailable; integration test skipped\n";
-        return 77;
+        GTEST_SKIP() << "D3D11 hardware/debug layer unavailable";
     }
     auto& assets = engine.GetAssets();
     auto& resources = rendering->GetResourceManager();
@@ -192,111 +228,109 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     base.defaults.albedoTexture = "engine/primitives/white";
     base.defaults.specularColor = Vector3{0.2f, 0.3f, 0.4f};
     base.defaults.shininess = 48.0f;
-    fixture.MaterialFile("base", base);
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("base", base));
     const auto baseAsset = assets.LoadMaterial(fixture.prefix + "/base");
-    Check(static_cast<bool>(baseAsset), "synchronous material failed");
+    ASSERT_TRUE(static_cast<bool>(baseAsset)) << "synchronous material failed";
     const auto materialHandle = baseAsset->material;
     const auto* material = resources.TryGetMaterial(materialHandle);
-    Check(material && material->shaders.shadowPassVS && material->shaders.gBufferPassVS &&
-          material->shaders.gBufferPassPS && material->defaultParameters.albedoTexture, "declared shader set or texture missing");
-    Check(baseAsset->definition.shaderFile == shaderFile, "authored material definition not preserved");
+    ASSERT_TRUE(material && material->shaders.shadowPassVS && material->shaders.gBufferPassVS &&
+          material->shaders.gBufferPassPS && material->defaultParameters.albedoTexture) << "declared shader set or texture missing";
+    ASSERT_TRUE(baseAsset->definition.shaderFile == shaderFile) << "authored material definition not preserved";
     const auto canonical = assets.RequestMaterial(fixture.prefix + "/base.material.json");
-    Check(canonical == assets.RequestMaterial(fixture.prefix + "/base"), "extensionless material not deduplicated");
-    Check(assets.RequestMaterial(fixture.prefix + "/BASE.MATERIAL.JSON") == canonical, "case normalization");
-    Check(assets.GetState<MaterialAsset>(fixture.prefix + "/base") == AssetState::Ready &&
-          assets.Peek<MaterialAsset>(fixture.prefix + "/base")->material == materialHandle, "material lookup canonicalization");
+    ASSERT_TRUE(canonical == assets.RequestMaterial(fixture.prefix + "/base")) << "extensionless material not deduplicated";
+    ASSERT_TRUE(assets.RequestMaterial(fixture.prefix + "/BASE.MATERIAL.JSON") == canonical) << "case normalization";
+    ASSERT_TRUE(assets.GetState<MaterialAsset>(fixture.prefix + "/base") == AssetState::Ready &&
+          assets.Peek<MaterialAsset>(fixture.prefix + "/base")->material == materialHandle) << "material lookup canonicalization";
 
     MaterialInstanceDefinition gloss;
     gloss.material = fixture.prefix + "/base";
     gloss.parameters.shininess = 96.0f;
-    fixture.InstanceFile("gloss", gloss);
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("gloss", gloss));
     const auto glossAsset = assets.LoadMaterialInstance(fixture.prefix + "/gloss");
-    Check(static_cast<bool>(glossAsset), "synchronous instance failed");
+    ASSERT_TRUE(static_cast<bool>(glossAsset)) << "synchronous instance failed";
     const auto* instance = resources.TryGetMaterialInstance(glossAsset->instance);
-    Check(instance && instance->material == materialHandle && instance->parameters.parameters.shininess == 96 &&
+    ASSERT_TRUE(instance && instance->material == materialHandle && instance->parameters.parameters.shininess == 96 &&
           instance->parameters.parameters.specularColor == *base.defaults.specularColor &&
-          instance->parameters.albedoTexture == resources.TryGetMaterial(materialHandle)->defaultParameters.albedoTexture,
-          "sparse overrides did not inherit defaults");
-    Check(resources.TryGetMaterial(materialHandle)->defaultParameters.parameters.shininess == 48, "instance mutated base");
-    Check(!glossAsset->definition.parameters.albedoTexture, "authored overrides were flattened");
-    Check(assets.GetState<MaterialInstanceAsset>(fixture.prefix + "/gloss") == AssetState::Ready &&
-          assets.Peek<MaterialInstanceAsset>(fixture.prefix + "/gloss")->instance == glossAsset->instance,
-          "instance lookup canonicalization");
+          instance->parameters.albedoTexture == resources.TryGetMaterial(materialHandle)->defaultParameters.albedoTexture) << "sparse overrides did not inherit defaults";
+    ASSERT_TRUE(resources.TryGetMaterial(materialHandle)->defaultParameters.parameters.shininess == 48) << "instance mutated base";
+    ASSERT_TRUE(!glossAsset->definition.parameters.albedoTexture) << "authored overrides were flattened";
+    ASSERT_TRUE(assets.GetState<MaterialInstanceAsset>(fixture.prefix + "/gloss") == AssetState::Ready &&
+          assets.Peek<MaterialInstanceAsset>(fixture.prefix + "/gloss")->instance == glossAsset->instance) << "instance lookup canonicalization";
     gloss.parameters.albedoTexture = "";
-    fixture.InstanceFile("clear", gloss);
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("clear", gloss));
     const auto clear = assets.LoadMaterialInstance(fixture.prefix + "/clear");
-    Check(clear && !resources.TryGetMaterialInstance(clear->instance)->parameters.albedoTexture, "null did not clear texture");
-    Check(resources.TryGetMaterial(materialHandle)->instanceCount == 3, "instance count is not maintained");
-    Check(!resources.DestroyMaterial(materialHandle), "material with live instances was destroyed");
+    ASSERT_TRUE(clear && !resources.TryGetMaterialInstance(clear->instance)->parameters.albedoTexture) << "null did not clear texture";
+    ASSERT_TRUE(resources.TryGetMaterial(materialHandle)->instanceCount == 3) << "instance count is not maintained";
+    ASSERT_TRUE(!resources.DestroyMaterial(materialHandle)) << "material with live instances was destroyed";
 
     std::filesystem::copy_file(AssetPathResolver::GetRoot() / "engine/primitives/white/texture.png",
                                fixture.root / "override.png", std::filesystem::copy_options::overwrite_existing);
     gloss.parameters.albedoTexture = fixture.prefix + "/override.png";
     gloss.parameters.specularColor = Vector3{0.8f, 0.1f, 0.2f};
     gloss.parameters.shininess.reset();
-    fixture.InstanceFile("textured", gloss);
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("textured", gloss));
     const auto textured = assets.LoadMaterialInstance(fixture.prefix + "/textured");
-    Check(static_cast<bool>(textured), "texture override failed");
+    ASSERT_TRUE(static_cast<bool>(textured)) << "texture override failed";
     const auto* texturedInstance = resources.TryGetMaterialInstance(textured->instance);
-    Check(texturedInstance->parameters.albedoTexture &&
+    ASSERT_TRUE(texturedInstance->parameters.albedoTexture &&
           texturedInstance->parameters.albedoTexture != resources.TryGetMaterial(materialHandle)->defaultParameters.albedoTexture &&
           texturedInstance->parameters.parameters.specularColor == *gloss.parameters.specularColor &&
-          texturedInstance->parameters.parameters.shininess == 48, "texture/color override or removed scalar override failed");
+          texturedInstance->parameters.parameters.shininess == 48) << "texture/color override or removed scalar override failed";
 
     std::filesystem::copy_file(AssetPathResolver::GetRoot() / "engine/primitives/white/texture.png",
                                fixture.root / "async.png", std::filesystem::copy_options::overwrite_existing);
     base.hooks = MaterialHook::GBufferPS;
     base.defaults.albedoTexture = fixture.prefix + "/async.png";
-    fixture.MaterialFile("async", base);
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("async", base));
     gloss.material = fixture.prefix + "/async";
     gloss.parameters.albedoTexture.reset();
     gloss.parameters.shininess = 0.0f;
-    fixture.InstanceFile("async", gloss);
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("async", gloss));
     events.loaded.clear();
     events.failed.clear();
     const auto async = assets.RequestMaterialInstance(fixture.prefix + "/async");
-    Check(async && !assets.Peek(async), "Request published before CPU work and dependencies completed");
-    Check(async == assets.RequestMaterialInstance(fixture.prefix + "/async.material-instance.json"), "instance deduplication");
-    WaitFor(assets, async, events);
+    ASSERT_TRUE(async && !assets.Peek(async)) << "Request published before CPU work and dependencies completed";
+    ASSERT_TRUE(async == assets.RequestMaterialInstance(fixture.prefix + "/async.material-instance.json")) << "instance deduplication";
+    ASSERT_NO_FATAL_FAILURE(WaitFor(assets, async, events));
     const auto asyncAsset = assets.Peek(async);
     const auto* asyncInstance = resources.TryGetMaterialInstance(asyncAsset->instance);
     const auto* asyncMaterial = resources.TryGetMaterial(asyncInstance->material);
-    Check(asyncMaterial->shaders.gBufferPassPS && !asyncMaterial->shaders.gBufferPassVS &&
-          !asyncMaterial->shaders.shadowPassVS, "undeclared hooks were compiled");
-    Check(asyncInstance->parameters.parameters.shininess == 0, "zero override was lost");
+    ASSERT_TRUE(asyncMaterial->shaders.gBufferPassPS && !asyncMaterial->shaders.gBufferPassVS &&
+          !asyncMaterial->shaders.shadowPassVS) << "undeclared hooks were compiled";
+    ASSERT_TRUE(asyncInstance->parameters.parameters.shininess == 0) << "zero override was lost";
     size_t textureEvent = events.loaded.size(), materialEvent = events.loaded.size(), instanceEvent = events.loaded.size();
     for (size_t i = 0; i < events.loaded.size(); ++i) {
         if (events.loaded[i].kind == AssetKind::Texture) textureEvent = i;
         if (events.loaded[i].kind == AssetKind::Material) materialEvent = i;
         if (events.loaded[i].kind == AssetKind::MaterialInstance) instanceEvent = i;
     }
-    Check(textureEvent < materialEvent && materialEvent < instanceEvent, "dependency publication order is wrong");
+    ASSERT_TRUE(textureEvent < materialEvent && materialEvent < instanceEvent) << "dependency publication order is wrong";
 
     std::filesystem::copy_file(fixture.shaders / "hooks.hlsl", fixture.shaders / AssetPathResolver::Utf8Path("цвет.hlsl"),
                                std::filesystem::copy_options::overwrite_existing);
     auto unicode = base;
     unicode.shaderFile = fixture.prefix + "/цвет.hlsl";
-    fixture.MaterialFile("unicode", unicode);
-    Check(static_cast<bool>(assets.LoadMaterial(fixture.prefix + "/unicode")), "UTF-8 shader reference failed");
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("unicode", unicode));
+    ASSERT_TRUE(static_cast<bool>(assets.LoadMaterial(fixture.prefix + "/unicode"))) << "UTF-8 shader reference failed";
     const auto legacyUnicode = resources.CreateMaterial({
         .shaderFile = AssetPathResolver::Utf8Path(unicode.shaderFile).wstring(),
         .hooks = MaterialHook::GBufferPS});
-    Check(static_cast<bool>(legacyUnicode), "wstring material API lost Unicode compatibility");
-    Check(resources.DestroyMaterial(legacyUnicode), "legacy material cleanup failed");
+    ASSERT_TRUE(static_cast<bool>(legacyUnicode)) << "wstring material API lost Unicode compatibility";
+    ASSERT_TRUE(resources.DestroyMaterial(legacyUnicode)) << "legacy material cleanup failed";
 
-    fixture.Write("bad.material.json", R"({"version":1,"hooks":["missing"]})");
-    Check(!assets.LoadMaterial(fixture.prefix + "/bad"), "invalid JSON loaded");
-    fixture.MaterialFile("bad", MaterialDefinition{});
-    Check(static_cast<bool>(assets.LoadMaterial(fixture.prefix + "/bad")), "failed JSON load could not be retried");
+    ASSERT_NO_FATAL_FAILURE(fixture.Write("bad.material.json", R"({"version":1,"hooks":["missing"]})"));
+    ASSERT_TRUE(!assets.LoadMaterial(fixture.prefix + "/bad")) << "invalid JSON loaded";
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("bad", MaterialDefinition{}));
+    ASSERT_TRUE(static_cast<bool>(assets.LoadMaterial(fixture.prefix + "/bad"))) << "failed JSON load could not be retried";
     base.defaults.albedoTexture = fixture.prefix + "/missing.png";
-    fixture.MaterialFile("missing-texture", base);
-    Check(!assets.LoadMaterial(fixture.prefix + "/missing-texture"), "missing texture did not fail the parent");
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("missing-texture", base));
+    ASSERT_TRUE(!assets.LoadMaterial(fixture.prefix + "/missing-texture")) << "missing texture did not fail the parent";
     base.defaults.albedoTexture.reset();
     base.shaderFile = fixture.prefix + "/missing.hlsl";
-    fixture.MaterialFile("missing-shader", base);
-    Check(!assets.LoadMaterial(fixture.prefix + "/missing-shader"), "missing shader did not fail the material");
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("missing-shader", base));
+    ASSERT_TRUE(!assets.LoadMaterial(fixture.prefix + "/missing-shader")) << "missing shader did not fail the material";
     gloss.material = fixture.prefix + "/missing-material";
-    fixture.InstanceFile("missing-parent", gloss);
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("missing-parent", gloss));
     events.failed.clear();
     const auto missing = assets.RequestMaterialInstance(fixture.prefix + "/missing-parent");
     FrameContext frame;
@@ -308,34 +342,32 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
         for (const auto& e : events.failed) parentFailed |= e.kind == AssetKind::MaterialInstance;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    Check(parentFailed && !assets.IsReady(missing) && !assets.Peek(missing), "failed dependency did not fail async instance");
-    fixture.InstanceFile("missing-parent", MaterialInstanceDefinition{.material = fixture.prefix + "/base"});
+    ASSERT_TRUE(parentFailed && !assets.IsReady(missing) && !assets.Peek(missing)) << "failed dependency did not fail async instance";
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("missing-parent", MaterialInstanceDefinition{.material = fixture.prefix + "/base"}));
     const auto retried = assets.RequestMaterialInstance(fixture.prefix + "/missing-parent");
-    Check(retried != missing, "retry reused a stale handle");
+    ASSERT_TRUE(retried != missing) << "retry reused a stale handle";
     events.failed.clear();
-    WaitFor(assets, retried, events);
-    Check(!assets.Peek(missing), "stale failed handle became readable");
+    ASSERT_NO_FATAL_FAILURE(WaitFor(assets, retried, events));
+    ASSERT_TRUE(!assets.Peek(missing)) << "stale failed handle became readable";
 
-    fixture.MaterialFile("shutdown", MaterialDefinition{});
-    fixture.InstanceFile("shutdown", MaterialInstanceDefinition{.material = fixture.prefix + "/shutdown"});
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("shutdown", MaterialDefinition{}));
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("shutdown", MaterialInstanceDefinition{.material = fixture.prefix + "/shutdown"}));
     assets.RequestMaterialInstance(fixture.prefix + "/shutdown");
     engine.Shutdown();
-    return 0;
+}
+
+TEST(MaterialAssetsIntegration, LoadsDependenciesAndSurvivesEngineRestart) {
+    // Keep both lifetimes in one process to exercise DirectXTK's cached WIC factory.
+    for (int restart = 0; restart < 2; ++restart) {
+        SCOPED_TRACE(restart);
+        ASSERT_NO_FATAL_FAILURE(Integration());
+        if (::testing::Test::IsSkipped()) return;
+    }
 }
 } // namespace
 
 int main(int argc, char** argv) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
-    try {
-        if (argc == 2 && std::string_view(argv[1]) == "--integration") {
-            const auto result = Integration();
-            return result == 0 ? Integration() : result; // WIC must also survive engine/scheduler restart
-        }
-        Definitions();
-        std::cout << "Material definition and generational-handle tests passed\n";
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "TEST FAILURE: " << e.what() << '\n';
-        return 1;
-    }
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }

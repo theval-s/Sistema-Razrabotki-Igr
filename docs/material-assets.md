@@ -213,12 +213,15 @@ Unknown fields, duplicate keys, unsupported versions and malformed values are er
 Enable SRI_BUILD_TESTS=ON, build material_assets_tests, then:
 
 ~~~text
-ctest --test-dir build/windows-msvc -C Debug --output-on-failure
+build/windows-msvc/bin/Debug/material_assets_tests.exe
+build/windows-msvc/bin/Debug/material_assets_tests.exe --gtest_filter=MaterialDefinitions.*
 ~~~
 
-Material_definitions tests the codecs, null/absence semantics, malformed inputs,
-UTF-8 and repeated failed-handle reuse. Material_assets_integration exercises a
+GoogleTest is installed through vcpkg. Run the executable directly, optionally
+using --gtest_filter to select tests.
+MaterialDefinitions tests the codecs, null/absence semantics, malformed inputs
+and UTF-8; AssetTable tests repeated failed-handle reuse. MaterialAssetsIntegration exercises a
 hidden D3D11 surface, all/partial shader hooks, synchronous and asynchronous dependency
 graphs, inheritance, deduplication, failures/retry and shutdown with pending work.
 It requires the same D3D11 hardware/debug layer as the current renderer and reports
-CTest skip code 77 if that initialization is unavailable.
+GTEST_SKIP() if that initialization is unavailable.
