@@ -63,12 +63,12 @@
   "buildPresets": [
     {
       "name": "windows-debug",
-      "configurePreset": "windows-msvc",
+      "configurePreset": "windows-vs2022",
       "configuration": "Debug"
     },
     {
       "name": "windows-release",
-      "configurePreset": "windows-msvc",
+      "configurePreset": "windows-vs2022",
       "configuration": "RelWithDebInfo"
     },
     {

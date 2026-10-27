@@ -104,9 +104,11 @@ albedo slot and PBR fields; it does not introduce arbitrary uniforms/texture slo
 
 ## Names and paths
 
-JSON is UTF-8 (a BOM is accepted). All references are **logical names relative to
-the executable's asset root**, independent of the current directory and of the
-containing JSON file. Absolute paths, traversal (.. / .), empty path segments
+JSON is UTF-8 (a BOM is accepted). All references are logical asset names,
+independent of the current directory and of the containing JSON file. Names under
+game/ use AssetPathResolver::GetGameRoot(), which defaults to <exe>/game and may
+be overridden by the host for a project. Names under engine/ use <exe>/engine.
+Absolute paths, traversal (.. / .), empty path segments
 and invalid filename characters are rejected.
 
 * A material name without an extension gains .material.json.
@@ -115,7 +117,7 @@ and invalid filename characters are rejected.
 * Extensionless and explicitly suffixed requests share the same asset record.
   Names remain ASCII case-insensitive and normalize backslashes to forward slashes.
 * Shader names follow the existing shader resolver:
-  game/Stone.hlsl -> &lt;exe&gt;/game/shaders/Stone.hlsl;
+  game/Stone.hlsl -> &lt;game-root&gt;/shaders/Stone.hlsl;
   engine/Foo.hlsl -> &lt;exe&gt;/engine/shaders/Foo.hlsl.
 * Texture references follow LoadTexture: an image filename is used directly;
   a folder name resolves to its texture.png.
@@ -222,7 +224,8 @@ build/windows-msvc/bin/Debug/material_assets_tests.exe --gtest_filter=MaterialDe
 GoogleTest is installed through vcpkg. Run the executable directly, optionally
 using --gtest_filter to select tests.
 MaterialDefinitions tests the codecs, null/absence semantics, malformed inputs
-and UTF-8; AssetTable tests repeated failed-handle reuse. MaterialAssetsIntegration exercises a
+and UTF-8; AssetTable tests repeated failed-handle reuse. AssetPaths checks project
+game roots and Unicode references. MaterialAssetsIntegration exercises a
 hidden D3D11 surface, all/partial shader hooks, synchronous and asynchronous dependency
 graphs, inheritance, deduplication, failures/retry and shutdown with pending work.
 It requires the same D3D11 hardware/debug layer as the current renderer and reports

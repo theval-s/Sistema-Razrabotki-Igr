@@ -32,7 +32,7 @@ public:
         const std::string_view includeName{name};
         std::filesystem::path path;
         if (includeName.starts_with("engine/") || includeName.starts_with("game/")) {
-            path = AssetPathResolver::GetRoot() / AssetPathResolver::DefaultPath(includeName, AssetKind::Shader);
+            path = AssetPathResolver::ToAbsolute(AssetPathResolver::DefaultPath(includeName, AssetKind::Shader));
         } else if (type == D3D_INCLUDE_LOCAL) {
             const auto it = files_.find(parent);
             const auto& includingFile = it == files_.end() ? sourcePath_ : it->second->path;
@@ -130,7 +130,7 @@ std::optional<CompiledShader> ShaderContext::CompileSource(const std::string_vie
                                                             const ShaderCompileOptions& options) {
     CompiledShader result{};
     result.type = shaderType;
-    const auto sourcePath = virtualPath.is_absolute() ? virtualPath : AssetPathResolver::GetRoot() / virtualPath;
+    const auto sourcePath = AssetPathResolver::ToAbsolute(virtualPath);
     const auto displayName = sourcePath.string();
     ShaderIncludes includes{sourcePath};
     std::vector<D3D_SHADER_MACRO> macros;

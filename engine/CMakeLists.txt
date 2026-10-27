@@ -221,6 +221,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/core/FrameContext.hpp
     include/engine/core/Subsystem.hpp
     include/engine/core/Surface.hpp
+    include/engine/project/Project.hpp
     include/engine/scene/Components.hpp
     include/engine/scene/Scene.hpp
     include/engine/scene/Transform.hpp
@@ -230,6 +231,7 @@ set(ENGINE_CORE_SOURCES
     src/rendering/RenderingSubsystem.cpp
     src/input/InputSubsystem.cpp
     src/rendering/SceneRenderSubsystem.cpp
+    src/assets/AssetPathResolver.cpp
     src/assets/AssetSystem.cpp
     src/assets/AssimpMeshImporter.cpp
     src/assets/ShaderImporter.cpp
@@ -237,6 +239,7 @@ set(ENGINE_CORE_SOURCES
     src/assets/MaterialDefinition.cpp
     src/assets/MaterialImporter.cpp
     src/core/Subsystem.cpp
+    src/project/Project.cpp
     src/scene/Scene.cpp
 )
 

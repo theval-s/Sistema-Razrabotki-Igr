@@ -22,16 +22,18 @@ class CDockWidget;
 namespace engine {
 class Engine;
 class Scene;
+struct Project;
 }  // namespace engine
 
 namespace editor {
 
-/// What the editor hands to its modules: the engine, the scene being edited, the
+/// What the editor hands to its modules: the engine, the project, the scene being edited, the
 /// selection and the places a module may add UI to. Owned by MainWindow; outlives every module and is
 /// destroyed before the engine.
 class EDITOR_CORE_API EditorContext {
 public:
-    EditorContext(engine::Engine& engine, QMainWindow& window, ads::CDockManager& dock_manager);
+    EditorContext(engine::Engine& engine, const engine::Project& project, QMainWindow& window,
+                  ads::CDockManager& dock_manager);
     /// Deletes the panels added through addPanel().
     ~EditorContext();
 
@@ -39,6 +41,8 @@ public:
     EditorContext& operator=(const EditorContext&) = delete;
 
     [[nodiscard]] engine::Engine& engine() noexcept;
+    /// The open project; switching projects restarts the editor because we're unreal
+    [[nodiscard]] const engine::Project& project() const noexcept;
     [[nodiscard]] engine::Scene& scene() noexcept;
     /// What the user has selected in the scene. Panels follow and change it through here.
     [[nodiscard]] Selection& selection() noexcept;
@@ -64,6 +68,7 @@ private:
     };
 
     engine::Engine& engine_;
+    const engine::Project& project_;
     QMainWindow& window_;
     ads::CDockManager& dock_manager_;
     QToolBar* tool_bar_ = nullptr;

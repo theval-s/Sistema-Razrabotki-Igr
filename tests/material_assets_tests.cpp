@@ -143,6 +143,23 @@ TEST(AssetTable, FailedLoadsNeverReuseStaleGenerations) {
     }
 }
 
+TEST(AssetPaths, MaterialsAndShadersRespectProjectGameRoot) {
+    struct RestoreGameRoot {
+        std::filesystem::path previous = AssetPathResolver::GetGameRoot();
+        ~RestoreGameRoot() { AssetPathResolver::SetGameRoot(previous); }
+    } restore;
+    const auto content = AssetPathResolver::GetRoot() / "project-content";
+    AssetPathResolver::SetGameRoot(content);
+    AssetDesc desc;
+    desc.path = AssetPathResolver::DefaultPath("game/materials/цвет", AssetKind::Material);
+    EXPECT_EQ(AssetPathResolver::ResolveMaterial(desc), content / AssetPathResolver::Utf8Path("materials/цвет.material.json"));
+    EXPECT_EQ(AssetPathResolver::ResolveMaterial(desc, true), content / AssetPathResolver::Utf8Path("materials/цвет.material-instance.json"));
+    desc.path = AssetPathResolver::DefaultPath("game/цвет", AssetKind::Shader);
+    EXPECT_EQ(AssetPathResolver::ResolveShader(desc), content / AssetPathResolver::Utf8Path("shaders/цвет.hlsl"));
+    desc.path = AssetPathResolver::DefaultPath("engine/default", AssetKind::Shader);
+    EXPECT_EQ(AssetPathResolver::ResolveShader(desc), AssetPathResolver::GetRoot() / "engine/shaders/default.hlsl");
+}
+
 struct Fixture {
     std::string prefix = "game/material-tests-" + std::to_string(GetCurrentProcessId());
     std::filesystem::path root = AssetPathResolver::GetRoot() / prefix;

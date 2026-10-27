@@ -19,6 +19,9 @@ add_custom_target(ExampleGameAssets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${PROJECT_SOURCE_DIR}/engine/shaders"
         "$<TARGET_FILE_DIR:ExampleGame>/engine/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${PROJECT_SOURCE_DIR}/engine/primitives"
+        "$<TARGET_FILE_DIR:ExampleGame>/engine/primitives"
     ${GAME_SHADER_COPY_COMMAND}
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/materials"
