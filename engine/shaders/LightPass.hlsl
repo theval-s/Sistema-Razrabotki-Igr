@@ -54,23 +54,23 @@ PS_IN VSMain(VS_IN input) {
 #endif
 #define PCF_TEXEL_SIZE (1.0f / SHADOW_MAP_SIZE)
 
-float SampleShadowHybridPCF(float2 pixelCoords, int layer, float z) {
+float SampleShadowHybridPCF(float2 pixelCoords, int layer, float z, float2 depthPerTexel) {
     float sum = 0.0;
     int samples = 0;
 
     for (int y = -PCF_RADIUS; y <= PCF_RADIUS; y++) {
         for (int x = -PCF_RADIUS; x <= PCF_RADIUS; x++) {
-            float2 offset = float2(x, y) * (PCF_TEXEL_SIZE) * 2.0;
+            float2 offset = float2(x, y) * PCF_TEXEL_SIZE;
             float shadow = shadowMap.SampleCmpLevelZero(
                 ShadowComparisonSampler,
                 float3(pixelCoords + offset, layer),
-                z
+                z + dot(float2(x, y), depthPerTexel)
             ).r;
             // float translucency =  1 - translucencyMap.SampleLevel(translucencySampler,
             //                                                  float3(pixelCoords + offset / 2, layer),
             //                                                  0.f).r;
             // sum += min(shadow, translucency);
-            
+
             sum += shadow;
             samples++;
         }
@@ -79,20 +79,38 @@ float SampleShadowHybridPCF(float2 pixelCoords, int layer, float z) {
     return sum / samples;
 }
 
-float SampleCascadeShadow(float3 worldPos, int cascadeIndex) {
-    float4 lightSpacePos = mul(float4(worldPos, 1.0), ShadowCascades.viewProjections[cascadeIndex]);
+float SampleCascadeShadow(float3 worldPos, float3 normal, float3 lightDir, float NdotL, int cascadeIndex) {
+    float3 shadowWorldPos = worldPos;
+    float4x4 lightMatrix = ShadowCascades.viewProjections[cascadeIndex];
+    float4 lightSpacePos = mul(float4(shadowWorldPos, 1.0), lightMatrix);
     float3 ndcPos = lightSpacePos.xyz / lightSpacePos.w;
 
     // X[-1, 1] -> [0, 1], Y[-1, 1] -> [1, 0]
     float2 texCoords = float2(ndcPos.x * 0.5 + 0.5, -ndcPos.y * 0.5 + 0.5);
-    return SampleShadowHybridPCF(texCoords, cascadeIndex, ndcPos.z);
+
+
+    float2 depthPerTexel = 0.0f;
+    //Normal-derived approximation of receiver-plane depth correction
+    if (NdotL > 0.0f) {
+        float3 xAxis = float3(lightMatrix[0][0], lightMatrix[1][0], lightMatrix[2][0]);
+        float3 yAxis = float3(lightMatrix[0][1], lightMatrix[1][1], lightMatrix[2][1]);
+        float3 zAxis = float3(lightMatrix[0][2], lightMatrix[1][2], lightMatrix[2][2]);
+        float3 dx = xAxis * (2.0f * PCF_TEXEL_SIZE / dot(xAxis, xAxis));
+        float3 dy = -yAxis * (2.0f * PCF_TEXEL_SIZE / dot(yAxis, yAxis));
+        float invNdotL = rcp(max(NdotL, 0.1f));
+        depthPerTexel.x = dot(dx - lightDir * (dot(normal, dx) * invNdotL), zAxis);
+        depthPerTexel.y = dot(dy - lightDir * (dot(normal, dy) * invNdotL), zAxis);
+    }
+    return SampleShadowHybridPCF(texCoords, cascadeIndex, ndcPos.z, depthPerTexel);
 }
 
-float CalculateShadow(float3 worldPos) {
+float CalculateShadow(float3 worldPos, float3 normal, float3 lightDir) {
+    float NdotL = saturate(dot(normal, lightDir));
     float viewSpaceZ = mul(float4(worldPos, 1.0), View.viewMatrix).z;
 
     int cascadeIndex = 3;
     float depth = abs(viewSpaceZ);
+
     for (int i = 0; i < 4; i++) {
         if (depth < ShadowCascades.distances[i]) {
             cascadeIndex = i;
@@ -100,14 +118,19 @@ float CalculateShadow(float3 worldPos) {
         }
     }
 
-    float shadow = SampleCascadeShadow(worldPos, cascadeIndex);
-    //Lerp adjacent cascades to smooth cascade change effect
+    float shadow = SampleCascadeShadow(worldPos, normal, lightDir, NdotL, cascadeIndex);
+
     if (cascadeIndex < 3 && depth >= ShadowCascades.transitionStarts[cascadeIndex]) {
         float start = ShadowCascades.transitionStarts[cascadeIndex];
         float end = ShadowCascades.distances[cascadeIndex];
         float t = saturate((depth - start) / (end - start));
-        shadow = lerp(shadow, SampleCascadeShadow(worldPos, cascadeIndex + 1), t);
+        shadow = lerp(
+            shadow,
+            SampleCascadeShadow(worldPos, normal, lightDir, NdotL, cascadeIndex + 1),
+            t
+        );
     }
+
     return shadow;
 }
 
@@ -131,14 +154,16 @@ float4 PSMain(PS_IN input) : SV_Target {
     float2 uv = input.pos.xy / View.viewportSize;
     float3 diffuse = diffuseMap.Sample(LinearWrapSampler, uv).rgb;
 
-    float4 normalTex = normalMap.Sample(LinearWrapSampler, uv);
+    float4 normalTex = normalMap.Load(int3(int2(input.pos.xy), 0));
     float3 normal = Normalize0(normalTex.xyz * 2.0 - 1.0);
 
     float4 materialTex = materialMap.Sample(LinearWrapSampler, uv);
     float3 m_specularColor = materialTex.rgb;
     float shininess = materialTex.a;
 
-    float depth = depthMap.Sample(LinearWrapSampler, uv).r;
+    // Reconstruct from the depth of this exact G-buffer pixel; filtering depth
+    // across silhouette edges creates positions that lie on neither surface.
+    float depth = depthMap.Load(int3(int2(input.pos.xy), 0)).r;
     float3 worldPos = GetWorldPosFromDepth(uv, depth, View.invViewProj);
 
     if (Light.lightType == 0) {
@@ -149,10 +174,12 @@ float4 PSMain(PS_IN input) : SV_Target {
         float3 r = Normalize0(reflect(-l, n));
 
         float3 materialDiffuse = diffuse;
-        float3 diffuseColor = materialDiffuse * Light.color * max(dot(l, n), 0);
-        float3 specularColor = m_specularColor * Light.color * SpecularTerm(v, r, shininess);
+        float NdotL = saturate(dot(n, l));
+        float3 diffuseColor = materialDiffuse * Light.color * NdotL;
+
+        float3 specularColor = m_specularColor * Light.color * SpecularTerm(v, r, shininess) * (NdotL > 0.0f ? 1.0f : 0.0f);
         float3 ambientColor = diffuse * 0.1;
-        float shadow = CalculateShadow(worldPos);
+        float shadow = CalculateShadow(worldPos, n, l);
         float3 finalColor = (diffuseColor + specularColor) * shadow + ambientColor;
         return float4(finalColor * Light.intensity, 1);
     }

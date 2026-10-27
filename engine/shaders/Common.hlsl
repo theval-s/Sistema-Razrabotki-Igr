@@ -45,6 +45,7 @@ struct ShadowCascadesData {
     float4x4 viewProjections[4];
     float4 distances;
     float4 transitionStarts;
+    float4 worldTexelSizes;
 };
 
 cbuffer EngineCascades : register(b4) {
