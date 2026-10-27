@@ -1,4 +1,5 @@
 #include <engine/assets/MaterialDefinition.hpp>
+#include "MaterialSchema.hpp"
 
 #include <array>
 #include <set>
@@ -63,34 +64,7 @@ namespace {
 const nlohmann::json_schema::json_validator& Validator() {
     static const auto validator = [] {
         nlohmann::json_schema::json_validator result;
-        result.set_root_schema(Json::parse(R"schema({
-          "definitions": {
-            "reference": {"type":"string", "pattern":"^(?!(?:.*[/\\\\])?\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\x00-\\x1f:*?\"<>|]+(?:[/\\\\][^/\\\\\\x00-\\x1f:*?\"<>|]+)*$"},
-            "number": {"type":"number", "minimum":0, "maximum":3.4028234663852886e38},
-            "parameters": {
-              "type":"object", "additionalProperties":false,
-              "properties": {
-                "albedoTexture":{"anyOf":[{"$ref":"#/definitions/reference"},{"type":"null"}]},
-                "specularColor":{"type":"array","minItems":3,"maxItems":3,"items":{"$ref":"#/definitions/number"}},
-                "shininess":{"$ref":"#/definitions/number"}
-              }
-            }
-          },
-          "oneOf": [
-            {"type":"object", "required":["version","hooks"], "additionalProperties":false,
-             "properties": {
-               "version":{"const":1}, "shaderFile":{"$ref":"#/definitions/reference"},
-               "hooks":{"type":"array","uniqueItems":true,"items":{"enum":["GBufferVS","GBufferPS","ShadowVS"]}},
-               "defaults":{"$ref":"#/definitions/parameters"}
-             },
-             "anyOf":[{"properties":{"hooks":{"maxItems":0}}},{"required":["shaderFile"]}]},
-            {"type":"object", "required":["version","material"], "additionalProperties":false,
-             "properties": {
-               "version":{"const":1}, "material":{"$ref":"#/definitions/reference"},
-               "parameters":{"$ref":"#/definitions/parameters"}
-             }}
-          ]
-        })schema"));
+        result.set_root_schema(Json::parse(detail::MaterialSchema));
         return result;
     }();
     return validator;

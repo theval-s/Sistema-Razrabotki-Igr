@@ -181,6 +181,8 @@ later default changes.
 Internally, nlohmann/json handles parsing and serialization, and
 json-schema-validator checks the versioned document schema (fields, references,
 hooks and parameter ranges). Both dependencies are managed through vcpkg.
+The schema lives in engine/schemas/material.schema.json; CMake embeds it in the
+engine at build time, so no schema file is needed beside the executable.
 
 The public engine/assets/MaterialDefinition.hpp has no JSON-library dependency:
 

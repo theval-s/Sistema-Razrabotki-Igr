@@ -196,6 +196,12 @@ find_package(assimp CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(nlohmann_json_schema_validator CONFIG REQUIRED)
 
+# Embed the schema so material parsing does not depend on runtime file locations.
+set(MATERIAL_SCHEMA_FILE "${CMAKE_CURRENT_SOURCE_DIR}/schemas/material.schema.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MATERIAL_SCHEMA_FILE}")
+file(READ "${MATERIAL_SCHEMA_FILE}" MATERIAL_SCHEMA_JSON)
+configure_file(cmake/MaterialSchema.hpp.in generated/MaterialSchema.hpp @ONLY)
+
 set(ENGINE_CORE_HEADERS
     include/engine/input/InputSubsystem.hpp
     include/engine/input/InputTypes.hpp
@@ -237,6 +243,7 @@ set(ENGINE_CORE_SOURCES
 foreach(engine_target IN ITEMS engine engine_static)
     if(TARGET ${engine_target})
         target_sources(${engine_target} PRIVATE ${ENGINE_CORE_SOURCES} ${ENGINE_CORE_HEADERS})
+        target_include_directories(${engine_target} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
         # All of these appear in public headers (SimpleMath in Transform, EnTT in
         # Scene/Engine, enkiTS via Engine::GetTaskScheduler()), so consumers need them too.
         target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
