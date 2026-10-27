@@ -193,6 +193,7 @@ install(EXPORT EngineTargets
 find_package(EnTT CONFIG REQUIRED)
 find_package(enkiTS CONFIG REQUIRED)
 find_package(assimp CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 set(ENGINE_CORE_HEADERS
     include/engine/input/InputSubsystem.hpp
@@ -212,6 +213,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/core/FrameContext.hpp
     include/engine/core/Subsystem.hpp
     include/engine/core/Surface.hpp
+    include/engine/project/Project.hpp
     include/engine/scene/Components.hpp
     include/engine/scene/Scene.hpp
     include/engine/scene/Transform.hpp
@@ -221,11 +223,13 @@ set(ENGINE_CORE_SOURCES
     src/rendering/RenderingSubsystem.cpp
     src/input/InputSubsystem.cpp
     src/rendering/SceneRenderSubsystem.cpp
+    src/assets/AssetPathResolver.cpp
     src/assets/AssetSystem.cpp
     src/assets/AssimpMeshImporter.cpp
     src/assets/ShaderImporter.cpp
     src/assets/TextureImporter.cpp
     src/core/Subsystem.cpp
+    src/project/Project.cpp
     src/scene/Scene.cpp
 )
 
@@ -237,7 +241,7 @@ foreach(engine_target IN ITEMS engine engine_static)
         target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
         # Assimp is PRIVATE on purpose: AssimpMeshImporter.cpp is its only user and no
         # public header mentions it. Static consumers still get it via the link-only interface.
-        target_link_libraries(${engine_target} PRIVATE assimp::assimp)
+        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json)
     endif()
 endforeach()
 

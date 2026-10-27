@@ -1,23 +1,11 @@
 #pragma once
 
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-
-#include <algorithm>
-#include <array>
 #include <filesystem>
 #include <string>
 #include <string_view>
 
 #include <engine/assets/AssetCommon.hpp>
-
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#endif
+#include <engine/engine_export.hpp>
 
 namespace engine {
 
@@ -25,115 +13,44 @@ namespace engine {
 ///
 /// The root is the directory of the executable, never the current working directory:
 /// double-clicking an exe or launching it from another tool would otherwise change which
-/// assets are found.
-class AssetPathResolver {
+/// assets are found. Names under game/ resolve against the game root instead, which a
+/// host may point at a project's content directory.
+///
+/// Out of line, so Engine.dll and its host share one game root.
+class ENGINE_API AssetPathResolver {
 public:
     /// Mesh assets address a folder that holds model.<ext> (and optionally texture.png);
     /// a name ending in a model extension addresses that file directly. Assimp chooses the
     /// reader from the extension, so the file format itself is not fixed to .obj.
-    [[nodiscard]] static std::filesystem::path ResolveMesh(const AssetDesc& desc) {
-        std::filesystem::path path = MakeAbsolute(desc.path);
-        if (IsModelFile(path)) {
-            return path;
-        }
-        for (const wchar_t* extension : ModelExtensions) {
-            std::filesystem::path candidate = path / (std::wstring(L"model") + extension);
-            if (std::filesystem::exists(candidate)) {
-                return candidate;
-            }
-        }
-        return path / L"model.obj";  // nothing found: name the conventional file in the error
-    }
+    [[nodiscard]] static std::filesystem::path ResolveMesh(const AssetDesc& desc);
 
     /// A name ending in a known image extension addresses that file; anything else is a
     /// folder holding texture.png, which is what the legacy model loader used.
-    [[nodiscard]] static std::filesystem::path ResolveTexture(const AssetDesc& desc) {
-        std::filesystem::path path = MakeAbsolute(desc.path);
-        if (IsImageFile(path)) {
-            return path;
-        }
-        return path / L"texture.png";
-    }
+    [[nodiscard]] static std::filesystem::path ResolveTexture(const AssetDesc& desc);
 
     /// Names are game/..., engine/... or the legacy shaders/... (engine).
     /// The executable directory is the common root for files and generated source locations.
-    [[nodiscard]] static std::filesystem::path ResolveShader(const AssetDesc& desc) {
-        std::filesystem::path path = MakeAbsolute(desc.path);
-        if (path.extension().empty()) {
-            path += L".hlsl";
-        }
-        return path;
-    }
+    [[nodiscard]] static std::filesystem::path ResolveShader(const AssetDesc& desc);
 
     /// Default on-disk location for a kind when the caller gave only a logical name.
-    [[nodiscard]] static std::filesystem::path DefaultPath(std::string_view name, AssetKind kind) {
-        if (kind == AssetKind::Shader) {
-            if (name.starts_with("engine/")) {
-                return std::filesystem::path("engine") / "shaders" / std::filesystem::path(name.substr(7));
-            }
-            if (name.starts_with("game/")) {
-                return std::filesystem::path("game") / "shaders" / std::filesystem::path(name.substr(5));
-            }
-            if (name.starts_with("shaders/")) {
-                return std::filesystem::path("engine") / "shaders" / std::filesystem::path(name.substr(8));
-            }
-            return std::filesystem::path("game") / "shaders" / std::filesystem::path(name);
-        }
-        return std::filesystem::path(name);
-    }
+    [[nodiscard]] static std::filesystem::path DefaultPath(std::string_view name, AssetKind kind);
 
-    [[nodiscard]] static const std::filesystem::path& GetRoot() {
-        return Root();
-    }
+    [[nodiscard]] static const std::filesystem::path& GetRoot();
 
-private:
-    [[nodiscard]] static const std::filesystem::path& Root() {
-        static const std::filesystem::path root = ExecutableDirectory();
-        return root;
-    }
+    /// Where game/... names resolve; empty restores the default, <root>/game.
+    /// Not synchronized: call before the first asset is requested.
+    static void SetGameRoot(std::filesystem::path directory);
+    [[nodiscard]] static std::filesystem::path GetGameRoot();
 
-    [[nodiscard]] static std::filesystem::path ExecutableDirectory() {
-#if defined(_WIN32)
-        wchar_t buffer[MAX_PATH];
-        const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-        if (length > 0 && length < MAX_PATH) {
-            return std::filesystem::path(buffer).parent_path();
-        }
-#endif
-        return std::filesystem::current_path();
-    }
+    /// A relative path starting with game/ resolves against the game root, any other one
+    /// against the executable directory. Absolute paths are returned as they are.
+    [[nodiscard]] static std::filesystem::path ToAbsolute(const std::filesystem::path& path);
 
-    [[nodiscard]] static std::filesystem::path MakeAbsolute(const std::filesystem::path& path) {
-        if (path.is_absolute()) {
-            return path;
-        }
-        return Root() / path;
-    }
+    /// Normalized game/... or engine/... name of a file, empty when it is in neither root.
+    [[nodiscard]] static std::string ToName(const std::filesystem::path& absolute);
 
-    [[nodiscard]] static bool HasExtension(const std::filesystem::path& path, const wchar_t* extension) {
-        const std::filesystem::path ext = path.extension();
-        if (ext.empty()) {
-            return false;
-        }
-        return _wcsicmp(ext.c_str(), extension) == 0;
-    }
-
-    [[nodiscard]] static bool IsImageFile(const std::filesystem::path& path) {
-        return HasExtension(path, L".png") || HasExtension(path, L".jpg") ||
-               HasExtension(path, L".jpeg") || HasExtension(path, L".tif") ||
-               HasExtension(path, L".tiff") || HasExtension(path, L".dds") ||
-               HasExtension(path, L".bmp");
-    }
-
-    /// Model formats worth putting in a folder: tried in this order when a mesh name is a
-    /// directory. Assimp reads far more, these are the ones a DCC tool exports.
-    static constexpr std::array<const wchar_t*, 7> ModelExtensions{
-        L".fbx", L".gltf", L".glb", L".obj", L".dae", L".blend", L".ply"};
-
-    [[nodiscard]] static bool IsModelFile(const std::filesystem::path& path) {
-        return std::any_of(ModelExtensions.begin(), ModelExtensions.end(),
-                           [&path](const wchar_t* extension) { return HasExtension(path, extension); });
-    }
+    [[nodiscard]] static bool IsImageFile(const std::filesystem::path& path);
+    [[nodiscard]] static bool IsModelFile(const std::filesystem::path& path);
 };
 
 }  // namespace engine

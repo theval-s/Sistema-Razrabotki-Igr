@@ -6,12 +6,15 @@
 #include <QCloseEvent>
 #include <QLabel>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QSettings>
 #include <QStatusBar>
 #include <QString>
 #include <QTimer>
 
+#include <utility>
 #include <vector>
 
 #include <spdlog/sinks/callback_sink.h>
@@ -29,6 +32,8 @@
 #include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
 #include <editor/module_loader.hpp>
+#include <editor/paths.hpp>
+#include <editor/project_dialog.hpp>
 #include <editor/viewport_widget.hpp>
 
 namespace editor {
@@ -52,8 +57,9 @@ engine::EngineConfig makeEngineConfig() {
 
 }  // namespace
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), engine_(makeEngineConfig()) {
-    setWindowTitle(tr("SRI Editor"));
+MainWindow::MainWindow(engine::Project project, QWidget* parent)
+    : QMainWindow(parent), project_(std::move(project)), engine_(makeEngineConfig()) {
+    setWindowTitle(tr("%1 — SRI Editor").arg(QString::fromStdString(project_.name)));
     resize(1280, 720);
 
     status_label_ = new QLabel(this);
@@ -68,7 +74,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), engine_(makeEngin
     viewport_dock->setWidget(viewport_, ads::CDockWidget::ForceNoScrollArea);
     dock_manager_->setCentralWidget(viewport_dock);
 
-    context_ = std::make_unique<EditorContext>(engine_, *this, *dock_manager_);
+    context_ = std::make_unique<EditorContext>(engine_, project_, *this, *dock_manager_);
     buildMenus();
     buildLogDock();  // before modules and engine init, so their startup messages show up
 
@@ -106,6 +112,20 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     settings.setValue(GeometryKey, saveGeometry());
     settings.setValue(DockStateKey, dock_manager_->saveState(LayoutVersion));
     QMainWindow::closeEvent(event);
+
+    if (!relaunch_project_.isEmpty() &&
+        !QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                 {QStringLiteral("--project"), relaunch_project_})) {
+        QMessageBox::warning(this, tr("Open Project"), tr("Could not start the editor for %1").arg(relaunch_project_));
+    }
+}
+
+void MainWindow::switchProject(const QString& project_file) {
+    if (project_file.isEmpty() || toPath(project_file) == project_.file) {
+        return;
+    }
+    relaunch_project_ = project_file;
+    close();
 }
 
 void MainWindow::restoreLayout() {
@@ -179,6 +199,9 @@ void MainWindow::tickEngine() {
 
 void MainWindow::buildMenus() {
     auto* file_menu = context_->menu(tr("&File"));
+    file_menu->addAction(tr("New &Project..."), this, [this] { switchProject(createProjectInteractively(this)); });
+    file_menu->addAction(tr("&Open Project..."), this, [this] { switchProject(pickProjectFile(this)); });
+    file_menu->addSeparator();
     file_menu->addAction(tr("E&xit"), this, &QWidget::close);
 
     auto* engine_menu = context_->menu(tr("&Engine"));

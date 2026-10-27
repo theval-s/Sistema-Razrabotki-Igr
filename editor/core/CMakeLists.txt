@@ -9,6 +9,7 @@ add_library(editor_core SHARED
     src/selection.cpp
     include/editor/editor_context.hpp
     include/editor/editor_module.hpp
+    include/editor/paths.hpp
     include/editor/selection.hpp
 )
 

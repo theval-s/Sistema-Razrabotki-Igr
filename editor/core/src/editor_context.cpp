@@ -31,8 +31,9 @@ ads::DockWidgetArea toAdsArea(const Qt::DockWidgetArea area) {
 
 
 /// Context to pass to Modules instead of passing the whole editor to them
-EditorContext::EditorContext(engine::Engine& engine, QMainWindow& window, ads::CDockManager& dock_manager)
-    : engine_(engine), window_(window), dock_manager_(dock_manager), selection_(engine.GetScene()) {}
+EditorContext::EditorContext(engine::Engine& engine, const engine::Project& project, QMainWindow& window,
+                             ads::CDockManager& dock_manager)
+    : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager), selection_(engine.GetScene()) {}
 
 EditorContext::~EditorContext() {
     // Panels would otherwise die with the dock manager, after the engine they show.
@@ -47,6 +48,10 @@ EditorContext::~EditorContext() {
 
 engine::Engine& EditorContext::engine() noexcept {
     return engine_;
+}
+
+const engine::Project& EditorContext::project() const noexcept {
+    return project_;
 }
 
 engine::Scene& EditorContext::scene() noexcept {
