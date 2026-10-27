@@ -178,6 +178,10 @@ later default changes.
 
 ## Editor read/write API
 
+Internally, nlohmann/json handles parsing and serialization, and
+json-schema-validator checks the versioned document schema (fields, references,
+hooks and parameter ranges). Both dependencies are managed through vcpkg.
+
 The public engine/assets/MaterialDefinition.hpp has no JSON-library dependency:
 
 ~~~cpp
