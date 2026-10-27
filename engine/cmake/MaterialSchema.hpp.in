@@ -1,0 +1,6 @@
+#pragma once
+
+// Generated from schemas/material.schema.json. Edit the schema, not this header.
+namespace engine::detail {
+inline constexpr char MaterialSchema[] = R"schema(@MATERIAL_SCHEMA_JSON@)schema";
+}

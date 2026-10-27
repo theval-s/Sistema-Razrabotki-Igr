@@ -194,6 +194,13 @@ find_package(EnTT CONFIG REQUIRED)
 find_package(enkiTS CONFIG REQUIRED)
 find_package(assimp CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(nlohmann_json_schema_validator CONFIG REQUIRED)
+
+# Embed the schema so material parsing does not depend on runtime file locations.
+set(MATERIAL_SCHEMA_FILE "${CMAKE_CURRENT_SOURCE_DIR}/schemas/material.schema.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MATERIAL_SCHEMA_FILE}")
+file(READ "${MATERIAL_SCHEMA_FILE}" MATERIAL_SCHEMA_JSON)
+configure_file(cmake/MaterialSchema.hpp.in generated/MaterialSchema.hpp @ONLY)
 
 set(ENGINE_CORE_HEADERS
     include/engine/input/InputSubsystem.hpp
@@ -209,6 +216,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/assets/AssetTable.hpp
     include/engine/assets/AssetTypes.hpp
     include/engine/assets/AssetPipeline.hpp
+    include/engine/assets/MaterialDefinition.hpp
     include/engine/core/CoreEvents.hpp
     include/engine/core/FrameContext.hpp
     include/engine/core/Subsystem.hpp
@@ -228,6 +236,8 @@ set(ENGINE_CORE_SOURCES
     src/assets/AssimpMeshImporter.cpp
     src/assets/ShaderImporter.cpp
     src/assets/TextureImporter.cpp
+    src/assets/MaterialDefinition.cpp
+    src/assets/MaterialImporter.cpp
     src/core/Subsystem.cpp
     src/project/Project.cpp
     src/scene/Scene.cpp
@@ -236,12 +246,13 @@ set(ENGINE_CORE_SOURCES
 foreach(engine_target IN ITEMS engine engine_static)
     if(TARGET ${engine_target})
         target_sources(${engine_target} PRIVATE ${ENGINE_CORE_SOURCES} ${ENGINE_CORE_HEADERS})
+        target_include_directories(${engine_target} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
         # All of these appear in public headers (SimpleMath in Transform, EnTT in
         # Scene/Engine, enkiTS via Engine::GetTaskScheduler()), so consumers need them too.
         target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
         # Assimp is PRIVATE on purpose: AssimpMeshImporter.cpp is its only user and no
         # public header mentions it. Static consumers still get it via the link-only interface.
-        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json)
+        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator)
     endif()
 endforeach()
 

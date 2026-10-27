@@ -20,13 +20,17 @@ namespace engine {
 namespace {
 
 template <typename T>
-T MakeValue(const AssetDesc& desc, const GpuPayload& gpu) {
+T MakeValue(const AssetDesc& desc, const CpuPayload& cpu, const GpuPayload& gpu) {
     if constexpr (std::is_same_v<T, MeshAsset>) {
         return MeshAsset{gpu.mesh};
     } else if constexpr (std::is_same_v<T, TextureAsset>) {
         return TextureAsset{gpu.texture};
-    } else {
+    } else if constexpr (std::is_same_v<T, ShaderAsset>) {
         return ShaderAsset{gpu.shader, desc.shaderStage};
+    } else if constexpr (std::is_same_v<T, MaterialAsset>) {
+        return MaterialAsset{gpu.material, cpu.material.definition};
+    } else {
+        return MaterialInstanceAsset{gpu.materialInstance, cpu.materialInstance};
     }
 }
 
@@ -79,6 +83,10 @@ constexpr std::string_view ToString(const AssetKind kind) {
         return "texture";
     case AssetKind::Shader:
         return "shader";
+    case AssetKind::Material:
+        return "material";
+    case AssetKind::MaterialInstance:
+        return "material instance";
     case AssetKind::Count:
         break;
     }
@@ -95,19 +103,21 @@ void AssetSystem::Initialize() {
     importers_[static_cast<size_t>(AssetKind::Mesh)] = std::make_unique<AssimpMeshImporter>();
     importers_[static_cast<size_t>(AssetKind::Texture)] = std::make_unique<TextureImporter>();
     importers_[static_cast<size_t>(AssetKind::Shader)] = std::make_unique<ShaderImporter>();
+    importers_[static_cast<size_t>(AssetKind::Material)] = std::make_unique<MaterialImporter>();
+    importers_[static_cast<size_t>(AssetKind::MaterialInstance)] = std::make_unique<MaterialInstanceImporter>();
 }
 
 void AssetSystem::Update(const FrameContext& frame) {
     // The worker only fills its payload; device calls and table writes stay on this thread.
     // inFlight_ itself is touched from here and LoadSync only, so it needs no lock.
-    for (auto it = inFlight_.begin(); it != inFlight_.end();) {
-        if (!it->get()->GetIsComplete()) {
-            ++it;
-            continue;
+    const auto count = inFlight_.size();
+    for (size_t i = 0; i < count && !inFlight_.empty(); ++i) {
+        // No iterator survives a dependency request or an event callback that changes the queue.
+        auto job = std::move(inFlight_.front());
+        inFlight_.pop_front();
+        if (!job->GetIsComplete() || !FinishJob(*job, frame.frameIndex)) {
+            inFlight_.push_back(std::move(job));
         }
-        std::unique_ptr<LoadJob> completed = std::move(*it);
-        it = inFlight_.erase(it);
-        FinishJob(*completed, frame.frameIndex);  // ~ICompletable asserts completion, so destroy only now
     }
 }
 
@@ -127,6 +137,39 @@ entt::resource<MeshAsset> AssetSystem::LoadMesh(const std::string_view name, con
 
 entt::resource<TextureAsset> AssetSystem::LoadTexture(const std::string_view name) {
     return LoadSync(RequestTexture(name));
+}
+
+entt::resource<MaterialAsset> AssetSystem::LoadMaterial(const std::string_view name) {
+    return LoadSync(RequestMaterial(name));
+}
+
+entt::resource<MaterialInstanceAsset> AssetSystem::LoadMaterialInstance(const std::string_view name) {
+    return LoadSync(RequestMaterialInstance(name));
+}
+
+std::string AssetSystem::NormalizeAssetName(std::string_view name, AssetKind kind) {
+    auto normalized = NormalizeName(name);
+    if (!normalized.empty() && (kind == AssetKind::Material || kind == AssetKind::MaterialInstance) &&
+        AssetPathResolver::Utf8Path(normalized).extension().empty()) {
+        normalized += kind == AssetKind::Material ? ".material.json" : ".material-instance.json";
+    }
+    return normalized;
+}
+
+AssetHandle<MaterialAsset> AssetSystem::RequestMaterial(std::string_view name) {
+    if (name.empty()) return {};
+    AssetDesc desc;
+    desc.name = NormalizeAssetName(name, AssetKind::Material);
+    desc.path = AssetPathResolver::DefaultPath(desc.name, AssetKind::Material);
+    return Request<MaterialAsset>(std::move(desc));
+}
+
+AssetHandle<MaterialInstanceAsset> AssetSystem::RequestMaterialInstance(std::string_view name) {
+    if (name.empty()) return {};
+    AssetDesc desc;
+    desc.name = NormalizeAssetName(name, AssetKind::MaterialInstance);
+    desc.path = AssetPathResolver::DefaultPath(desc.name, AssetKind::MaterialInstance);
+    return Request<MaterialInstanceAsset>(std::move(desc));
 }
 
 entt::resource<ShaderAsset> AssetSystem::LoadShader(const std::string_view name, const ShaderType stage,
@@ -251,6 +294,7 @@ entt::resource<T> AssetSystem::LoadSync(const AssetHandle<T> handle) {
         return FailLoad(table, handle, "load job disappeared from the scheduler");
     }
     engine_.GetTaskScheduler().WaitforTask(job.get());
+    if (job->cpuOk && ResolveDependencies(*job, true) == DependencyState::Failed) job->cpuOk = false;
     return FinishTyped(*job, table, handle, engine_.GetFrame().frameIndex);
 }
 
@@ -288,7 +332,12 @@ std::unique_ptr<LoadJob> AssetSystem::TakeJob(const AssetKind kind, const uint32
     return nullptr;
 }
 
-void AssetSystem::FinishJob(const LoadJob& job, const uint64_t frameIndex) {
+bool AssetSystem::FinishJob(LoadJob& job, const uint64_t frameIndex) {
+    if (job.cpuOk) {
+        const auto dependencies = ResolveDependencies(job, false);
+        if (dependencies == DependencyState::Waiting) return false;
+        if (dependencies == DependencyState::Failed) job.cpuOk = false;
+    }
     switch (job.kind) {
     case AssetKind::Mesh:
         FinishTyped(job, meshes_, AssetHandle<MeshAsset>{job.slot, job.generation}, frameIndex);
@@ -299,9 +348,66 @@ void AssetSystem::FinishJob(const LoadJob& job, const uint64_t frameIndex) {
     case AssetKind::Shader:
         FinishTyped(job, shaders_, AssetHandle<ShaderAsset>{job.slot, job.generation}, frameIndex);
         break;
+    case AssetKind::Material:
+        FinishTyped(job, materials_, AssetHandle<MaterialAsset>{job.slot, job.generation}, frameIndex);
+        break;
+    case AssetKind::MaterialInstance:
+        FinishTyped(job, materialInstances_, AssetHandle<MaterialInstanceAsset>{job.slot, job.generation}, frameIndex);
+        break;
     case AssetKind::Count:
         break;
     }
+    return true;
+}
+
+AssetSystem::DependencyState AssetSystem::ResolveDependencies(LoadJob& job, bool wait) {
+    const bool instance = job.kind == AssetKind::MaterialInstance;
+    if (!instance && job.kind != AssetKind::Material) return DependencyState::Ready;
+    const auto& overrides = instance ? job.payload.materialInstance.parameters : job.payload.material.definition.defaults;
+    if (!job.dependenciesRequested) {
+        job.dependenciesRequested = true;
+        if (instance) job.materialDependency = RequestMaterial(job.payload.materialInstance.material);
+        if (overrides.albedoTexture && !overrides.albedoTexture->empty())
+            job.textureDependency = RequestTexture(*overrides.albedoTexture);
+    }
+    const auto resolve = [&]<typename T>(AssetHandle<T> handle, entt::resource<T>& value,
+                                        std::string_view name) -> DependencyState {
+        value = wait ? LoadSync(handle) : Peek(handle);
+        if (value) return DependencyState::Ready;
+        const auto* record = Table<T>().Get(handle);
+        if (!record || record->state != AssetState::Loading) {
+            job.error = "dependency '" + std::string(name) + "' failed while loading '" + job.name + "'";
+            return DependencyState::Failed;
+        }
+        return DependencyState::Waiting;
+    };
+    MaterialParameters parameters;
+    if (instance) {
+        entt::resource<MaterialAsset> parent;
+        const auto state = resolve(job.materialDependency, parent, job.payload.materialInstance.material);
+        if (state != DependencyState::Ready) return state;
+        auto* rendering = engine_.GetSubsystem<RenderingSubsystem>();
+        const auto* material = rendering ? rendering->GetResourceManager().TryGetMaterial(parent->material) : nullptr;
+        if (!material) {
+            job.error = "parent material no longer exists";
+            return DependencyState::Failed;
+        }
+        parameters = material->defaultParameters;
+        job.resolvedMaterial = parent->material;
+    }
+    if (overrides.specularColor) parameters.parameters.specularColor = *overrides.specularColor;
+    if (overrides.shininess) parameters.parameters.shininess = *overrides.shininess;
+    if (overrides.albedoTexture) {
+        parameters.albedoTexture = {}; // explicit null clears an inherited texture
+        if (!overrides.albedoTexture->empty()) {
+            entt::resource<TextureAsset> texture;
+            const auto state = resolve(job.textureDependency, texture, *overrides.albedoTexture);
+            if (state != DependencyState::Ready) return state;
+            parameters.albedoTexture = texture->texture;
+        }
+    }
+    job.resolvedParameters = parameters;
+    return DependencyState::Ready;
 }
 
 template <typename T>
@@ -319,12 +425,18 @@ entt::resource<T> AssetSystem::FinishTyped(const LoadJob& job, AssetTable<T>& ta
 
     RenderingSubsystem* rendering = engine_.GetSubsystem<RenderingSubsystem>();
     if (rendering == nullptr) {
-        return FailLoad(table, handle, "no RenderingSubsystem to upload the result to");
+        const std::string error = "no RenderingSubsystem to upload the result to";
+        auto failed = FailLoad(table, handle, error);
+        engine_.GetEvents().trigger(AssetFailedEvent{job.id, job.name, job.kind, error});
+        return failed;
     }
 
     GpuPayload gpu;
     std::string error;
-    if (!ImporterFor(job.kind).UploadGpu(MakeTransfer(*rendering), job.payload, gpu, error)) {
+    auto transfer = MakeTransfer(*rendering);
+    transfer.material = job.resolvedMaterial;
+    transfer.materialParameters = job.resolvedParameters;
+    if (!ImporterFor(job.kind).UploadGpu(transfer, job.payload, gpu, error)) {
         entt::resource<T> failed = FailLoad(table, handle, error);
         engine_.GetEvents().trigger(AssetFailedEvent{job.id, job.name, job.kind, error});
         return failed;
@@ -335,7 +447,7 @@ entt::resource<T> AssetSystem::FinishTyped(const LoadJob& job, AssetTable<T>& ta
     spdlog::info("AssetSystem: '{}' ({}) published on frame {} ({} s after queueing)",
                  job.name, ToString(job.kind), frameIndex, totalSeconds);
 
-    entt::resource<T> value = table.Publish(handle, MakeValue<T>(record->desc, gpu));
+    entt::resource<T> value = table.Publish(handle, MakeValue<T>(record->desc, job.payload, gpu));
     engine_.GetEvents().trigger(AssetLoadedEvent{job.id, job.name, job.kind});
     return value;
 }

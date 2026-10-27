@@ -72,8 +72,9 @@ public:
         if (!freeSlots_.empty()) {
             slot = freeSlots_.back();
             freeSlots_.pop_back();
+            const auto generation = records_[slot]->generation; // Fail already invalidated the old handle
             *records_[slot] = Record{};
-            ++records_[slot]->generation;  // invalidates handles taken before the recycle
+            records_[slot]->generation = generation; // never reset generations across successive retries
         } else {
             slot = static_cast<uint32_t>(records_.size());
             records_.push_back(std::make_unique<Record>());

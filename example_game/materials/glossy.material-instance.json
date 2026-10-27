@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "material": "game/materials/default.material.json",
+  "parameters": {
+    "shininess": 96
+  }
+}

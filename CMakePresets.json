@@ -33,11 +33,6 @@
         "type": "equals",
         "lhs": "${hostSystemName}",
         "rhs": "Windows"
-      },
-      "vendor": {
-        "jetbrains.com/clion": {
-          "toolchain": "Visual Studio"
-        }
       }
     },
     {
@@ -53,11 +48,6 @@
         "type": "equals",
         "lhs": "${hostSystemName}",
         "rhs": "Windows"
-      },
-      "vendor": {
-        "jetbrains.com/clion": {
-          "toolchain": "Visual Studio"
-        }
       }
     },
     {
@@ -67,11 +57,6 @@
       "cacheVariables": {
         "SRI_BUILD_EDITOR": "OFF",
         "SRI_BUILD_EXAMPLE_GAME": "ON"
-      },
-      "vendor": {
-        "jetbrains.com/clion": {
-          "toolchain": "Visual Studio"
-        }
       }
     }
   ],

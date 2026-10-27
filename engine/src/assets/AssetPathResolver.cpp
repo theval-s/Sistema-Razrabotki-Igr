@@ -99,20 +99,26 @@ std::filesystem::path AssetPathResolver::ResolveShader(const AssetDesc& desc) {
     return path;
 }
 
+std::filesystem::path AssetPathResolver::ResolveMaterial(const AssetDesc& desc, bool instance) {
+    auto path = ToAbsolute(desc.path);
+    if (path.extension().empty()) path += instance ? L".material-instance.json" : L".material.json";
+    return path;
+}
+
 std::filesystem::path AssetPathResolver::DefaultPath(const std::string_view name, const AssetKind kind) {
     if (kind == AssetKind::Shader) {
         if (name.starts_with("engine/")) {
-            return std::filesystem::path("engine") / "shaders" / std::filesystem::path(name.substr(7));
+            return std::filesystem::path("engine") / "shaders" / Utf8Path(name.substr(7));
         }
         if (name.starts_with("game/")) {
-            return std::filesystem::path("game") / "shaders" / std::filesystem::path(name.substr(5));
+            return std::filesystem::path("game") / "shaders" / Utf8Path(name.substr(5));
         }
         if (name.starts_with("shaders/")) {
-            return std::filesystem::path("engine") / "shaders" / std::filesystem::path(name.substr(8));
+            return std::filesystem::path("engine") / "shaders" / Utf8Path(name.substr(8));
         }
-        return std::filesystem::path("game") / "shaders" / std::filesystem::path(name);
+        return std::filesystem::path("game") / "shaders" / Utf8Path(name);
     }
-    return std::filesystem::path(name);
+    return Utf8Path(name);
 }
 
 const std::filesystem::path& AssetPathResolver::GetRoot() {

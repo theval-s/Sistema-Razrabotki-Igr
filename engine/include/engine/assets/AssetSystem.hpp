@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <deque>
 #include <memory>
 #include <string_view>
 #include <type_traits>
@@ -23,7 +24,7 @@ class IAssetImporter;
 struct UploadTransfer;
 struct LoadJob;
 
-/// Name-addressed registry of meshes, textures and shaders.
+/// Name-addressed registry of meshes, textures, shaders, materials and material instances.
 ///
 /// Adds identity, deduplication, state and background loading on top of
 /// RenderingResourceManager, which stays the owner of all GPU memory. Assets are
@@ -56,6 +57,9 @@ public:
     /// failed re-load recycled the record. Empty resource on failure.
     entt::resource<MeshAsset> LoadMesh(std::string_view name, bool centerOnLoad = false);
     entt::resource<TextureAsset> LoadTexture(std::string_view name);
+    /// JSON names are exe-relative. Extensionless names gain .material.json / .material-instance.json.
+    entt::resource<MaterialAsset> LoadMaterial(std::string_view name);
+    entt::resource<MaterialInstanceAsset> LoadMaterialInstance(std::string_view name);
     /// Names use game/... or engine/...; each stage/entry point/define set is a separate asset.
     entt::resource<ShaderAsset> LoadShader(std::string_view name, ShaderType stage,
                                           ShaderCompileOptions options = {});
@@ -68,6 +72,9 @@ public:
     /// asset (logged) ; a Failed attempt must be re-requested explicitly.
     AssetHandle<MeshAsset> RequestMesh(std::string_view name, bool centerOnLoad = false);
     AssetHandle<TextureAsset> RequestTexture(std::string_view name);
+    /// Ready only after the JSON, declared shaders and referenced assets are ready.
+    AssetHandle<MaterialAsset> RequestMaterial(std::string_view name);
+    AssetHandle<MaterialInstanceAsset> RequestMaterialInstance(std::string_view name);
     /// Shader handles identify a single stage/entry point/define set. Use the
     /// returned handle with IsReady() / Peek() to query asynchronous compilation.
     AssetHandle<ShaderAsset> RequestShader(std::string_view name, ShaderType stage,
@@ -78,7 +85,7 @@ public:
     /// Current state of a mesh or texture name; shader variants use their request handle.
     template <typename T>
     [[nodiscard]] AssetState GetState(std::string_view name) const {
-        const AssetHandle<T> handle = Table<T>().Find(NormalizeName(name));
+        const AssetHandle<T> handle = Table<T>().Find(NormalizeAssetName(name, AssetValueKind<T>::value));
         const typename AssetTable<T>::Record* record = Table<T>().Get(handle);
         return record != nullptr ? record->state : AssetState::Unloaded;
     }
@@ -87,7 +94,7 @@ public:
     /// For shaders, use the handle overload below to distinguish variants.
     template <typename T>
     [[nodiscard]] entt::resource<T> Peek(std::string_view name) {
-        return Peek<T>(Table<T>().Find(NormalizeName(name)));
+        return Peek<T>(Table<T>().Find(NormalizeAssetName(name, AssetValueKind<T>::value)));
     }
 
     /// Generation-checked: a handle whose slot was recycled for another asset reads as empty
@@ -109,6 +116,7 @@ public:
     }
 
 private:
+    static std::string NormalizeAssetName(std::string_view name, AssetKind kind);
     AssetHandle<ShaderAsset> RequestShaderVariant(AssetDesc&& desc);
     template <typename T>
     AssetHandle<T> Request(AssetDesc&& desc);
@@ -126,7 +134,10 @@ private:
     /// Uploads a completed job's payload and publishes or fails the record; returns the
     /// asset resource, empty on failure or when the record went stale. Fires
     /// AssetLoadedEvent / AssetFailedEvent.
-    void FinishJob(const LoadJob& job, uint64_t frameIndex);
+    /// False while a completed JSON job is waiting for asynchronous dependencies.
+    bool FinishJob(LoadJob& job, uint64_t frameIndex);
+    enum class DependencyState { Ready, Waiting, Failed };
+    DependencyState ResolveDependencies(LoadJob& job, bool wait);
     template <typename T>
     entt::resource<T> FinishTyped(const LoadJob& job, AssetTable<T>& table, AssetHandle<T> handle, uint64_t frameIndex);
 
@@ -143,6 +154,10 @@ private:
             return textures_;
         } else if constexpr (std::is_same_v<T, ShaderAsset>) {
             return shaders_;
+        } else if constexpr (std::is_same_v<T, MaterialAsset>) {
+            return materials_;
+        } else if constexpr (std::is_same_v<T, MaterialInstanceAsset>) {
+            return materialInstances_;
         } else {
             static_assert(sizeof(T) == 0, "not an asset value type");
         }
@@ -156,10 +171,12 @@ private:
     AssetTable<MeshAsset> meshes_;
     AssetTable<TextureAsset> textures_;
     AssetTable<ShaderAsset> shaders_;
+    AssetTable<MaterialAsset> materials_;
+    AssetTable<MaterialInstanceAsset> materialInstances_;
     std::array<std::unique_ptr<IAssetImporter>, static_cast<size_t>(AssetKind::Count)> importers_{};
     /// Queued CPU-phase jobs. Touched only from the main thread, so no lock is needed:
     /// workers see just each job's own fields.
-    std::vector<std::unique_ptr<LoadJob>> inFlight_;
+    std::deque<std::unique_ptr<LoadJob>> inFlight_;
     Engine& engine_;
 };
 

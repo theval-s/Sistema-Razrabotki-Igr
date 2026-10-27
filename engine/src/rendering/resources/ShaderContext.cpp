@@ -36,7 +36,7 @@ public:
         } else if (type == D3D_INCLUDE_LOCAL) {
             const auto it = files_.find(parent);
             const auto& includingFile = it == files_.end() ? sourcePath_ : it->second->path;
-            path = includingFile.parent_path() / name;
+            path = includingFile.parent_path() / AssetPathResolver::Utf8Path(includeName);
         } else {
             return E_FAIL; // system includes must name an explicit root
         }
