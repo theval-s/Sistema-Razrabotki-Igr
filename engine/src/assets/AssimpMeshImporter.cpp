@@ -29,7 +29,8 @@ using DirectX::SimpleMath::Vector4;
 // asked, which rendered every texture upside-down and every surface back-to-front.
 constexpr unsigned int ImportFlags = aiProcess_Triangulate | aiProcess_PreTransformVertices |
                                      aiProcess_GenSmoothNormals | aiProcess_SortByPType |
-                                     aiProcess_FlipUVs | aiProcess_FlipWindingOrder;
+                                     aiProcess_FlipUVs | aiProcess_FlipWindingOrder |
+                                     static_cast<unsigned int>(aiProcess_GenBoundingBoxes);
 
 /// Recenters the geometry on its bounding-box center and scales it to a 0.5 half-extent,
 /// the same convention AssetDesc::centerOnLoad had with the old parser.
@@ -71,16 +72,18 @@ bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/
             continue;
         }
         const uint32_t baseVertex = static_cast<uint32_t>(mesh.vertices.size());
+        const aiAABB& box = source->mAABB;
+        const Aabb bounds{Vector3{box.mMin.x, box.mMin.y, box.mMin.z},
+                          Vector3{box.mMax.x, box.mMax.y, box.mMax.z}};
+        if (mesh.vertices.empty()) {
+            mesh.bounds = bounds;
+        } else {
+            mesh.bounds.min = Vector3::Min(mesh.bounds.min, bounds.min);
+            mesh.bounds.max = Vector3::Max(mesh.bounds.max, bounds.max);
+        }
         hasUVs = hasUVs || source->HasTextureCoords(0);
         for (uint32_t index = 0; index < source->mNumVertices; ++index) {
             const aiVector3D& position = source->mVertices[index];
-            const Vector3 point{position.x, position.y, position.z};
-            if (mesh.vertices.empty()) {
-                mesh.bounds = {point, point};
-            } else {
-                mesh.bounds.min = Vector3::Min(mesh.bounds.min, point);
-                mesh.bounds.max = Vector3::Max(mesh.bounds.max, point);
-            }
             const aiVector3D normal = source->HasNormals() ? source->mNormals[index] : aiVector3D{0.0f, 1.0f, 0.0f};
             const aiVector3D uv = source->HasTextureCoords(0) ? source->mTextureCoords[0][index]
                                                               : aiVector3D{0.0f, 0.0f, 0.0f};

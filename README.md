@@ -30,7 +30,8 @@ examples: [material asset contract](docs/material-assets.md).
 
 Imported meshes expose `MeshAsset::bounds` (`Aabb::min` / `max`) in mesh-local
 coordinates, after Assimp node transforms and optional `centerOnLoad`
-normalization. Bounds are accumulated while importing vertices and remain
+normalization. Assimp generates per-mesh bounding boxes via aiProcess_GenBoundingBoxes;
+the importer combines them into the asset bounds, which remain
 available after CPU geometry is released; apply the object's world transform
 separately when world-space bounds are needed.
 
