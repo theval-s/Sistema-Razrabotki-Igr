@@ -1,5 +1,7 @@
 #pragma once
 
+#include <SimpleMath.h>
+
 #include <engine/rendering/resources/RenderedMesh.hpp>
 #include <engine/rendering/resources/ShaderContext.hpp>
 #include <engine/rendering/resources/Texture.hpp>
@@ -11,8 +13,15 @@ namespace engine {
 /// Thin records: they name GPU resources owned by RenderingResourceManager, they do not
 /// hold D3D objects or free anything. The handles they carry stay valid for the process.
 
+/// Axis-aligned bounds in imported mesh-local space (after centerOnLoad, if enabled).
+struct Aabb {
+    DirectX::SimpleMath::Vector3 min{};
+    DirectX::SimpleMath::Vector3 max{};
+};
+
 struct MeshAsset {
     MeshHandle mesh;
+    Aabb bounds;
 };
 
 struct TextureAsset {

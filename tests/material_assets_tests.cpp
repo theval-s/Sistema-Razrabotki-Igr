@@ -225,6 +225,18 @@ void Integration() {
     }
     auto& assets = engine.GetAssets();
     auto& resources = rendering->GetResourceManager();
+    ASSERT_NO_FATAL_FAILURE(fixture.Write("bounds.obj",
+        "v 2 3 4\nv 6 3 4\nv 2 7 12\nvt 0 0\nvt 1 0\nvt 0 1\nf 1/1 2/2 3/3\n"));
+    const auto meshAsset = assets.LoadMesh(fixture.prefix + "/bounds.obj");
+    ASSERT_TRUE(meshAsset);
+    EXPECT_EQ(meshAsset->bounds.min, (Vector3{2, 3, 4}));
+    EXPECT_EQ(meshAsset->bounds.max, (Vector3{6, 7, 12}));
+    ASSERT_NO_FATAL_FAILURE(fixture.Write("normalized.obj",
+        "v 2 3 4\nv 6 3 4\nv 2 7 12\nvt 0 0\nvt 1 0\nvt 0 1\nf 1/1 2/2 3/3\n"));
+    const auto normalizedMesh = assets.LoadMesh(fixture.prefix + "/normalized.obj", true);
+    ASSERT_TRUE(normalizedMesh);
+    EXPECT_EQ(normalizedMesh->bounds.min, (Vector3{-0.25f, -0.25f, -0.5f}));
+    EXPECT_EQ(normalizedMesh->bounds.max, (Vector3{0.25f, 0.25f, 0.5f}));
     Events events;
     engine.GetEvents().sink<AssetLoadedEvent>().connect<&Events::Loaded>(events);
     engine.GetEvents().sink<AssetFailedEvent>().connect<&Events::Failed>(events);

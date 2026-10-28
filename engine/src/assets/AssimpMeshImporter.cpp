@@ -29,19 +29,14 @@ using DirectX::SimpleMath::Vector4;
 // asked, which rendered every texture upside-down and every surface back-to-front.
 constexpr unsigned int ImportFlags = aiProcess_Triangulate | aiProcess_PreTransformVertices |
                                      aiProcess_GenSmoothNormals | aiProcess_SortByPType |
-                                     aiProcess_FlipUVs | aiProcess_FlipWindingOrder;
+                                     aiProcess_FlipUVs | aiProcess_FlipWindingOrder |
+                                     static_cast<unsigned int>(aiProcess_GenBoundingBoxes);
 
 /// Recenters the geometry on its bounding-box center and scales it to a 0.5 half-extent,
 /// the same convention AssetDesc::centerOnLoad had with the old parser.
 void CenterAndNormalize(MeshCpu& mesh) {
-    constexpr float kMax = 1e30f;
-    Vector3 min{kMax, kMax, kMax};
-    Vector3 max{-kMax, -kMax, -kMax};
-    for (const ugly_utils::VertData& vertex : mesh.vertices) {
-        const Vector3 position{vertex.pos.x, vertex.pos.y, vertex.pos.z};
-        min = Vector3::Min(min, position);
-        max = Vector3::Max(max, position);
-    }
+    const Vector3 min = mesh.bounds.min;
+    const Vector3 max = mesh.bounds.max;
 
     const Vector3 center = (min + max) * 0.5f;
     const Vector3 halfExtent = (max - min) * 0.5f;
@@ -51,6 +46,8 @@ void CenterAndNormalize(MeshCpu& mesh) {
         vertex.pos = Vector4{(vertex.pos.x - center.x) * scale, (vertex.pos.y - center.y) * scale,
                              (vertex.pos.z - center.z) * scale, 1.0f};
     }
+    mesh.bounds.min = (min - center) * scale;
+    mesh.bounds.max = (max - center) * scale;
 }
 
 }  // namespace
@@ -75,6 +72,15 @@ bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/
             continue;
         }
         const uint32_t baseVertex = static_cast<uint32_t>(mesh.vertices.size());
+        const aiAABB& box = source->mAABB;
+        const Aabb bounds{Vector3{box.mMin.x, box.mMin.y, box.mMin.z},
+                          Vector3{box.mMax.x, box.mMax.y, box.mMax.z}};
+        if (mesh.vertices.empty()) {
+            mesh.bounds = bounds;
+        } else {
+            mesh.bounds.min = Vector3::Min(mesh.bounds.min, bounds.min);
+            mesh.bounds.max = Vector3::Max(mesh.bounds.max, bounds.max);
+        }
         hasUVs = hasUVs || source->HasTextureCoords(0);
         for (uint32_t index = 0; index < source->mNumVertices; ++index) {
             const aiVector3D& position = source->mVertices[index];
