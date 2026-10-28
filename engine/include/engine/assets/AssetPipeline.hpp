@@ -26,6 +26,7 @@ namespace engine {
 struct MeshCpu {
     std::vector<ugly_utils::VertData> vertices;
     std::vector<uint32_t> indices;
+    Aabb bounds;
 };
 
 /// The decoded texture, already a device resource: WIC decoding a 4K image and building its

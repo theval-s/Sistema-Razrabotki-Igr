@@ -28,6 +28,15 @@ For CMake to find Qt properly you might need to also add an environment variable
 Material and material-instance JSON formats, editor serialization API, and streaming
 examples: [material asset contract](docs/material-assets.md).
 
+Imported meshes expose `MeshAsset::bounds` (`Aabb::min` / `max`) in mesh-local
+coordinates, after Assimp node transforms and optional `centerOnLoad`
+normalization. Bounds are accumulated while importing vertices and remain
+available after CPU geometry is released; apply the object's world transform
+separately when world-space bounds are needed.
+
+With `SRI_BUILD_TESTS=ON`, run `mesh_assets_tests.exe` for CPU mesh-import checks
+and `material_assets_tests.exe` for asset/GPU integration, directly via GoogleTest.
+
 ## 1. Clone
 
 ```
