@@ -1,5 +1,6 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
+#include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
 
 #include <array>
@@ -9,21 +10,7 @@ namespace engine {
 namespace {
 
 bool ReadDefinition(const AssetDesc& desc, bool instance, std::string& text, std::string& error) {
-    const auto path = AssetPathResolver::ResolveMaterial(desc, instance);
-    std::ifstream input(path, std::ios::binary | std::ios::ate);
-    if (!input) { error = "cannot open material JSON: " + ToUtf8(path); return false; }
-    const auto size = input.tellg();
-    if (size <= 0 || size > 1024 * 1024) {
-        error = "material JSON must contain between 1 byte and 1 MiB: " + ToUtf8(path);
-        return false;
-    }
-    text.resize(static_cast<size_t>(size));
-    input.seekg(0);
-    if (!input.read(text.data(), static_cast<std::streamsize>(size))) {
-        error = "failed to read material JSON: " + ToUtf8(path);
-        return false;
-    }
-    return true;
+    return ReadTextFile(AssetPathResolver::ResolveMaterial(desc, instance), text, error, 1024 * 1024);
 }
 
 struct HookStage { MaterialHook hook; ShaderType stage; const char* define; };

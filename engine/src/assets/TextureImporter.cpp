@@ -9,6 +9,7 @@
 
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
+#include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
 
 namespace engine {
@@ -67,7 +68,11 @@ bool TextureImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPa
     const auto path = AssetPathResolver::ResolveTexture(desc);
 
     std::vector<uint8_t> fileBytes;
-    if (!ReadWholeFileInto(path, fileBytes, error)) {
+    if (!ReadBinaryFile(path, fileBytes, error)) {
+        return false;
+    }
+    if (fileBytes.empty()) {
+        error = "texture file is empty: " + ToUtf8(path);
         return false;
     }
 

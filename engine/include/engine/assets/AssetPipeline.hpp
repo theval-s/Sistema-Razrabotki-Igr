@@ -4,7 +4,6 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <string>
 #include <vector>
 
@@ -128,27 +127,6 @@ public:
     bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
                    GpuPayload& result, std::string& error) const override;
 };
-
-inline bool ReadWholeFileInto(const std::filesystem::path& path, std::vector<uint8_t>& out,
-                              std::string& error) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        error = "Cannot open file: " + ToUtf8(path);
-        return false;
-    }
-    const auto size = file.tellg();
-    if (size <= 0) {
-        error = "File is empty: " + ToUtf8(path);
-        return false;
-    }
-    out.resize(static_cast<size_t>(size));
-    file.seekg(0);
-    if (!file.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(size))) {
-        error = "Failed to read: " + ToUtf8(path);
-        return false;
-    }
-    return true;
-}
 
 /// CPU phase of one asset load, queued on the engine task scheduler. ExecuteRange runs on a
 /// worker thread and touches only the job's own payload plus the immutable-while-Loading record

@@ -1,12 +1,12 @@
 #include <engine/project/Project.hpp>
 
-#include <fstream>
 #include <string_view>
 #include <system_error>
 #include <utility>
 
 #include <nlohmann/json.hpp>
 
+#include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
 
 namespace engine {
@@ -30,13 +30,12 @@ std::filesystem::path Project::ContentDir() const {
 }
 
 std::optional<Project> Project::Load(const std::filesystem::path& file, std::string& error) {
-    std::ifstream input(file, std::ios::binary);
-    if (!input) {
-        error = "Cannot open " + ToUtf8(file);
+    std::string text;
+    if (!ReadTextFile(file, text, error)) {
         return std::nullopt;
     }
     try {
-        const nlohmann::json data = nlohmann::json::parse(input);
+        const nlohmann::json data = nlohmann::json::parse(text);
         if (const int version = data.value("version", 0); version > FormatVersion) {
             error = ToUtf8(file) + " was made by a newer editor (format version " + std::to_string(version) + ")";
             return std::nullopt;
@@ -58,13 +57,7 @@ bool Project::Save(std::string& error) const {
         {"name", name},
         {"startupScene", startupScene},
     };
-    std::ofstream output(file, std::ios::binary | std::ios::trunc);
-    output << data.dump(2) << '\n';
-    if (!output) {
-        error = "Cannot write " + ToUtf8(file);
-        return false;
-    }
-    return true;
+    return WriteFileAtomic(file, data.dump(2) + '\n', error);
 }
 
 std::optional<Project> Project::Create(const std::filesystem::path& directory, std::string name, std::string& error) {
