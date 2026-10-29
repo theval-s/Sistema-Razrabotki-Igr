@@ -15,7 +15,6 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/core/ResourceID.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
-#include <engine/rendering/RenderExtractionSubsystem.hpp>
 #include <engine/scene/SceneDocument.hpp>
 #include <engine/scene/GameDocument.hpp>
 
@@ -259,25 +258,17 @@ void Engine::Tick() {
     impl_->assets->Update(current);
     impl_->sceneAssets->Update(current);
     for (std::size_t i = 0; i < impl_->subsystems.size(); ++i) {
-        if (dynamic_cast<RenderExtractionSubsystem*>(impl_->subsystems[i].subsystem.get())) {
-            impl_->scene.UpdateControllers(current.deltaSeconds);
-            if (impl_->queuedScene) {
-                const auto file = std::move(*impl_->queuedScene);
-                impl_->queuedScene.reset();
-                std::string error;
-                if (!LoadScene(file, error) || !error.empty()) spdlog::error("Deferred scene load: {}", error);
-            }
-        }
         impl_->subsystems[i].subsystem->Update(current);
     }
-    if (!GetSubsystem<RenderExtractionSubsystem>()) {
-        impl_->scene.UpdateControllers(current.deltaSeconds);
-        if (impl_->queuedScene) {
-            const auto file = std::move(*impl_->queuedScene);
-            impl_->queuedScene.reset();
-            std::string error;
-            if (!LoadScene(file, error) || !error.empty()) spdlog::error("Deferred scene load: {}", error);
-        }
+    impl_->scene.UpdateControllers(current.deltaSeconds);
+    if (impl_->queuedScene) {
+        const auto file = std::move(*impl_->queuedScene);
+        impl_->queuedScene.reset();
+        std::string error;
+        if (!LoadScene(file, error) || !error.empty()) spdlog::error("Deferred scene load: {}", error);
+    }
+    for (std::size_t i = 0; i < impl_->subsystems.size(); ++i) {
+        impl_->subsystems[i].subsystem->LateUpdate(current);
     }
     for (std::size_t i = 0; i < impl_->subsystems.size(); ++i) {
         impl_->subsystems[i].subsystem->Render(current);

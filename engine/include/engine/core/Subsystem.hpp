@@ -15,7 +15,10 @@ struct FrameContext;
 /// Lifecycle (all driven by Engine, on the main thread):
 ///   Initialize()  once, in registration order
 ///   Update()      every Tick(), in registration order
-///   Render()      every Tick() after all Updates, in registration order
+///                 (then the scene's controllers update and deferred scene loads apply)
+///   LateUpdate()  every Tick() after controllers, in registration order; sees the
+///                 frame's final scene state (e.g. render extraction)
+///   Render()      every Tick() after all LateUpdates, in registration order
 ///   Shutdown()    once, in reverse registration order
 ///
 /// Subsystems find each other through GetEngine().GetSubsystem<T>() and talk
@@ -35,6 +38,7 @@ public:
     [[nodiscard]] virtual bool Initialize();
     virtual void Shutdown();
     virtual void Update(const FrameContext& frame);
+    virtual void LateUpdate(const FrameContext& frame);
     virtual void Render(const FrameContext& frame);
 
 protected:

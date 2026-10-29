@@ -25,7 +25,7 @@ void RenderExtractionSubsystem::Shutdown() {
     rendering_ = nullptr;
 }
 
-void RenderExtractionSubsystem::Update(const FrameContext&) {
+void RenderExtractionSubsystem::LateUpdate(const FrameContext&) {
     using DirectX::SimpleMath::Vector3;
     const Scene& scene = GetEngine().GetScene();
     AssetSystem& assets = GetEngine().GetSceneAssets();

@@ -13,6 +13,7 @@ bool Subsystem::Initialize() {
 }
 void Subsystem::Shutdown() {}
 void Subsystem::Update(const FrameContext&) {}
+void Subsystem::LateUpdate(const FrameContext&) {}
 void Subsystem::Render(const FrameContext&) {}
 
 Engine& Subsystem::GetEngine() const {
