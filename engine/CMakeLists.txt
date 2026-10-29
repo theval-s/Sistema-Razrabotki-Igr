@@ -220,6 +220,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/assets/AssetPipeline.hpp
     include/engine/assets/MaterialDefinition.hpp
     include/engine/core/CoreEvents.hpp
+    include/engine/core/FileSystem.hpp
     include/engine/core/FrameContext.hpp
     include/engine/core/PathUtils.hpp
     include/engine/core/Subsystem.hpp
@@ -247,6 +248,7 @@ set(ENGINE_CORE_SOURCES
     src/assets/TextureImporter.cpp
     src/assets/MaterialDefinition.cpp
     src/assets/MaterialImporter.cpp
+    src/core/FileSystem.cpp
     src/core/Subsystem.cpp
     src/project/Project.cpp
     src/scene/Scene.cpp

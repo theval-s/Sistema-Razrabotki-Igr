@@ -4,6 +4,11 @@ add_executable(asset_catalog_tests asset_catalog_tests.cpp)
 target_link_libraries(asset_catalog_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(asset_catalog_tests)
 
+add_executable(file_system_tests file_system_tests.cpp)
+target_link_libraries(file_system_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
+set_project_warnings(file_system_tests)
+set_target_properties(file_system_tests PROPERTIES FOLDER tests)
+
 add_executable(scene_document_tests scene_document_tests.cpp)
 target_link_libraries(scene_document_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 target_compile_definitions(scene_document_tests PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
