@@ -224,6 +224,8 @@ set(ENGINE_CORE_HEADERS
     include/engine/core/Surface.hpp
     include/engine/project/Project.hpp
     include/engine/scene/Components.hpp
+    include/engine/scene/Controller.hpp
+    include/engine/scene/SceneQueries.hpp
     include/engine/scene/Scene.hpp
     include/engine/scene/SceneDocument.hpp
     include/engine/scene/Transform.hpp
@@ -245,6 +247,7 @@ set(ENGINE_CORE_SOURCES
     src/project/Project.cpp
     src/scene/Scene.cpp
     src/scene/SceneDocument.cpp
+    src/scene/SceneQueries.cpp
 )
 
 foreach(engine_target IN ITEMS engine engine_static)

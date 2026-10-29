@@ -65,14 +65,46 @@ std::optional<std::string> OptionalId(const Json& j) {
 }
 
 SceneEntityDefinition DecodeEntity(const Json& j) {
-    Fields(j, {"id", "name", "parent", "components"});
+    Fields(j, {"id", "name", "tags", "parent", "components"});
     SceneEntityDefinition entity;
     entity.id = j.at("id").get<std::string>();
     if (!IsUuid(entity.id)) throw std::invalid_argument("invalid entity UUID: " + entity.id);
     entity.name = j.at("name").get<std::string>();
+    if (j.contains("tags")) {
+        if (!j.at("tags").is_array()) throw std::invalid_argument("tags must be an array");
+        std::set<std::string> seen;
+        for (const auto& item : j.at("tags")) {
+            if (!item.is_string() || item.get<std::string>().empty()) throw std::invalid_argument("tag must be a nonempty string");
+            const auto tag = item.get<std::string>();
+            if (!seen.insert(tag).second) throw std::invalid_argument("duplicate tag: " + tag);
+            entity.tags.push_back(tag);
+        }
+    }
     if (j.contains("parent")) entity.parent = OptionalId(j.at("parent"));
     const auto& components = j.at("components");
-    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight"});
+    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "Controller", "Bounds"});
+    if (components.contains("Bounds")) {
+        const auto& bounds = components.at("Bounds");
+        Fields(bounds, {"min", "max"});
+        const auto min = Numbers<3>(bounds.at("min"));
+        const auto max = Numbers<3>(bounds.at("max"));
+        for (int i = 0; i < 3; ++i) if (min[i] > max[i]) throw std::invalid_argument("invalid Bounds: min > max");
+        entity.bounds = Bounds{{{min[0], min[1], min[2]}, {max[0], max[1], max[2]}}};
+    }
+    if (components.contains("Controller")) {
+        const auto& controller = components.at("Controller");
+        Fields(controller, {"type", "version", "enabled", "data"});
+        ControllerDefinition value;
+        value.type = controller.at("type").get<std::string>();
+        if (value.type.empty() || !controller.at("version").is_number_integer() ||
+            !controller.at("enabled").is_boolean() || !controller.contains("data"))
+            throw std::invalid_argument("invalid controller envelope");
+        value.version = controller.at("version").get<int>();
+        if (value.version < 1) throw std::invalid_argument("invalid controller version");
+        value.enabled = controller.at("enabled").get<bool>();
+        value.data = controller.at("data").dump();
+        entity.controller = std::move(value);
+    }
     const auto& transform = components.at("Transform");
     Fields(transform, {"position", "rotation", "scale"});
     const auto position = Numbers<3>(transform.at("position"));
@@ -164,9 +196,15 @@ Json Encode(const SceneDocument& document) {
                                     {"farPlane", entity.camera->farPlane}};
         if (entity.directionalLight)
             components["DirectionalLight"] = {{"color", Encode(entity.directionalLight->color)},
-                                               {"intensity", entity.directionalLight->intensity}};
-        root["entities"].push_back({{"id", entity.id}, {"name", entity.name}, {"parent", Encode(entity.parent)},
-                                    {"components", std::move(components)}});
+                                                {"intensity", entity.directionalLight->intensity}};
+        if (entity.controller)
+            components["Controller"] = {{"type", entity.controller->type}, {"version", entity.controller->version},
+                                        {"enabled", entity.controller->enabled}, {"data", Json::parse(entity.controller->data)}};
+        if (entity.bounds)
+            components["Bounds"] = {{"min", Encode(entity.bounds->local.min)}, {"max", Encode(entity.bounds->local.max)}};
+        root["entities"].push_back({{"id", entity.id}, {"name", entity.name}, {"tags", entity.tags},
+                                     {"parent", Encode(entity.parent)},
+                                     {"components", std::move(components)}});
     }
     return root;
 }
@@ -213,6 +251,10 @@ bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDo
             SceneEntityDefinition definition;
             definition.id = scene.GetId(entity);
             definition.name = scene.GetName(entity);
+            const auto tags = scene.GetTags(entity);
+            definition.tags.assign(tags.begin(), tags.end());
+            if (const auto* controller = scene.GetControllerDefinition(entity)) definition.controller = *controller;
+            if (const auto* bounds = scene.TryGetComponent<Bounds>(entity)) definition.bounds = *bounds;
             if (auto parent = scene.GetParent(entity); parent != entt::null)
                 definition.parent = scene.GetId(parent);
             definition.transform = scene.GetTransform(entity);
@@ -251,6 +293,7 @@ void PopulateScene(const SceneDocument& document, AssetSystem& assets, Scene& de
         destination.CreateEntityWithId(definition.id, definition.name);
     for (const auto& definition : document.entities) {
         const auto entity = destination.FindById(definition.id);
+        for (const auto& tag : definition.tags) destination.AddTag(entity, tag);
         if (definition.parent) destination.SetParent(entity, destination.FindById(*definition.parent));
         destination.GetTransform(entity) = definition.transform;
         if (definition.renderer) destination.AddComponent<MeshRenderer>(entity,
@@ -259,6 +302,8 @@ void PopulateScene(const SceneDocument& document, AssetSystem& assets, Scene& de
             definition.renderer->mesh, definition.renderer->materialInstance);
         if (definition.camera) destination.AddComponent<Camera>(entity, *definition.camera);
         if (definition.directionalLight) destination.AddComponent<DirectionalLight>(entity, *definition.directionalLight);
+        if (definition.bounds) destination.AddComponent<Bounds>(entity, *definition.bounds);
+        if (definition.controller) destination.AttachController(entity, *definition.controller);
     }
     if (document.activeCamera) destination.SetActiveCamera(destination.FindById(*document.activeCamera));
     if (document.directionalLight) destination.SetDirectionalLight(destination.FindById(*document.directionalLight));

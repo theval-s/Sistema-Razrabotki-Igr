@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <fstream>
+#include <optional>
 #include <vector>
 
 #include <TaskScheduler.h>
@@ -12,6 +13,7 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/core/ResourceID.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
+#include <engine/rendering/RenderExtractionSubsystem.hpp>
 #include <engine/scene/SceneDocument.hpp>
 
 namespace engine {
@@ -45,6 +47,7 @@ struct Engine::Impl {
 
     entt::dispatcher events;
     Scene scene;
+    std::optional<std::filesystem::path> queuedScene;
     enki::TaskScheduler scheduler;
     // Kernel state, so it is reachable before any subsystem is registered.
     std::unique_ptr<AssetSystem> assets;
@@ -60,6 +63,10 @@ Engine::Engine(EngineConfig config) : impl_(std::make_unique<Impl>(std::move(con
     // Initialize() regardless of registration order.
     impl_->assets = std::make_unique<AssetSystem>(*this);
     impl_->sceneAssets = std::make_unique<AssetSystem>(*this);
+    impl_->scene.SetMaterialOverrideReleaser([this](MaterialInstanceHandle instance) {
+        if (auto* rendering = GetSubsystem<RenderingSubsystem>())
+            rendering->GetResourceManager().DestroyMaterialInstance(instance);
+    });
 }
 
 // Defined here, not in the header: the destructor of unique_ptr<Impl> needs the
@@ -149,6 +156,9 @@ void Engine::Shutdown() {
     }
     spdlog::info("Engine shutting down");
 
+    impl_->scene.SetControllersActive(false);
+    impl_->scene.Clear();
+
     while (impl_->initializedCount > 0) {
         impl_->subsystems[--impl_->initializedCount].subsystem->Shutdown();
     }
@@ -196,7 +206,25 @@ void Engine::Tick() {
     impl_->assets->Update(current);
     impl_->sceneAssets->Update(current);
     for (std::size_t i = 0; i < impl_->subsystems.size(); ++i) {
+        if (dynamic_cast<RenderExtractionSubsystem*>(impl_->subsystems[i].subsystem.get())) {
+            impl_->scene.UpdateControllers(current.deltaSeconds);
+            if (impl_->queuedScene) {
+                const auto file = std::move(*impl_->queuedScene);
+                impl_->queuedScene.reset();
+                std::string error;
+                if (!LoadScene(file, error) || !error.empty()) spdlog::error("Deferred scene load: {}", error);
+            }
+        }
         impl_->subsystems[i].subsystem->Update(current);
+    }
+    if (!GetSubsystem<RenderExtractionSubsystem>()) {
+        impl_->scene.UpdateControllers(current.deltaSeconds);
+        if (impl_->queuedScene) {
+            const auto file = std::move(*impl_->queuedScene);
+            impl_->queuedScene.reset();
+            std::string error;
+            if (!LoadScene(file, error) || !error.empty()) spdlog::error("Deferred scene load: {}", error);
+        }
     }
     for (std::size_t i = 0; i < impl_->subsystems.size(); ++i) {
         impl_->subsystems[i].subsystem->Render(current);
@@ -273,6 +301,11 @@ Scene& Engine::GetScene() noexcept {
 }
 
 bool Engine::LoadScene(const std::filesystem::path& file, std::string& error) {
+    if (impl_->scene.IsInControllerCallback()) {
+        impl_->queuedScene = file;
+        error.clear();
+        return true;
+    }
     if (!IsInitialized()) { error = "engine must be initialized before loading a scene"; return false; }
     const auto absolute = AssetPathResolver::ToAbsolute(file);
     std::ifstream input(absolute, std::ios::binary);
@@ -281,11 +314,20 @@ bool Engine::LoadScene(const std::filesystem::path& file, std::string& error) {
     SceneDocument document;
     if (!ParseSceneDocument(text, document, error)) return false;
 
+    std::string diagnostics;
+    for (const auto& entity : document.entities) if (entity.controller) {
+        std::string detail;
+        if (!impl_->scene.ValidateController(*entity.controller, detail))
+            diagnostics += entity.name + " (" + entity.id + "): " + detail + "\n";
+    }
+
     if (auto* rendering = GetSubsystem<RenderingSubsystem>()) rendering->GetWorld().sceneItems.clear();
+    impl_->scene.SetControllersActive(false);
     impl_->scene.Clear();
     impl_->sceneAssets->UnloadAll();
     PopulateScene(document, *impl_->sceneAssets, impl_->scene);
-    error.clear();
+    impl_->scene.SetControllersActive(true);
+    error = std::move(diagnostics);
     return true;
 }
 
@@ -326,6 +368,45 @@ bool Engine::SaveScene(const std::filesystem::path& file, std::string& error) {
     }
     error.clear();
     return true;
+}
+
+bool Engine::EditEntityMaterial(entt::entity entity, const std::function<void(MaterialParameters&)>& edit,
+                                std::string& error) {
+    auto* renderer = impl_->scene.TryGetComponent<MeshRenderer>(entity);
+    auto* rendering = GetSubsystem<RenderingSubsystem>();
+    if (!renderer || !rendering || !impl_->sceneAssets->Peek(renderer->materialInstance)) {
+        error = "entity has no ready scene material instance";
+        return false;
+    }
+    auto& resources = rendering->GetResourceManager();
+    const auto base = impl_->sceneAssets->Peek(renderer->materialInstance)->instance;
+    const auto* source = resources.TryGetMaterialInstance(renderer->materialOverride ? renderer->materialOverride : base);
+    if (!source) { error = "material instance is no longer available"; return false; }
+    MaterialParameters parameters = source->parameters;
+    edit(parameters);
+    if (!renderer->materialOverride) {
+        const auto clone = resources.CreateMaterialInstance(source->material);
+        if (!clone) { error = "cannot clone material instance"; return false; }
+        if (!resources.SetMaterialInstanceParameters(clone, parameters)) {
+            resources.DestroyMaterialInstance(clone);
+            error = "cannot set clone parameters";
+            return false;
+        }
+        renderer->materialOverride = clone;
+    } else if (!resources.SetMaterialInstanceParameters(renderer->materialOverride, parameters)) {
+        error = "cannot set clone parameters";
+        return false;
+    }
+    error.clear();
+    return true;
+}
+
+bool Engine::SetEntityAlbedoTexture(entt::entity entity, AssetHandle<TextureAsset> texture, std::string& error) {
+    const auto ready = impl_->sceneAssets->Peek(texture);
+    if (!ready) { error = "texture asset is not ready in this scene"; return false; }
+    return EditEntityMaterial(entity, [handle = ready->texture](MaterialParameters& parameters) {
+        parameters.albedoTexture = handle;
+    }, error);
 }
 
 AssetSystem& Engine::GetAssets() noexcept {

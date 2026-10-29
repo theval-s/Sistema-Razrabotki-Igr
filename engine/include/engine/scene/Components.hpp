@@ -16,6 +16,10 @@ struct Name {
     std::string value;
 };
 
+struct Tags {
+    std::vector<std::string> values;
+};
+
 struct EntityId {
     std::string value; // persistent UUID, independent of EnTT's transient entity value
 };

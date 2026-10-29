@@ -9,6 +9,8 @@
 #include <engine/engine_export.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/Transform.hpp>
+#include <engine/scene/Controller.hpp>
+#include <engine/scene/SceneQueries.hpp>
 
 namespace engine {
 class Scene;
@@ -19,6 +21,7 @@ class AssetSystem;
 struct SceneEntityDefinition {
     std::string id;
     std::string name;
+    std::vector<std::string> tags;
     std::optional<std::string> parent;
     Transform transform;
     struct Mesh {
@@ -28,6 +31,8 @@ struct SceneEntityDefinition {
     std::optional<Mesh> renderer;
     std::optional<Camera> camera;
     std::optional<DirectionalLight> directionalLight;
+    std::optional<ControllerDefinition> controller;
+    std::optional<Bounds> bounds;
 };
 
 struct SceneDocument {

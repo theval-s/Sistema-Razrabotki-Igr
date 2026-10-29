@@ -417,6 +417,12 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     ASSERT_TRUE(guidMaterial) << "UUID shader did not survive stale path hint";
     EXPECT_TRUE(resources.TryGetMaterial(guidMaterial->material)->shaders.gBufferPassPS);
 
+    for (std::string_view name : {"ground", "enchanted"}) {
+        const auto authored = assets.LoadMaterialInstance("game/materials/" + std::string(name) + ".material-instance.json");
+        ASSERT_TRUE(authored) << name << " ExampleGame disk material did not load";
+        EXPECT_NE(resources.TryGetMaterialInstance(authored->instance), nullptr);
+    }
+
     const auto builtIn = assets.LoadMaterialInstance("engine/primitives/default.material-instance.json");
     ASSERT_TRUE(builtIn) << "version 2 UUID dependency graph failed";
     const auto oldBuiltin = assets.RequestMaterialInstance("engine/primitives/default.material-instance.json");
@@ -444,6 +450,22 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     ASSERT_TRUE(sceneAssets.IsReady(sceneHandle)) << "example scene asset did not load";
+    const auto otherCube = engine.GetScene().CreateEntity("Same material");
+    ASSERT_NE(engine.GetScene().AddComponent<MeshRenderer>(otherCube,
+        *engine.GetScene().TryGetComponent<MeshRenderer>(cube)), nullptr);
+    const auto baseInstance = sceneAssets.Peek(sceneHandle)->instance;
+    const auto baseShininess = resources.TryGetMaterialInstance(baseInstance)->parameters.parameters.shininess;
+    ASSERT_TRUE(engine.EditEntityMaterial(cube, [](MaterialParameters& parameters) {
+        parameters.parameters.shininess = 17;
+    }, sceneError)) << sceneError;
+    const auto clone = engine.GetScene().TryGetComponent<MeshRenderer>(cube)->materialOverride;
+    ASSERT_TRUE(clone);
+    EXPECT_NE(clone, baseInstance);
+    EXPECT_FALSE(engine.GetScene().TryGetComponent<MeshRenderer>(otherCube)->materialOverride);
+    EXPECT_FLOAT_EQ(resources.TryGetMaterialInstance(baseInstance)->parameters.parameters.shininess, baseShininess);
+    EXPECT_FLOAT_EQ(resources.TryGetMaterialInstance(clone)->parameters.parameters.shininess, 17);
+    engine.GetScene().DestroyEntity(cube);
+    EXPECT_EQ(resources.TryGetMaterialInstance(clone), nullptr);
     rendering->GetWorld().renderItems.push_back({}); // host-owned list is not touched by extraction
     extraction->Update(sceneFrame);
     EXPECT_EQ(rendering->GetWorld().renderItems.size(), 1u);

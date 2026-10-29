@@ -18,6 +18,7 @@
 #include <engine/core/Subsystem.hpp>
 #include <engine/core/Surface.hpp>
 #include <engine/scene/Scene.hpp>
+#include <engine/rendering/resources/Material.hpp>
 
 namespace enki {
 class TaskScheduler;  // include <TaskScheduler.h> to use it
@@ -128,6 +129,11 @@ public:
     /// UUID-based scene lookup; path is only a recovery hint.
     [[nodiscard]] ENGINE_API bool LoadScene(const AssetReference& reference, std::string& error);
     [[nodiscard]] ENGINE_API bool SaveScene(const std::filesystem::path& file, std::string& error);
+    /// First edit clones the ready asset instance. Subsequent edits touch only this entity.
+    [[nodiscard]] ENGINE_API bool EditEntityMaterial(entt::entity entity,
+        const std::function<void(MaterialParameters&)>& edit, std::string& error);
+    [[nodiscard]] ENGINE_API bool SetEntityAlbedoTexture(entt::entity entity,
+        AssetHandle<TextureAsset> texture, std::string& error);
     /// Meshes, textures and shaders by name. Kernel state rather than a subsystem: it
     /// exists from construction, is ready as soon as Initialize() has started the
     /// scheduler, and is pumped once per Tick before the subsystems update.

@@ -143,6 +143,12 @@ Set it at runtime through RenderingResourceManager::SetMaterialInstanceParameter
 when the host owns such a buffer. Version 1 covers the current renderer's single
 albedo slot and PBR fields; it does not introduce arbitrary uniforms/texture slots.
 
+For scene mesh renderers, prefer `Engine::EditEntityMaterial` to editing a loaded
+material instance directly. It clones on first edit and keeps the override local
+to the entity; `SetEntityAlbedoTexture` requires a ready scene texture asset.
+These overrides are transient and do not alter authored scene JSON. See
+`docs/scene-assets.md` for the complete API and lifetime contract.
+
 ## Names and paths
 
 JSON is UTF-8 (a BOM is accepted). Version 1 references are logical asset names,

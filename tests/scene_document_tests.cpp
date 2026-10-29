@@ -7,6 +7,76 @@
 #include <filesystem>
 #include <fstream>
 
+namespace {
+struct CountingController final : engine::Controller {
+    explicit CountingController(std::vector<std::string>& events) : events(events) {}
+    void OnCreate() override { events.push_back("create"); }
+    void OnEnable() override { events.push_back("enable"); }
+    void Update(double) override { events.push_back("update"); GetScene().DestroyEntity(GetEntity()); }
+    void OnDisable() override { events.push_back("disable"); }
+    void OnDestroy() override { events.push_back(GetScene().IsValid(GetEntity()) ? "destroy-valid" : "destroy-invalid"); }
+    std::vector<std::string>& events;
+};
+}
+
+TEST(SceneDocument, MissingControllerPreservesAuthoredDataAndCanBeRepaired) {
+    engine::Scene scene;
+    const auto entity = scene.CreateEntity("Repeated");
+    const auto other = scene.CreateEntity("Repeated");
+    scene.AddTag(entity, "animated");
+    scene.AddTag(other, "animated");
+    EXPECT_EQ(scene.FindFirstByName("Repeated"), entity);
+    EXPECT_EQ(scene.FindAllByName("Repeated"), (std::vector<entt::entity>{entity, other}));
+    EXPECT_EQ(scene.FindWithTag("animated").size(), 2u);
+    const engine::ControllerDefinition missing{"game/unknown", 1, true, R"({"key":[1,2]})"};
+    scene.AttachController(entity, missing);
+    engine::SceneDocument captured;
+    std::string error, json;
+    engine::Engine host;
+    ASSERT_TRUE(engine::CaptureSceneDocument(scene, host.GetSceneAssets(), captured, error)) << error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(captured, json, error)) << error;
+    engine::SceneDocument parsed;
+    ASSERT_TRUE(engine::ParseSceneDocument(json, parsed, error)) << error;
+    EXPECT_EQ(parsed.entities[0].controller->data, missing.data);
+    EXPECT_EQ(parsed.entities[0].tags, (std::vector<std::string>{"animated"}));
+    std::vector<std::string> events;
+    ASSERT_TRUE(scene.RegisterController("game/unknown", {1, {}, [&events](std::string_view) {
+        return std::make_unique<CountingController>(events);
+    }}));
+    scene.SetControllersActive(true);
+    scene.UpdateControllers(0); // pause
+    scene.UpdateControllers(0.1);
+    EXPECT_EQ(events, (std::vector<std::string>{"create", "enable", "update", "disable", "destroy-valid"}));
+    EXPECT_FALSE(scene.IsValid(entity));
+
+    ASSERT_TRUE(scene.RegisterController("game/rejecting", {1,
+        [](std::string_view, std::string& error) { error = "invalid payload"; return false; },
+        [&events](std::string_view) { return std::make_unique<CountingController>(events); }}));
+    scene.AttachController(other, {"game/rejecting", 1, false, R"({"repairMe":true})"});
+    ASSERT_NE(scene.GetControllerDefinition(other), nullptr);
+    EXPECT_EQ(scene.GetControllerDefinition(other)->data, R"({"repairMe":true})");
+    EXPECT_EQ(events.size(), 5u); // invalid payload did not construct a live controller
+}
+
+TEST(SceneDocument, BoundsQueriesAccountForParentRotationAndBoundary) {
+    engine::Engine host;
+    engine::Scene& scene = host.GetScene();
+    const auto parent = scene.CreateEntity("parent");
+    scene.GetTransform(parent).position = {3, 0, 0};
+    scene.GetTransform(parent).rotation = DirectX::SimpleMath::Quaternion::CreateFromYawPitchRoll(1.5707963f, 0, 0);
+    const auto target = scene.CreateEntity("target", parent);
+    scene.AddComponent<engine::Bounds>(target, engine::Aabb{{-1, -1, -2}, {1, 1, 2}});
+    const auto hits = engine::QuerySphere(scene, host.GetSceneAssets(), {5, 0, 0}, 0);
+    EXPECT_EQ(hits, (std::vector<entt::entity>{target}));
+    const auto ray = engine::RaycastAll(scene, host.GetSceneAssets(), {0, 0, 0}, {10, 0, 0}, 10);
+    ASSERT_EQ(ray.size(), 1u);
+    EXPECT_EQ(ray[0].entity, target);
+    EXPECT_NEAR(ray[0].distance, 1, 1e-4);
+    EXPECT_TRUE(engine::RaycastAll(scene, host.GetSceneAssets(), {0, 0, 0}, {}, 10).empty());
+    scene.DestroyEntity(parent);
+    EXPECT_TRUE(engine::QuerySphere(scene, host.GetSceneAssets(), {5, 0, 0}, 0).empty());
+}
+
 TEST(SceneDocument, RoundTripAndStructuralValidation) {
     engine::SceneDocument document;
     const std::string cameraId = engine::NewUuid();
@@ -80,6 +150,7 @@ TEST(SceneDocument, CodeOnlySaveLoadAndMalformedFilePreservesScene) {
     const auto id = engine::NewUuid();
     const auto camera = engine.GetScene().CreateEntityWithId(id, "Saved camera");
     engine.GetScene().AddComponent<engine::Camera>(camera);
+    engine.GetScene().AttachController(camera, {"unknown/controller", 3, false, R"({"initial":4})"});
     engine.GetScene().SetActiveCamera(camera);
     const auto file = std::filesystem::temp_directory_path() / ("sri-scene-" + engine::NewUuid() + ".scene.json");
     std::string error;
@@ -87,8 +158,11 @@ TEST(SceneDocument, CodeOnlySaveLoadAndMalformedFilePreservesScene) {
     ASSERT_TRUE(engine.SaveScene(file, error)) << "atomic replacement: " << error;
     engine.GetScene().Clear();
     ASSERT_TRUE(engine.LoadScene(file, error)) << error;
+    EXPECT_NE(error.find("unknown/controller"), std::string::npos);
     EXPECT_TRUE(engine.GetScene().FindById(id) != entt::null);
     EXPECT_EQ(engine.GetScene().GetActiveCamera(), engine.GetScene().FindById(id));
+    ASSERT_NE(engine.GetScene().GetControllerDefinition(engine.GetScene().FindById(id)), nullptr);
+    EXPECT_EQ(engine.GetScene().GetControllerDefinition(engine.GetScene().FindById(id))->data, R"({"initial":4})");
     std::ofstream(file, std::ios::trunc) << R"({"version":1,"entities":[{"bad":true}]})";
     EXPECT_FALSE(engine.LoadScene(file, error));
     EXPECT_EQ(engine.GetScene().GetName(engine.GetScene().FindById(id)), "Saved camera");

@@ -34,7 +34,8 @@ void RenderExtractionSubsystem::Update(const FrameContext&) {
     scene.ForEach<MeshRenderer>([&](entt::entity entity, const MeshRenderer& renderer) {
         const auto mesh = assets.Peek(renderer.mesh);
         const auto instance = assets.Peek(renderer.materialInstance);
-        if (mesh && instance) world.sceneItems.push_back({scene.GetWorldMatrix(entity), mesh->mesh, instance->instance});
+        if (mesh && instance) world.sceneItems.push_back({scene.GetWorldMatrix(entity), mesh->mesh,
+            renderer.materialOverride ? renderer.materialOverride : instance->instance});
     });
 
     if (const NativeSurface& surface = GetEngine().GetSurface(); surface.width && surface.height)

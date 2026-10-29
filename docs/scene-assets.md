@@ -65,9 +65,9 @@ Store a scene under the game root as `<name>.scene.json` and give it its own
 
 The cube and material UUIDs above match checked-in engine sidecars. Entity UUIDs
 are illustrative and unique within the scene. Parent values refer to entity UUIDs
-within the same file. The codec supports Transform, MeshRenderer, Camera and
-DirectionalLight; it rejects unknown fields/components, duplicate keys, cycles,
-invalid numbers, and bad active camera/light selections before scene switching.
+within the same file. The codec also supports `Bounds` and `Controller` (below);
+it rejects unknown fields/components, duplicate keys, cycles, invalid numbers,
+and bad active camera/light selections before scene switching.
 
 ## Code
 
@@ -110,8 +110,67 @@ own requests and tracks dependencies; `LoadScene` evicts only the scene instance
 `RenderWorld::renderItems` remain available for host-owned procedural draws.
 ExampleGame loads `game/scenes/demo.scene.json` at startup for its file-backed
 meshes, materials and sun; its procedural ground, enchanted cube and animated
-point/spot lights remain host-owned. CMake copies the scene, sidecars and source
-assets under the executable's `game/` directory.
+point/spot lights remain host-owned. Their materials and shader dependencies are
+requested from disk; the host supplies procedural geometry, textures and the
+cube's custom constant buffer. Sign and hammer motion use registered native
+scene controllers. CMake copies the scene, sidecars and source assets under the
+executable's `game/` directory.
+
+## Names, tags, controllers, and queries
+
+Names need not be unique. `Scene::FindFirstByName`, `FindAllByName` and
+`FindWithTag` return EnTT handles in depth-first root/child order. Use UUIDs for
+persistent links; check handles after a scene switch. Optional entity `tags` are
+an array of distinct, nonempty strings, for example `"tags": ["animated"]`.
+Use `AddTag`/`RemoveTag` to author them in code.
+
+One optional `Controller` component is supported per entity:
+
+~~~json
+"Controller": { "type": "example/sign", "version": 1, "enabled": true, "data": 0.3 }
+~~~
+
+`data` can be any JSON value; the engine imposes no fixed controller payload
+schema. Register a stable type name, version, optional side-effect-free validator,
+and factory with `Scene::RegisterController` before loading. The validator receives
+the payload as JSON text and can reject it before the old scene is replaced; an
+unavailable type/version or invalid registered payload is diagnosed in `LoadScene`'s
+`error` output **even when it returns true**. That entity still loads; its authored
+controller definition is retained and saved unchanged. Registering a missing type
+later retries its definitions. Invalid structure in the fixed controller envelope
+instead fails the whole parse before switching. No Lua runtime is required.
+
+`OnCreate` runs after attachment, `OnEnable` when the scene is active and the
+controller enabled, `Update(deltaSeconds)` before render extraction on unpaused
+frames, then `OnDisable` and `OnDestroy` before its entity disappears. Mutations
+to controllers and entity deletion requested in callbacks are deferred until after
+callbacks. Controllers added during an update start on the next update. Controller
+runtime fields are never saved: the stored `data` changes only through
+`Scene::SetControllerAuthoredData`; `SetControllerEnabled` authors the enabled bit.
+The JSON payload must remain valid JSON when explicitly changed. Scene switching
+from an update callback is deferred until before render extraction.
+
+An optional `Bounds` component adds local-space min/max arrays for non-rendered
+entities, e.g. `"Bounds": { "min": [-1,-1,-1], "max": [1,1,1] }`.
+`QuerySphere(scene, sceneAssets, center, radius)` and
+`RaycastAll(scene, sceneAssets, origin, direction, maxDistance)` scan mesh AABBs
+when the mesh is ready, otherwise explicit Bounds if present; they transform all
+eight corners into world space, including parents and rotation. Ray direction is
+normalized internally; hits are sorted nearest-first and report nonnegative world
+distance. Both queries include boundary hits. They are broad-phase AABB queries,
+not triangle-accurate tests.
+
+## Per-entity material edits
+
+`Engine::EditEntityMaterial(entity, edit, error)` accepts a callback that changes
+individual fields of a resolved `MaterialParameters` copy. The base material
+instance must be ready. On first success it creates a scene-owned per-entity
+instance clone; later edits reuse it. `SetEntityAlbedoTexture` accepts a ready
+texture handle requested from `GetSceneAssets()`. The clone is released on entity
+or renderer removal, scene switch and shutdown, before the base scene assets.
+`SaveScene` writes only the original authored material-instance UUID, never GPU
+handles or runtime edits. Caller-supplied custom constant buffers remain
+caller-owned.
 
 Build the editor, ExampleGame and tests with the MSVC preset, then run
 `asset_catalog_tests.exe`, `scene_document_tests.exe` and

@@ -27,25 +27,29 @@
     {
       "id": "2db1f1f9-3990-478c-bcf9-5a2c63cad3a2",
       "name": "Sign",
+      "tags": ["animated", "decor"],
       "parent": null,
       "components": {
         "Transform": { "position": [2.5, 1.5, -1], "rotation": [0, -0.1741, 0, 0.9847], "scale": [3, 3, 3] },
         "MeshRenderer": {
           "mesh": { "id": "82f134b1-e44c-4c0e-bb48-ab42b9ff560c", "path": "game/models/Sign/model.obj" },
           "materialInstance": { "id": "36ef3590-fadf-45a8-997c-201c09dd67ef", "path": "game/materials/sign.material-instance.json" }
-        }
+        },
+        "Controller": { "type": "example/sign", "version": 1, "enabled": true, "data": 0.3 }
       }
     },
     {
       "id": "36b2149c-e842-4841-885f-e48eab87f6c5",
       "name": "Hammer",
+      "tags": ["animated", "tool"],
       "parent": null,
       "components": {
         "Transform": { "position": [0, 1, 1.5], "rotation": [0, 0, -0.3193, 0.9476], "scale": [2, 2, 2] },
         "MeshRenderer": {
           "mesh": { "id": "191d0b2e-d99d-4940-9852-e33847768686", "path": "game/models/Hammer/model.obj" },
           "materialInstance": { "id": "76dd8719-fbce-450b-a098-a69e9b129812", "path": "game/materials/hammer.material-instance.json" }
-        }
+        },
+        "Controller": { "type": "example/hammer", "version": 1, "enabled": true, "data": 0.8 }
       }
     },
     {

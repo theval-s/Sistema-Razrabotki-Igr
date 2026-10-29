@@ -1,6 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -15,6 +18,9 @@
 
 #include <engine/engine_export.hpp>
 #include <engine/scene/Components.hpp>
+#include <engine/scene/Controller.hpp>
+#include <engine/scene/SceneQueries.hpp>
+#include <engine/rendering/RenderComponents.hpp>
 
 namespace engine {
 struct Camera;
@@ -22,7 +28,7 @@ struct DirectionalLight;
 struct MeshRenderer;
 
 /// An EnTT registry plus the structure the engine and editor rely on: every
-/// scene entity has a Name, a Transform and a Hierarchy component.
+/// scene entity has a Name, Tags, Transform and Hierarchy component.
 ///
 /// Create, destroy, reparent and modify components through Scene, so required
 /// components and the hierarchy cannot be bypassed by external code.
@@ -38,8 +44,8 @@ public:
 
     Scene(const Scene&) = delete;
     Scene& operator=(const Scene&) = delete;
-    Scene(Scene&&) noexcept;
-    Scene& operator=(Scene&&) noexcept;
+    Scene(Scene&&) = delete; // controller instances retain their owning Scene address
+    Scene& operator=(Scene&&) = delete;
 
     // --- Entities --------------------------------------------------------------
     /// Returns entt::null if `parent` is given but invalid.
@@ -54,6 +60,26 @@ public:
     [[nodiscard]] bool IsValid(entt::entity entity) const;
     [[nodiscard]] std::string_view GetId(entt::entity entity) const;
     [[nodiscard]] entt::entity FindById(std::string_view id) const;
+    [[nodiscard]] entt::entity FindFirstByName(std::string_view name) const;
+    [[nodiscard]] std::vector<entt::entity> FindAllByName(std::string_view name) const;
+    [[nodiscard]] std::vector<entt::entity> FindWithTag(std::string_view tag) const;
+    [[nodiscard]] std::span<const std::string> GetTags(entt::entity entity) const;
+    void AddTag(entt::entity entity, std::string_view tag);
+    void RemoveTag(entt::entity entity, std::string_view tag);
+
+    [[nodiscard]] bool RegisterController(std::string_view type, ControllerRegistration registration);
+    [[nodiscard]] bool ValidateController(const ControllerDefinition& definition, std::string& error) const;
+    void AttachController(entt::entity entity, ControllerDefinition definition);
+    void RemoveController(entt::entity entity);
+    void SetControllerEnabled(entt::entity entity, bool enabled);
+    [[nodiscard]] const ControllerDefinition* GetControllerDefinition(entt::entity entity) const;
+    // Explicit authoring operation; controller runtime mutations do not change saved data.
+    void SetControllerAuthoredData(entt::entity entity, std::string data);
+    void SetControllersActive(bool active);
+    void UpdateControllers(double deltaSeconds);
+    [[nodiscard]] bool IsInControllerCallback() const noexcept { return inControllerCallback_; }
+    void SetMaterialOverrideReleaser(std::function<void(MaterialInstanceHandle)> releaser);
+    void ReleaseMaterialOverride(entt::entity entity);
     void SetActiveCamera(entt::entity entity);
     [[nodiscard]] entt::entity GetActiveCamera() const;
     void SetDirectionalLight(entt::entity entity);
@@ -74,6 +100,7 @@ public:
     bool RemoveComponent(entt::entity entity) {
         static_assert(!IsRequiredComponent<T>, "required components are managed by Scene");
         if (!IsValid(entity) || !registry_.all_of<T>(entity)) return false;
+        if constexpr (std::is_same_v<T, MeshRenderer>) ReleaseMaterialOverride(entity);
         registry_.remove<T>(entity);
         if constexpr (!IsSerializableComponent<T>) {
             if (auto it = unsupported_.find(entity); it != unsupported_.end()) {
@@ -141,18 +168,35 @@ public:
 private:
     template <class T>
     static constexpr bool IsRequiredComponent = std::is_same_v<T, Name> || std::is_same_v<T, Transform> ||
-                                                std::is_same_v<T, Hierarchy> || std::is_same_v<T, EntityId>;
+                                                 std::is_same_v<T, Hierarchy> || std::is_same_v<T, EntityId> ||
+                                                 std::is_same_v<T, Tags>;
     template <class T>
     static constexpr bool IsSerializableComponent = std::is_same_v<T, MeshRenderer> ||
-        std::is_same_v<T, Camera> || std::is_same_v<T, DirectionalLight>;
+        std::is_same_v<T, Camera> || std::is_same_v<T, DirectionalLight> || std::is_same_v<T, Bounds>;
     /// Logs and returns false for an invalid entity. `caller` names the public function.
     [[nodiscard]] bool CheckEntity(entt::entity entity, std::string_view caller) const;
     void Detach(entt::entity entity);
     void Attach(entt::entity entity, entt::entity parent);
+    void Visit(const std::function<void(entt::entity)>& callback) const;
+    void DrainControllerOperations();
+    void DestroyController(entt::entity entity);
+
+    struct ControllerSlot {
+        ControllerDefinition definition;
+        std::unique_ptr<Controller> instance;
+        bool active = false;
+    };
 
     entt::registry registry_;
     std::unordered_map<std::string, entt::entity> ids_;
     std::unordered_map<entt::entity, std::unordered_set<entt::id_type>> unsupported_;
+    std::unordered_map<std::string, ControllerRegistration> controllerTypes_;
+    std::unordered_map<entt::entity, ControllerSlot> controllers_;
+    std::vector<std::function<void()>> pendingControllerOperations_;
+    std::function<void(MaterialInstanceHandle)> materialOverrideReleaser_;
+    bool controllersActive_ = false;
+    bool inControllerCallback_ = false;
+    std::size_t destructionDepth_ = 0;
     std::string activeCameraId_;
     std::string directionalLightId_;
     std::vector<entt::entity> roots_;

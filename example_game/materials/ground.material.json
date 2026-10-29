@@ -1,0 +1,6 @@
+{
+  "version": 2,
+  "shaderFile": { "id": "4f860052-e658-479b-bf3a-4e0143f4881f", "path": "game/shaders/GroundMaterial.hlsl" },
+  "hooks": ["GBufferVS", "GBufferPS", "ShadowVS"],
+  "defaults": { "specularColor": [0.08, 0.08, 0.08], "shininess": 24 }
+}
