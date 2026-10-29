@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <fstream>
 #include <functional>
 #include <random>
 #include <set>
@@ -13,12 +12,15 @@
 #include <nlohmann/json.hpp>
 #include <stduuid/uuid.h>
 
+#include <engine/core/FileSystem.hpp>
 #include <engine/core/ResourceID.hpp>
 #include <engine/core/PathUtils.hpp>
 
 namespace engine {
 namespace {
 using Json = nlohmann::json;
+
+constexpr std::uintmax_t MaxMetadataSize = 1024 * 1024;
 
 std::string_view KindName(CatalogAssetKind kind) {
     switch (kind) {
@@ -30,20 +32,6 @@ std::string_view KindName(CatalogAssetKind kind) {
     case CatalogAssetKind::Scene: return "scene";
     }
     return {};
-}
-
-std::optional<CatalogAssetKind> KindForFile(const std::filesystem::path& path) {
-    const std::string name = NormalizeName(ToGenericUtf8(path.filename()));
-    if (name.ends_with(".material-instance.json")) return CatalogAssetKind::MaterialInstance;
-    if (name.ends_with(".material.json")) return CatalogAssetKind::Material;
-    if (name.ends_with(".scene.json")) return CatalogAssetKind::Scene;
-    const std::string ext = NormalizeName(ToGenericUtf8(path.extension()));
-    if (ext == ".hlsl") return CatalogAssetKind::Shader;
-    if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tif" ||
-        ext == ".tiff" || ext == ".dds" || ext == ".bmp") return CatalogAssetKind::Texture;
-    if (ext == ".fbx" || ext == ".gltf" || ext == ".glb" || ext == ".obj" ||
-        ext == ".dae" || ext == ".blend" || ext == ".ply") return CatalogAssetKind::Mesh;
-    return std::nullopt;
 }
 
 Json Read(std::string_view text) {
@@ -119,21 +107,21 @@ AssetMetadata MetadataFromJson(const Json& j) {
     return meta;
 }
 
-bool ReadFile(const std::filesystem::path& path, std::string& text, std::string& error) {
-    std::ifstream input(path, std::ios::binary | std::ios::ate);
-    if (!input || input.tellg() <= 0 || input.tellg() > 1024 * 1024) {
-        error = "cannot read metadata (size limit 1 MiB): " + ToGenericUtf8(path);
-        return false;
-    }
-    text.resize(static_cast<std::size_t>(input.tellg()));
-    input.seekg(0);
-    if (!input.read(text.data(), static_cast<std::streamsize>(text.size()))) {
-        error = "cannot read metadata: " + ToGenericUtf8(path);
-        return false;
-    }
-    return true;
-}
 } // namespace
+
+std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& path) {
+    const std::string name = NormalizeName(ToGenericUtf8(path.filename()));
+    if (name.ends_with(".material-instance.json")) return CatalogAssetKind::MaterialInstance;
+    if (name.ends_with(".material.json")) return CatalogAssetKind::Material;
+    if (name.ends_with(".scene.json")) return CatalogAssetKind::Scene;
+    const std::string ext = NormalizeName(ToGenericUtf8(path.extension()));
+    if (ext == ".hlsl") return CatalogAssetKind::Shader;
+    if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tif" ||
+        ext == ".tiff" || ext == ".dds" || ext == ".bmp") return CatalogAssetKind::Texture;
+    if (ext == ".fbx" || ext == ".gltf" || ext == ".glb" || ext == ".obj" ||
+        ext == ".dae" || ext == ".blend" || ext == ".ply") return CatalogAssetKind::Mesh;
+    return std::nullopt;
+}
 
 bool IsUuid(std::string_view text) noexcept {
     if (text.size() != 36) return false;
@@ -195,6 +183,34 @@ bool SerializeAssetMetadata(const AssetMetadata& value, std::string& json, std::
     } catch (const std::exception& e) { error = e.what(); return false; }
 }
 
+std::filesystem::path AssetMetadataPath(const std::filesystem::path& source) {
+    auto sidecar = source;
+    sidecar += ".meta";
+    return sidecar;
+}
+
+bool ReadAssetMetadata(const std::filesystem::path& source, AssetMetadata& value, std::string& error) {
+    const auto sidecar = AssetMetadataPath(source);
+    std::string text;
+    if (!ReadTextFile(sidecar, text, error, MaxMetadataSize)) return false;
+    if (!ParseAssetMetadata(text, value, error)) {
+        error = ToGenericUtf8(sidecar) + ": " + error;
+        return false;
+    }
+    return true;
+}
+
+bool WriteAssetMetadata(const std::filesystem::path& source, const AssetMetadata& value, std::string& error) {
+    const auto kind = CatalogKindForFile(source);
+    if (!kind || *kind != value.kind) {
+        error = "metadata kind does not match the file type: " + ToGenericUtf8(source);
+        return false;
+    }
+    std::string json;
+    if (!SerializeAssetMetadata(value, json, error)) return false;
+    return CreateNewFile(AssetMetadataPath(source), json + '\n', error);
+}
+
 bool ParseAssetReference(std::string_view json, AssetReference& value, std::string& error) {
     return Decode(json, value, error, ReferenceFromJson);
 }
@@ -220,10 +236,8 @@ bool AssetCatalog::Scan(const std::filesystem::path& gameRoot, const std::filesy
             if (!std::filesystem::exists(root)) continue;
             for (const auto& file : std::filesystem::recursive_directory_iterator(root)) {
                 if (!file.is_regular_file()) continue;
-                if (KindForFile(file.path())) {
-                    auto sidecar = file.path();
-                    sidecar += ".meta";
-                    if (!std::filesystem::is_regular_file(sidecar) && missingError.empty())
+                if (CatalogKindForFile(file.path())) {
+                    if (!std::filesystem::is_regular_file(AssetMetadataPath(file.path())) && missingError.empty())
                         missingError = "missing metadata: " + ToGenericUtf8(file.path());
                 }
                 if (file.path().extension() != ".meta") continue;
@@ -231,15 +245,10 @@ bool AssetCatalog::Scan(const std::filesystem::path& gameRoot, const std::filesy
                 source.replace_extension();
                 if (!std::filesystem::is_regular_file(source))
                     throw std::runtime_error("orphaned metadata: " + ToGenericUtf8(file.path()));
-                const auto kind = KindForFile(source);
+                const auto kind = CatalogKindForFile(source);
                 if (!kind) throw std::runtime_error("metadata on unsupported file: " + ToGenericUtf8(source));
-                std::string text;
-                if (!ReadFile(file.path(), text, error)) return false;
                 AssetMetadata meta;
-                if (!ParseAssetMetadata(text, meta, error)) {
-                    error = ToGenericUtf8(file.path()) + ": " + error;
-                    return false;
-                }
+                if (!ReadAssetMetadata(source, meta, error)) return false;
                 if (meta.kind != *kind) throw std::runtime_error("metadata kind mismatch: " + ToGenericUtf8(file.path()));
                 const std::string logical = prefix + "/" + ToGenericUtf8(source.lexically_relative(root));
                 const std::string key = NormalizeName(logical);
@@ -287,18 +296,15 @@ bool GenerateMissingAssetMetadata(const std::filesystem::path& root, std::size_t
         if (!std::filesystem::is_directory(root)) throw std::runtime_error("not an asset directory: " + ToGenericUtf8(root));
         for (const auto& file : std::filesystem::recursive_directory_iterator(root)) {
             if (!file.is_regular_file()) continue;
-            const auto kind = KindForFile(file.path());
+            const auto kind = CatalogKindForFile(file.path());
             if (!kind) continue;
-            auto sidecar = file.path();
-            sidecar += ".meta";
+            const auto sidecar = AssetMetadataPath(file.path());
             if (std::filesystem::exists(sidecar)) continue;
-            std::string json;
-            if (!SerializeAssetMetadata({NewUuid(), *kind}, json, error)) return false;
-            // Do not overwrite metadata if another process created it while scanning.
-            if (std::filesystem::exists(sidecar)) continue;
-            std::ofstream out(sidecar, std::ios::binary);
-            out << json << '\n';
-            if (!out) throw std::runtime_error("cannot create metadata: " + ToGenericUtf8(sidecar));
+            if (!WriteAssetMetadata(file.path(), {NewUuid(), *kind}, error)) {
+                // Another process created it while scanning: keep theirs.
+                if (std::filesystem::exists(sidecar)) continue;
+                return false;
+            }
             ++count;
         }
     } catch (const std::exception& e) { error = e.what(); return false; }

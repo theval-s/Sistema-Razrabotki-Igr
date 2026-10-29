@@ -4,6 +4,7 @@
 #include <deque>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -83,6 +84,12 @@ public:
     AssetHandle<MaterialAsset> RequestMaterial(const AssetReference& reference);
     AssetHandle<MaterialInstanceAsset> RequestMaterialInstance(const AssetReference& reference);
     [[nodiscard]] const AssetCatalog& GetCatalog() const noexcept { return catalog_; }
+    /// Rebuilds the catalog from disk.
+    /// Importer jobs read the catalog, so they are swapped in update once none read.
+    /// A failed scan keeps the previous entries, false and `error` then say why
+    bool RescanCatalog(std::string& error);
+    /// Why the last scan was not clean; empty when it was.
+    [[nodiscard]] const std::string& GetCatalogError() const noexcept { return catalogError_; }
     [[nodiscard]] std::optional<AssetReference> ReferenceFor(AssetHandle<MeshAsset> handle) const;
     [[nodiscard]] std::optional<AssetReference> ReferenceFor(AssetHandle<MaterialInstanceAsset> handle) const;
     /// Ready only after the JSON, declared shaders and referenced assets are ready.
@@ -188,6 +195,9 @@ private:
     AssetTable<MaterialAsset> materials_;
     AssetTable<MaterialInstanceAsset> materialInstances_;
     AssetCatalog catalog_;
+    /// A rescanned catalog waiting for the running importer jobs to finish.
+    std::optional<AssetCatalog> pendingCatalog_;
+    std::string catalogError_;
     std::array<std::unique_ptr<IAssetImporter>, static_cast<size_t>(AssetKind::Count)> importers_{};
     /// Queued CPU-phase jobs. Touched only from the main thread, so no lock is needed:
     /// workers see just each job's own fields.

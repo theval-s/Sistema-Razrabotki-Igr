@@ -101,9 +101,8 @@ AssetSystem::AssetSystem(Engine& engine) : engine_(engine) {}
 AssetSystem::~AssetSystem() = default;
 
 void AssetSystem::Initialize() {
-    std::string catalogError;
-    if (!catalog_.Scan(AssetPathResolver::GetGameRoot(), AssetPathResolver::GetRoot() / "engine", catalogError)) {
-        spdlog::error("AssetSystem: cannot build asset catalog: {}", catalogError);
+    if (!catalog_.Scan(AssetPathResolver::GetGameRoot(), AssetPathResolver::GetRoot() / "engine", catalogError_)) {
+        spdlog::error("AssetSystem: cannot build asset catalog: {}", catalogError_);
     }
     importers_[static_cast<size_t>(AssetKind::Mesh)] = std::make_unique<AssimpMeshImporter>();
     importers_[static_cast<size_t>(AssetKind::Texture)] = std::make_unique<TextureImporter>();
@@ -124,6 +123,24 @@ void AssetSystem::Update(const FrameContext& frame) {
             inFlight_.push_back(std::move(job));
         }
     }
+    // Jobs that are complete but wait for dependencies are only touched here, on this thread.
+    if (pendingCatalog_ && std::ranges::all_of(inFlight_, [](const auto& job) { return job->GetIsComplete(); })) {
+        catalog_ = std::move(*pendingCatalog_);
+        pendingCatalog_.reset();
+    }
+}
+
+bool AssetSystem::RescanCatalog(std::string& error) {
+    AssetCatalog next = pendingCatalog_ ? *pendingCatalog_ : catalog_;
+    const bool clean = next.Scan(AssetPathResolver::GetGameRoot(), AssetPathResolver::GetRoot() / "engine", error);
+    catalogError_ = error;
+    if (std::ranges::all_of(inFlight_, [](const auto& job) { return job->GetIsComplete(); })) {
+        catalog_ = std::move(next);
+        pendingCatalog_.reset();
+    } else {
+        pendingCatalog_ = std::move(next);
+    }
+    return clean;
 }
 
 void AssetSystem::Shutdown() {

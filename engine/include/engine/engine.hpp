@@ -148,6 +148,9 @@ public:
     /// The active scene's isolated asset registry. It is drained and GPU-evicted
     /// on a scene switch; GetAssets() is for non-scene/host-owned assets.
     [[nodiscard]] ENGINE_API AssetSystem& GetSceneAssets() noexcept;
+    /// Rescans the catalogs of both registries after asset files were added, moved or removed
+    /// on disk. False, with the reason, when the scan was not clean (AssetSystem::RescanCatalog).
+    [[nodiscard]] ENGINE_API bool RescanAssetCatalogs(std::string& error);
     /// enkiTS scheduler, running between Initialize() and Shutdown().
     /// The calling (main) thread takes part in WaitforTask().
     [[nodiscard]] ENGINE_API enki::TaskScheduler& GetTaskScheduler() noexcept;

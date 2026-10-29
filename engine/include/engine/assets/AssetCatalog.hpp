@@ -70,6 +70,16 @@ struct CatalogEntry {
 [[nodiscard]] ENGINE_API bool ParseAssetReference(std::string_view json, AssetReference& value, std::string& error);
 [[nodiscard]] ENGINE_API bool SerializeAssetReference(const AssetReference& value, std::string& json, std::string& error);
 
+// <source>.meta
+[[nodiscard]] ENGINE_API std::filesystem::path AssetMetadataPath(const std::filesystem::path& source);
+// Reads and validates the sidecar of `source`. On failure `value` is unchanged.
+[[nodiscard]] ENGINE_API bool ReadAssetMetadata(const std::filesystem::path& source, AssetMetadata& value,
+                                                std::string& error);
+// Creates the sidecar of `source`. Fails if one already exists or `value.kind` is not the
+// kind CatalogKindForFile() gives the source.
+[[nodiscard]] ENGINE_API bool WriteAssetMetadata(const std::filesystem::path& source, const AssetMetadata& value,
+                                                 std::string& error);
+
 // Sidecars are adjacent to their source: model.obj.meta, stone.material.json.meta.
 // Only recognized source types need metadata; unrelated files are ignored.
 // Missing sidecars are reported while valid entries remain usable. Duplicate
@@ -89,6 +99,10 @@ private:
     std::unordered_map<AssetUuid, CatalogEntry, AssetUuidHash> entries_;
     std::unordered_map<std::string, AssetUuid> paths_;
 };
+
+// The kind a source file is catalogued as, from its (double) extension; empty for
+// files that need no metadata.
+[[nodiscard]] ENGINE_API std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& path);
 
 // Explicit authoring operation: creates metadata only for recognized files
 // lacking it. Existing sidecars are never rewritten, including invalid ones.

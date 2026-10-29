@@ -210,6 +210,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/rendering/RenderComponents.hpp
     include/engine/rendering/RenderExtractionSubsystem.hpp
     include/engine/assets/AssetCommon.hpp
+    include/engine/assets/AssetAuthoring.hpp
     include/engine/assets/AssetCatalog.hpp
     include/engine/assets/AssetEvents.hpp
     include/engine/assets/AssetHandle.hpp
@@ -241,6 +242,7 @@ set(ENGINE_CORE_SOURCES
     src/input/InputSubsystem.cpp
     src/rendering/RenderExtractionSubsystem.cpp
     src/assets/AssetPathResolver.cpp
+    src/assets/AssetAuthoring.cpp
     src/assets/AssetCatalog.cpp
     src/assets/AssetSystem.cpp
     src/assets/AssimpMeshImporter.cpp

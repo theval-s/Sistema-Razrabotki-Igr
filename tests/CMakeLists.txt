@@ -4,6 +4,11 @@ add_executable(asset_catalog_tests asset_catalog_tests.cpp)
 target_link_libraries(asset_catalog_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(asset_catalog_tests)
 
+add_executable(asset_authoring_tests asset_authoring_tests.cpp)
+target_link_libraries(asset_authoring_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
+set_project_warnings(asset_authoring_tests)
+set_target_properties(asset_authoring_tests PROPERTIES FOLDER tests)
+
 add_executable(file_system_tests file_system_tests.cpp)
 target_link_libraries(file_system_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(file_system_tests)

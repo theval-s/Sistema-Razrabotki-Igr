@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
-#include <fstream>
 #include <set>
 #include <optional>
 #include <unordered_map>
@@ -13,6 +12,7 @@
 
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
+#include <engine/core/FileSystem.hpp>
 #include <engine/core/ResourceID.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
@@ -23,33 +23,6 @@ namespace engine {
 
 //TODO: Log system 
 
-namespace {
-// path to file, what to write, `what` names the file in error messages.
-bool WriteFileReplacing(const std::filesystem::path& file, const std::string& text,
-                        std::string_view what, std::string& error) {
-    const auto absolute = AssetPathResolver::ToAbsolute(file);
-    auto temporary = absolute;
-    temporary += ".tmp." + NewUuid();
-    {
-        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-        if (!output || !(output << text << '\n')) {
-            error = "cannot write " + std::string(what) + ": " + ToUtf8(temporary);
-            std::error_code ignored;
-            std::filesystem::remove(temporary, ignored);
-            return false;
-        }
-    }
-    std::error_code ec;
-    std::filesystem::rename(temporary, absolute, ec);
-    if (ec) {
-        error = "cannot replace " + std::string(what) + ": " + ToUtf8(absolute) + ": " + ec.message();
-        std::filesystem::remove(temporary, ec);
-        return false;
-    }
-    error.clear();
-    return true;
-}
-} // namespace
 
 struct Engine::Impl {
     struct SceneRuntimeResources {
@@ -353,9 +326,8 @@ bool Engine::LoadScene(const std::filesystem::path& file, std::string& error) {
     }
     if (!IsInitialized()) { error = "engine must be initialized before loading a scene"; return false; }
     const auto absolute = AssetPathResolver::ToAbsolute(file);
-    std::ifstream input(absolute, std::ios::binary);
-    if (!input) { error = "cannot open scene file: " + ToUtf8(absolute); return false; }
-    const std::string text(std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{});
+    std::string text;
+    if (!ReadTextFile(absolute, text, error)) return false;
     SceneDocument document;
     if (!ParseSceneDocument(text, document, error)) return false;
 
@@ -398,7 +370,7 @@ bool Engine::SaveScene(const std::filesystem::path& file, std::string& error) {
     if (!CaptureSceneDocument(impl_->scene, *impl_->sceneAssets, document, error)) return false;
     std::string text;
     if (!SerializeSceneDocument(document, text, error)) return false;
-    return WriteFileReplacing(file, text, "scene file", error);
+    return WriteFileAtomic(AssetPathResolver::ToAbsolute(file), text + '\n', error);
 }
 
 bool Engine::SaveGame(const std::filesystem::path& file, std::string& error) {
@@ -444,22 +416,20 @@ bool Engine::SaveGame(const std::filesystem::path& file, std::string& error) {
         }
     std::string text;
     if (!SerializeGameDocument(game, text, error)) return false;
-    return WriteFileReplacing(file, text, "save game", error);
+    return WriteFileAtomic(AssetPathResolver::ToAbsolute(file), text + '\n', error);
 }
 
 bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
     if (!IsInitialized()) { error = "engine must be initialized before loading a save game"; return false; }
     if (impl_->scene.IsInControllerCallback()) { error = "load game outside controller callbacks"; return false; }
-    std::ifstream input(AssetPathResolver::ToAbsolute(file), std::ios::binary);
-    if (!input) { error = "cannot open save game: " + ToUtf8(file); return false; }
-    const std::string text(std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{});
+    std::string text;
+    if (!ReadTextFile(AssetPathResolver::ToAbsolute(file), text, error)) return false;
     GameDocument game;
     if (!ParseGameDocument(text, game, error)) return false;
     const auto* entry = impl_->sceneAssets->GetCatalog().Find(game.scene.id, CatalogAssetKind::Scene);
     if (!entry) { error = "missing scene UUID in save game: " + game.scene.id.ToString(); return false; }
-    std::ifstream sceneInput(entry->source, std::ios::binary);
-    if (!sceneInput) { error = "cannot open referenced scene"; return false; }
-    const std::string sceneText(std::istreambuf_iterator<char>{sceneInput}, std::istreambuf_iterator<char>{});
+    std::string sceneText;
+    if (!ReadTextFile(entry->source, sceneText, error)) return false;
     SceneDocument base;
     if (!ParseSceneDocument(sceneText, base, error)) return false;
     std::set<std::string> authored, spawned, deleted(game.deleted.begin(), game.deleted.end());
@@ -595,6 +565,15 @@ AssetSystem& Engine::GetAssets() noexcept {
 
 AssetSystem& Engine::GetSceneAssets() noexcept {
     return *impl_->sceneAssets;
+}
+
+bool Engine::RescanAssetCatalogs(std::string& error) {
+    // Same roots, so the same diagnostics: report one of them.
+    std::string hostError;
+    const bool host = impl_->assets->RescanCatalog(hostError);
+    const bool scene = impl_->sceneAssets->RescanCatalog(error);
+    if (error.empty()) error = std::move(hostError);
+    return host && scene;
 }
 
 enki::TaskScheduler& Engine::GetTaskScheduler() noexcept {
