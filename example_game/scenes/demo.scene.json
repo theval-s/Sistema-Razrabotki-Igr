@@ -17,8 +17,12 @@
       "name": "Ground",
       "parent": null,
       "components": {
-        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-        "Bounds": { "min": [-15, -0.01, -15], "max": [15, 0.01, 15] }
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [30, 1, 30] },
+        "MeshRenderer": {
+          "mesh": { "id": "96002d7a-ba76-4a0b-a5b9-60dc10b86cd2", "path": "engine/primitives/plane/model.obj" },
+          "materialInstance": { "id": "966cd1ab-72b2-46dc-84dc-8e81b984a0ac", "path": "game/materials/ground.material-instance.json" }
+        },
+        "Bounds": { "min": [-0.5, -0.01, -0.5], "max": [0.5, 0.01, 0.5] }
       }
     },
     {

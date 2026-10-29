@@ -1,4 +1,7 @@
 {
   "version": 2,
-  "material": { "id": "2ec793f2-1eba-468f-8ce8-13b99899ac84", "path": "game/materials/ground.material.json" }
+  "material": { "id": "2ec793f2-1eba-468f-8ce8-13b99899ac84", "path": "game/materials/ground.material.json" },
+  "parameters": {
+    "albedoTexture": { "id": "e93eba7e-828c-4d3c-8b8b-7dcc58a5508b", "path": "game/materials/ground.png" }
+  }
 }

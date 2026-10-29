@@ -41,48 +41,6 @@ struct alignas(16) EnchantmentBufferData {
     float padding[3]{};
 };
 
-engine::MeshHandle MakeGroundMesh(engine::RenderingResourceManager& resourceManager) {
-    constexpr float extent = 15.0f;
-    constexpr float repetitions = 12.0f;
-    const Vector3 normal = Vector3::Up;
-    engine::ugly_utils::RawMesh mesh{
-        .vertexes = {
-            {Vector4{-extent, 0.0f, extent, 1.0f}, normal, Vector2{0.0f, 0.0f}},
-            {Vector4{extent, 0.0f, extent, 1.0f}, normal, Vector2{repetitions, 0.0f}},
-            {Vector4{extent, 0.0f, -extent, 1.0f}, normal, Vector2{repetitions, repetitions}},
-            {Vector4{-extent, 0.0f, -extent, 1.0f}, normal, Vector2{0.0f, repetitions}}
-        },
-        // Match CreateCube's clockwise front-face convention (viewed from above).
-        .indicies = {0, 2, 1, 2, 0, 3}
-    };
-    return engine::ugly_utils::FromRawMesh(resourceManager, mesh);
-}
-
-engine::TextureHandle MakeCheckerTexture(engine::RenderingResourceManager& resourceManager) {
-    constexpr uint32_t size = 128;
-    constexpr uint32_t cellSize = 16;
-    std::vector<uint32_t> pixels(size * size);
-    for (uint32_t y = 0; y < size; ++y) {
-        for (uint32_t x = 0; x < size; ++x) {
-            const bool bright = ((x / cellSize) + (y / cellSize)) % 2 == 0;
-            pixels[y * size + x] = bright ? 0xff70766fu : 0xff343a36u;
-        }
-    }
-
-    const D3D11_SUBRESOURCE_DATA data{
-        .pSysMem = pixels.data(),
-        .SysMemPitch = size * static_cast<uint32_t>(sizeof(uint32_t)),
-        .SysMemSlicePitch = 0
-    };
-    const engine::TextureDesc description{
-        .width = size,
-        .height = size,
-        .format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
-        .usage = engine::TextureUsage::ShaderResource
-    };
-    return resourceManager.CreateTexture(description, std::span<const D3D11_SUBRESOURCE_DATA>{&data, 1});
-}
-
 engine::TextureHandle MakeSolidTexture(engine::RenderingResourceManager& resourceManager, uint32_t color) {
     const D3D11_SUBRESOURCE_DATA data{
         .pSysMem = &color,
@@ -320,7 +278,6 @@ public:
             }
         };
 
-        groundTexture_ = MakeCheckerTexture(resources);
         enchantmentBuffer_ = resources.CreateConstantBuffer<EnchantmentBufferData>();
         lightMarkerMesh_ = engine::ugly_utils::FromRawMesh(
             resources, engine::ugly_utils::CreateSphere(0.15f));
@@ -330,11 +287,6 @@ public:
             MakeSolidTexture(resources, 0xff59ff33u),
             MakeSolidTexture(resources, 0xffff26d9u)
         };
-        objects_.push_back({
-            .transform = Matrix::Identity,
-            .mesh = MakeGroundMesh(resources),
-            .materialInstance = {}
-        });
         cubeIndex_ = objects_.size();
         objects_.push_back({
             .transform = Matrix::CreateTranslation(0.0f, 3.8f, 0.0f),
@@ -406,7 +358,6 @@ public:
             if (!hits.empty()) spdlog::info("Ray hit {} at {}", GetEngine().GetScene().GetName(hits[0].entity), hits[0].distance);
         }
         const float time = static_cast<float>(frame.simulationTimeSeconds);
-        if (!objects_[0].materialInstance) objects_[0].materialInstance = MakeInstance(groundInstance_, groundTexture_);
         if (!objects_[cubeIndex_].materialInstance)
             objects_[cubeIndex_].materialInstance = MakeInstance(enchantedInstance_, {}, enchantmentBuffer_);
         for (size_t i = 0; i < lightMarkerTextures_.size(); ++i)
@@ -427,8 +378,6 @@ public:
 private:
     void RequestSceneMaterials() {
         auto& assets = GetEngine().GetSceneAssets();
-        groundInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"966cd1ab-72b2-46dc-84dc-8e81b984a0ac",
-            "game/materials/ground.material-instance.json"});
         enchantedInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"b9e1fbd1-dfa0-416b-857e-8823b736da81",
             "game/materials/enchanted.material-instance.json"});
         markerInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"70da8a2f-d0b1-40fd-bd45-7ad5e610e855",
@@ -467,8 +416,6 @@ private:
     HWND window_ = nullptr;
     engine::RenderingSubsystem* rendering_ = nullptr;
 
-    engine::TextureHandle groundTexture_;
-    engine::AssetHandle<engine::MaterialInstanceAsset> groundInstance_;
     engine::AssetHandle<engine::MaterialInstanceAsset> enchantedInstance_;
     engine::AssetHandle<engine::MaterialInstanceAsset> markerInstance_;
     bool sceneMaterialsRequested_ = false;

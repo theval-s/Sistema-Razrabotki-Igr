@@ -41,6 +41,8 @@ struct DirectionalLight {
 /// Asset names of the primitives shipped in engine/primitives (copied next to the executable).
 namespace BuiltinAssets {
 inline constexpr const char* CubeMesh = "engine/primitives/cube";
+/// 1x1 in XZ, facing +Y.
+inline constexpr const char* PlaneMesh = "engine/primitives/plane";
 inline constexpr const char* WhiteTexture = "engine/primitives/white";
 inline constexpr const char* DefaultMaterialInstance = "engine/primitives/default.material-instance.json";
 }  // namespace BuiltinAssets
