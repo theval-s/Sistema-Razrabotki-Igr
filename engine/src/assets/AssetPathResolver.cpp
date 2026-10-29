@@ -10,6 +10,7 @@
 #include <utility>
 
 #include <engine/core/ResourceID.hpp>
+#include <engine/core/PathUtils.hpp>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -51,8 +52,7 @@ bool HasExtension(const std::filesystem::path& path, const wchar_t* extension) {
 }
 
 std::string NormalizedUtf8(const std::filesystem::path& path) {
-    const std::u8string text = path.lexically_normal().generic_u8string();
-    return NormalizeName(std::string(text.begin(), text.end()));
+    return NormalizeName(ToGenericUtf8(path.lexically_normal()));
 }
 
 /// "<prefix>/<path relative to root>", empty when `path` is not inside `root`.
@@ -110,20 +110,20 @@ std::filesystem::path AssetPathResolver::DefaultPath(const std::string_view name
         // Catalog entries name the physical source file; legacy shader names omit
         // the shaders/ segment. Both forms must resolve to the same source.
         if (name.starts_with("engine/shaders/") || name.starts_with("game/shaders/")) {
-            return Utf8Path(name);
+            return FromUtf8(name);
         }
         if (name.starts_with("engine/")) {
-            return std::filesystem::path("engine") / "shaders" / Utf8Path(name.substr(7));
+            return std::filesystem::path("engine") / "shaders" / FromUtf8(name.substr(7));
         }
         if (name.starts_with("game/")) {
-            return std::filesystem::path("game") / "shaders" / Utf8Path(name.substr(5));
+            return std::filesystem::path("game") / "shaders" / FromUtf8(name.substr(5));
         }
         if (name.starts_with("shaders/")) {
-            return std::filesystem::path("engine") / "shaders" / Utf8Path(name.substr(8));
+            return std::filesystem::path("engine") / "shaders" / FromUtf8(name.substr(8));
         }
-        return std::filesystem::path("game") / "shaders" / Utf8Path(name);
+        return std::filesystem::path("game") / "shaders" / FromUtf8(name);
     }
-    return Utf8Path(name);
+    return FromUtf8(name);
 }
 
 const std::filesystem::path& AssetPathResolver::GetRoot() {

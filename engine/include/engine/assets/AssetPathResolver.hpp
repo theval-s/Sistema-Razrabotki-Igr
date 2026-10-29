@@ -19,9 +19,6 @@ namespace engine {
 /// Out of line, so Engine.dll and its host share one game root.
 class ENGINE_API AssetPathResolver {
 public:
-    [[nodiscard]] static std::filesystem::path Utf8Path(std::string_view name) {
-        return std::filesystem::path(std::u8string(name.begin(), name.end()));
-    }
     /// Mesh assets address a folder that holds model.<ext> (and optionally texture.png);
     /// a name ending in a model extension addresses that file directly. Assimp chooses the
     /// reader from the extension, so the file format itself is not fixed to .obj.

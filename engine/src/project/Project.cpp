@@ -7,21 +7,12 @@
 
 #include <nlohmann/json.hpp>
 
+#include <engine/core/PathUtils.hpp>
+
 namespace engine {
 namespace {
 
 constexpr int FormatVersion = 1;
-
-// god I hate encodings
-// and I hope internet got it right
-std::string ToUtf8(const std::filesystem::path& path) {
-    const std::u8string text = path.u8string();
-    return {text.begin(), text.end()};
-}
-
-std::filesystem::path FromUtf8(const std::string_view text) {
-    return std::u8string(text.begin(), text.end());
-}
 
 bool IsValidName(const std::string_view name) {
     return !name.empty() && name.find_first_of("<>:\"/\\|?*") == std::string_view::npos &&

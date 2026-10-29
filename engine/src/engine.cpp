@@ -14,6 +14,7 @@
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/core/ResourceID.hpp>
+#include <engine/core/PathUtils.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/scene/SceneDocument.hpp>
 #include <engine/scene/GameDocument.hpp>
@@ -32,7 +33,7 @@ bool WriteFileReplacing(const std::filesystem::path& file, const std::string& te
     {
         std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
         if (!output || !(output << text << '\n')) {
-            error = "cannot write " + std::string(what) + ": " + temporary.string();
+            error = "cannot write " + std::string(what) + ": " + ToUtf8(temporary);
             std::error_code ignored;
             std::filesystem::remove(temporary, ignored);
             return false;
@@ -41,7 +42,7 @@ bool WriteFileReplacing(const std::filesystem::path& file, const std::string& te
     std::error_code ec;
     std::filesystem::rename(temporary, absolute, ec);
     if (ec) {
-        error = "cannot replace " + std::string(what) + ": " + absolute.string() + ": " + ec.message();
+        error = "cannot replace " + std::string(what) + ": " + ToUtf8(absolute) + ": " + ec.message();
         std::filesystem::remove(temporary, ec);
         return false;
     }
@@ -353,7 +354,7 @@ bool Engine::LoadScene(const std::filesystem::path& file, std::string& error) {
     if (!IsInitialized()) { error = "engine must be initialized before loading a scene"; return false; }
     const auto absolute = AssetPathResolver::ToAbsolute(file);
     std::ifstream input(absolute, std::ios::binary);
-    if (!input) { error = "cannot open scene file: " + absolute.string(); return false; }
+    if (!input) { error = "cannot open scene file: " + ToUtf8(absolute); return false; }
     const std::string text(std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{});
     SceneDocument document;
     if (!ParseSceneDocument(text, document, error)) return false;
@@ -450,7 +451,7 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
     if (!IsInitialized()) { error = "engine must be initialized before loading a save game"; return false; }
     if (impl_->scene.IsInControllerCallback()) { error = "load game outside controller callbacks"; return false; }
     std::ifstream input(AssetPathResolver::ToAbsolute(file), std::ios::binary);
-    if (!input) { error = "cannot open save game: " + file.string(); return false; }
+    if (!input) { error = "cannot open save game: " + ToUtf8(file); return false; }
     const std::string text(std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{});
     GameDocument game;
     if (!ParseGameDocument(text, game, error)) return false;

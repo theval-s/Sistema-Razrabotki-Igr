@@ -14,15 +14,11 @@
 #include <stduuid/uuid.h>
 
 #include <engine/core/ResourceID.hpp>
+#include <engine/core/PathUtils.hpp>
 
 namespace engine {
 namespace {
 using Json = nlohmann::json;
-
-std::string Utf8(const std::filesystem::path& path) {
-    const auto bytes = path.generic_u8string();
-    return {bytes.begin(), bytes.end()};
-}
 
 std::string_view KindName(CatalogAssetKind kind) {
     switch (kind) {
@@ -37,11 +33,11 @@ std::string_view KindName(CatalogAssetKind kind) {
 }
 
 std::optional<CatalogAssetKind> KindForFile(const std::filesystem::path& path) {
-    const std::string name = NormalizeName(Utf8(path.filename()));
+    const std::string name = NormalizeName(ToGenericUtf8(path.filename()));
     if (name.ends_with(".material-instance.json")) return CatalogAssetKind::MaterialInstance;
     if (name.ends_with(".material.json")) return CatalogAssetKind::Material;
     if (name.ends_with(".scene.json")) return CatalogAssetKind::Scene;
-    const std::string ext = NormalizeName(Utf8(path.extension()));
+    const std::string ext = NormalizeName(ToGenericUtf8(path.extension()));
     if (ext == ".hlsl") return CatalogAssetKind::Shader;
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tif" ||
         ext == ".tiff" || ext == ".dds" || ext == ".bmp") return CatalogAssetKind::Texture;
@@ -126,13 +122,13 @@ AssetMetadata MetadataFromJson(const Json& j) {
 bool ReadFile(const std::filesystem::path& path, std::string& text, std::string& error) {
     std::ifstream input(path, std::ios::binary | std::ios::ate);
     if (!input || input.tellg() <= 0 || input.tellg() > 1024 * 1024) {
-        error = "cannot read metadata (size limit 1 MiB): " + Utf8(path);
+        error = "cannot read metadata (size limit 1 MiB): " + ToGenericUtf8(path);
         return false;
     }
     text.resize(static_cast<std::size_t>(input.tellg()));
     input.seekg(0);
     if (!input.read(text.data(), static_cast<std::streamsize>(text.size()))) {
-        error = "cannot read metadata: " + Utf8(path);
+        error = "cannot read metadata: " + ToGenericUtf8(path);
         return false;
     }
     return true;
@@ -228,29 +224,29 @@ bool AssetCatalog::Scan(const std::filesystem::path& gameRoot, const std::filesy
                     auto sidecar = file.path();
                     sidecar += ".meta";
                     if (!std::filesystem::is_regular_file(sidecar) && missingError.empty())
-                        missingError = "missing metadata: " + Utf8(file.path());
+                        missingError = "missing metadata: " + ToGenericUtf8(file.path());
                 }
                 if (file.path().extension() != ".meta") continue;
                 auto source = file.path();
                 source.replace_extension();
                 if (!std::filesystem::is_regular_file(source))
-                    throw std::runtime_error("orphaned metadata: " + Utf8(file.path()));
+                    throw std::runtime_error("orphaned metadata: " + ToGenericUtf8(file.path()));
                 const auto kind = KindForFile(source);
-                if (!kind) throw std::runtime_error("metadata on unsupported file: " + Utf8(source));
+                if (!kind) throw std::runtime_error("metadata on unsupported file: " + ToGenericUtf8(source));
                 std::string text;
                 if (!ReadFile(file.path(), text, error)) return false;
                 AssetMetadata meta;
                 if (!ParseAssetMetadata(text, meta, error)) {
-                    error = Utf8(file.path()) + ": " + error;
+                    error = ToGenericUtf8(file.path()) + ": " + error;
                     return false;
                 }
-                if (meta.kind != *kind) throw std::runtime_error("metadata kind mismatch: " + Utf8(file.path()));
-                const std::string logical = prefix + "/" + Utf8(source.lexically_relative(root));
+                if (meta.kind != *kind) throw std::runtime_error("metadata kind mismatch: " + ToGenericUtf8(file.path()));
+                const std::string logical = prefix + "/" + ToGenericUtf8(source.lexically_relative(root));
                 const std::string key = NormalizeName(logical);
                 if (!paths.emplace(key, meta.id).second)
                     throw std::runtime_error("duplicate asset path: " + logical);
                 const auto [it, inserted] = entries.emplace(meta.id, CatalogEntry{meta, logical, source});
-                if (!inserted) throw std::runtime_error("duplicate asset UUID: " + meta.id.ToString() + " at " + Utf8(source));
+                if (!inserted) throw std::runtime_error("duplicate asset UUID: " + meta.id.ToString() + " at " + ToGenericUtf8(source));
             }
         }
     } catch (const std::exception& e) { error = e.what(); return false; }
@@ -288,7 +284,7 @@ const CatalogEntry* AssetCatalog::FindPath(std::string_view path) const {
 bool GenerateMissingAssetMetadata(const std::filesystem::path& root, std::size_t& generated, std::string& error) {
     std::size_t count = 0;
     try {
-        if (!std::filesystem::is_directory(root)) throw std::runtime_error("not an asset directory: " + Utf8(root));
+        if (!std::filesystem::is_directory(root)) throw std::runtime_error("not an asset directory: " + ToGenericUtf8(root));
         for (const auto& file : std::filesystem::recursive_directory_iterator(root)) {
             if (!file.is_regular_file()) continue;
             const auto kind = KindForFile(file.path());
@@ -302,7 +298,7 @@ bool GenerateMissingAssetMetadata(const std::filesystem::path& root, std::size_t
             if (std::filesystem::exists(sidecar)) continue;
             std::ofstream out(sidecar, std::ios::binary);
             out << json << '\n';
-            if (!out) throw std::runtime_error("cannot create metadata: " + Utf8(sidecar));
+            if (!out) throw std::runtime_error("cannot create metadata: " + ToGenericUtf8(sidecar));
             ++count;
         }
     } catch (const std::exception& e) { error = e.what(); return false; }

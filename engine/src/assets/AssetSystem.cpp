@@ -14,6 +14,7 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
 #include <engine/core/FrameContext.hpp>
+#include <engine/core/PathUtils.hpp>
 #include <engine/engine.hpp>
 
 namespace engine {
@@ -50,7 +51,7 @@ std::uint64_t HashSource(const std::string_view source) {
 
 std::string ShaderVariantName(const AssetDesc& desc) {
     std::string key = "shader:";
-    AppendKeyPart(key, desc.path.generic_string());
+    AppendKeyPart(key, ToGenericUtf8(desc.path));
     AppendKeyPart(key, std::to_string(static_cast<int>(desc.shaderStage)));
     AppendKeyPart(key, desc.shaderOptions.entryPoint);
     AppendKeyPart(key, std::to_string(desc.shaderOptions.defines.size()));
@@ -154,7 +155,7 @@ entt::resource<MaterialInstanceAsset> AssetSystem::LoadMaterialInstance(const st
 std::string AssetSystem::NormalizeAssetName(std::string_view name, AssetKind kind) {
     auto normalized = NormalizeName(name);
     if (!normalized.empty() && (kind == AssetKind::Material || kind == AssetKind::MaterialInstance) &&
-        AssetPathResolver::Utf8Path(normalized).extension().empty()) {
+        FromUtf8(normalized).extension().empty()) {
         normalized += kind == AssetKind::Material ? ".material.json" : ".material-instance.json";
     }
     return normalized;
@@ -220,7 +221,7 @@ AssetHandle<ShaderAsset> AssetSystem::RequestShaderVariant(AssetDesc&& desc) {
     std::ranges::sort(defines, {}, &ShaderDefine::name);
     for (std::size_t i = 0; i < defines.size(); ++i) {
         if (defines[i].name.empty() || (i > 0 && defines[i].name == defines[i - 1].name)) {
-            spdlog::error("Invalid or duplicate shader define for '{}'", desc.path.string());
+            spdlog::error("Invalid or duplicate shader define for '{}'", ToUtf8(desc.path));
             return AssetHandle<ShaderAsset>::Invalid();
         }
     }
@@ -230,7 +231,7 @@ AssetHandle<ShaderAsset> AssetSystem::RequestShaderVariant(AssetDesc&& desc) {
     if (const auto existing = shaders_.Find(desc.name)) {
         if (shaders_.Get(existing)->desc.shaderSource != desc.shaderSource ||
             shaders_.Get(existing)->desc.shaderFromMemory != desc.shaderFromMemory) {
-            spdlog::error("Shader source identity collision for '{}'", desc.path.string());
+            spdlog::error("Shader source identity collision for '{}'", ToUtf8(desc.path));
             return AssetHandle<ShaderAsset>::Invalid();
         }
     }

@@ -221,6 +221,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/assets/MaterialDefinition.hpp
     include/engine/core/CoreEvents.hpp
     include/engine/core/FrameContext.hpp
+    include/engine/core/PathUtils.hpp
     include/engine/core/Subsystem.hpp
     include/engine/core/Surface.hpp
     include/engine/project/Project.hpp

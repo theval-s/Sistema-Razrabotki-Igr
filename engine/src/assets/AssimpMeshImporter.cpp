@@ -10,6 +10,7 @@
 
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
+#include <engine/core/PathUtils.hpp>
 
 namespace engine {
 namespace {
@@ -59,9 +60,9 @@ bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/
     // A per-call Importer: Assimp is only safe for concurrent loads when instances are not
     // shared, and several assets can be reading on different workers at the same time.
     Assimp::Importer importer;
-    const aiScene* scene = importer.ReadFile(path.string(), ImportFlags);
+    const aiScene* scene = importer.ReadFile(ToUtf8(path), ImportFlags);
     if (scene == nullptr || scene->mRootNode == nullptr) {
-        error = std::format("Assimp failed to read '{}': {}", path.string(), importer.GetErrorString());
+        error = std::format("Assimp failed to read '{}': {}", ToUtf8(path), importer.GetErrorString());
         return false;
     }
 
@@ -102,11 +103,11 @@ bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/
     }
 
     if (mesh.vertices.empty() || mesh.indices.empty()) {
-        error = std::format("Assimp read '{}' but it contains no triangles", path.string());
+        error = std::format("Assimp read '{}' but it contains no triangles", ToUtf8(path));
         return false;
     }
     if (!hasUVs) {
-        error = std::format("'{}' has no UV channel, the renderer needs one", path.string());
+        error = std::format("'{}' has no UV channel, the renderer needs one", ToUtf8(path));
         return false;
     }
     if (desc.centerOnLoad) {
