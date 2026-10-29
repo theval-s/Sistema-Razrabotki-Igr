@@ -27,7 +27,7 @@
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
-#include <engine/rendering/SceneRenderSubsystem.hpp>
+#include <engine/rendering/RenderExtractionSubsystem.hpp>
 
 #include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
@@ -145,16 +145,16 @@ void MainWindow::restoreLayout() {
 void MainWindow::startEngine() {
     // The editor owns the loop: the engine only advances when we Tick() it.
     engine_.SetSurface(viewport_->surface());
-    // The camera's aspect ratio follows the surface (SceneRenderSubsystem); the renderer keeps
+    // The camera's aspect ratio follows the surface (RenderExtractionSubsystem); the renderer keeps
     // its initial buffer size and DXGI stretches it, so proportions stay right if blurrier.
     connect(viewport_, &ViewportWidget::surfaceResized, this,
             [this](quint32 width, quint32 height) { engine_.ResizeSurface(width, height); });
     // Input first, so it's latched before anything reads it; the camera moves before
-    // SceneRenderSubsystem copies it into the RenderWorld.
+    // RenderExtractionSubsystem copies it into the RenderWorld.
     viewport_->setInput(engine_.AddSubsystem<engine::InputSubsystem>());
     engine_.AddSubsystem<EditorCameraSubsystem>();
     engine_.AddSubsystem<engine::RenderingSubsystem>();
-    engine_.AddSubsystem<engine::SceneRenderSubsystem>();
+    engine_.AddSubsystem<engine::RenderExtractionSubsystem>();
 
     // On failure keep the window up so the Log dock shows why, but don't tick.
     if (!engine_.Initialize()) {
@@ -176,20 +176,23 @@ void MainWindow::setupDefaultScene() {
     const entt::entity camera = scene.CreateEntity("Camera");
     scene.GetTransform(camera).position = Vector3{0.0f, 4.0f, 9.0f};
     scene.GetTransform(camera).rotation = Quaternion::CreateFromYawPitchRoll(0.0f, -0.4f, 0.0f);
-    scene.GetRegistry().emplace<engine::Camera>(camera);
+    scene.AddComponent<engine::Camera>(camera);
+    scene.SetActiveCamera(camera);
 
     const entt::entity sun = scene.CreateEntity("Sun");
     Vector3 sun_direction{-0.45f, -1.0f, -0.3f};
     sun_direction.Normalize();
     scene.GetTransform(sun).rotation = Quaternion::FromToRotation(Vector3::Forward, sun_direction);
-    scene.GetRegistry().emplace<engine::DirectionalLight>(sun, Vector3{1.0f, 0.95f, 0.85f}, 1.25f);
+    scene.AddComponent<engine::DirectionalLight>(sun, Vector3{1.0f, 0.95f, 0.85f}, 1.25f);
+    scene.SetDirectionalLight(sun);
 
     const entt::entity ground = scene.CreateEntity("Ground");
     engine::Transform& transform = scene.GetTransform(ground);
     transform.position = Vector3{0.0f, -0.05f, 0.0f};
     transform.scale = Vector3{20.0f, 0.1f, 20.0f};
-    scene.GetRegistry().emplace<engine::MeshRenderer>(
-        ground, engine_.GetAssets().RequestMesh(engine::BuiltinAssets::CubeMesh));
+    scene.AddComponent<engine::MeshRenderer>(ground,
+        engine_.GetSceneAssets().RequestMesh(engine::BuiltinAssets::CubeMesh),
+        engine_.GetSceneAssets().RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance));
 }
 
 void MainWindow::tickEngine() {

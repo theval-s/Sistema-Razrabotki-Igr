@@ -16,6 +16,10 @@ struct Name {
     std::string value;
 };
 
+struct EntityId {
+    std::string value; // persistent UUID, independent of EnTT's transient entity value
+};
+
 struct Hierarchy {
     entt::entity parent{entt::null};
     std::vector<entt::entity> children;

@@ -107,6 +107,11 @@ std::filesystem::path AssetPathResolver::ResolveMaterial(const AssetDesc& desc, 
 
 std::filesystem::path AssetPathResolver::DefaultPath(const std::string_view name, const AssetKind kind) {
     if (kind == AssetKind::Shader) {
+        // Catalog entries name the physical source file; legacy shader names omit
+        // the shaders/ segment. Both forms must resolve to the same source.
+        if (name.starts_with("engine/shaders/") || name.starts_with("game/shaders/")) {
+            return Utf8Path(name);
+        }
         if (name.starts_with("engine/")) {
             return std::filesystem::path("engine") / "shaders" / Utf8Path(name.substr(7));
         }

@@ -4,10 +4,17 @@
 #include <utility>
 
 #include <spdlog/spdlog.h>
+#include <engine/assets/AssetCatalog.hpp>
+#include <engine/rendering/RenderComponents.hpp>
 
 namespace engine {
 
-Scene::Scene() = default;
+Scene::Scene() {
+    // Pools must be instantiated in Engine.dll before editor modules add components.
+    static_cast<void>(registry_.storage<MeshRenderer>());
+    static_cast<void>(registry_.storage<Camera>());
+    static_cast<void>(registry_.storage<DirectionalLight>());
+}
 Scene::~Scene() = default;
 Scene::Scene(Scene&&) noexcept = default;
 Scene& Scene::operator=(Scene&&) noexcept = default;
@@ -15,16 +22,27 @@ Scene& Scene::operator=(Scene&&) noexcept = default;
 // --- Entities -------------------------------------------------------------------
 
 entt::entity Scene::CreateEntity(const std::string_view name, const entt::entity parent) {
+    return CreateEntityWithId(NewUuid(), name, parent);
+}
+
+entt::entity Scene::CreateEntityWithId(const std::string_view id, const std::string_view name,
+                                       const entt::entity parent) {
+    if (!IsUuid(id) || ids_.contains(std::string(id))) {
+        spdlog::error("Scene::CreateEntityWithId: invalid or duplicate UUID '{}'", id);
+        return entt::null;
+    }
     if (parent != entt::null && !CheckEntity(parent, "CreateEntity")) {
         return entt::null;
     }
 
     // we can also just use plain vectors but entt registry looks good
     const entt::entity entity = registry_.create();
+    registry_.emplace<EntityId>(entity, std::string(id));
     registry_.emplace<Name>(entity, std::string(name));
     registry_.emplace<Transform>(entity);
     registry_.emplace<Hierarchy>(entity);
     Attach(entity, parent);
+    ids_.emplace(id, entity);
     ++revision_;
     return entity;
 }
@@ -41,6 +59,11 @@ void Scene::DestroyEntity(const entt::entity entity) {
     }
 
     Detach(entity);
+    const auto& id = registry_.get<EntityId>(entity).value;
+    if (id == activeCameraId_) activeCameraId_.clear();
+    if (id == directionalLightId_) directionalLightId_.clear();
+    ids_.erase(registry_.get<EntityId>(entity).value);
+    unsupported_.erase(entity);
     registry_.destroy(entity);
     ++revision_;
 }
@@ -51,11 +74,46 @@ void Scene::Clear() {
         DestroyEntity(root);
     }
     registry_.clear();  // anything created behind Scene's back
+    ids_.clear();
+    unsupported_.clear();
+    activeCameraId_.clear();
+    directionalLightId_.clear();
     ++revision_;
 }
 
 bool Scene::IsValid(const entt::entity entity) const {
-    return registry_.valid(entity) && registry_.all_of<Hierarchy>(entity);
+    return registry_.valid(entity) && registry_.all_of<Name, Transform, Hierarchy, EntityId>(entity);
+}
+
+std::string_view Scene::GetId(const entt::entity entity) const {
+    return IsValid(entity) ? registry_.get<EntityId>(entity).value : std::string_view{};
+}
+
+entt::entity Scene::FindById(const std::string_view id) const {
+    const auto it = ids_.find(std::string(id));
+    return it == ids_.end() ? entt::null : it->second;
+}
+
+void Scene::SetActiveCamera(entt::entity entity) {
+    if (entity != entt::null && !HasComponent<Camera>(entity)) return;
+    activeCameraId_ = entity == entt::null ? "" : std::string(GetId(entity));
+    ++revision_;
+}
+
+entt::entity Scene::GetActiveCamera() const {
+    const auto entity = FindById(activeCameraId_);
+    return HasComponent<Camera>(entity) ? entity : FirstWith<Camera>();
+}
+
+void Scene::SetDirectionalLight(entt::entity entity) {
+    if (entity != entt::null && !HasComponent<DirectionalLight>(entity)) return;
+    directionalLightId_ = entity == entt::null ? "" : std::string(GetId(entity));
+    ++revision_;
+}
+
+entt::entity Scene::GetDirectionalLight() const {
+    const auto entity = FindById(directionalLightId_);
+    return HasComponent<DirectionalLight>(entity) ? entity : FirstWith<DirectionalLight>();
 }
 
 const std::string& Scene::GetName(const entt::entity entity) const {

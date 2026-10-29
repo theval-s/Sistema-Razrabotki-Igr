@@ -28,6 +28,9 @@ For CMake to find Qt properly you might need to also add an environment variable
 Material and material-instance JSON formats, editor serialization API, and streaming
 examples: [material asset contract](docs/material-assets.md).
 
+Code-only scene saving/loading, UUID sidecars, asset scope, render extraction and
+metadata generation: [scene and asset guide](docs/scene-assets.md).
+
 Imported meshes expose `MeshAsset::bounds` (`Aabb::min` / `max`) in mesh-local
 coordinates, after Assimp node transforms and optional `centerOnLoad`
 normalization. Assimp generates per-mesh bounding boxes via aiProcess_GenBoundingBoxes;
@@ -35,8 +38,8 @@ the importer combines them into the asset bounds, which remain
 available after CPU geometry is released; apply the object's world transform
 separately when world-space bounds are needed.
 
-With `SRI_BUILD_TESTS=ON`, run `mesh_assets_tests.exe` for CPU mesh-import checks
-and `material_assets_tests.exe` for asset/GPU integration, directly via GoogleTest.
+With `SRI_BUILD_TESTS=ON`, run `mesh_assets_tests.exe`, `asset_catalog_tests.exe`,
+`scene_document_tests.exe` and `material_assets_tests.exe` directly via GoogleTest.
 
 ## 1. Clone
 

@@ -207,8 +207,9 @@ set(ENGINE_CORE_HEADERS
     include/engine/input/InputTypes.hpp
     include/engine/rendering/RenderingSubsystem.hpp
     include/engine/rendering/RenderComponents.hpp
-    include/engine/rendering/SceneRenderSubsystem.hpp
+    include/engine/rendering/RenderExtractionSubsystem.hpp
     include/engine/assets/AssetCommon.hpp
+    include/engine/assets/AssetCatalog.hpp
     include/engine/assets/AssetEvents.hpp
     include/engine/assets/AssetHandle.hpp
     include/engine/assets/AssetPathResolver.hpp
@@ -224,14 +225,16 @@ set(ENGINE_CORE_HEADERS
     include/engine/project/Project.hpp
     include/engine/scene/Components.hpp
     include/engine/scene/Scene.hpp
+    include/engine/scene/SceneDocument.hpp
     include/engine/scene/Transform.hpp
 )
 
 set(ENGINE_CORE_SOURCES
     src/rendering/RenderingSubsystem.cpp
     src/input/InputSubsystem.cpp
-    src/rendering/SceneRenderSubsystem.cpp
+    src/rendering/RenderExtractionSubsystem.cpp
     src/assets/AssetPathResolver.cpp
+    src/assets/AssetCatalog.cpp
     src/assets/AssetSystem.cpp
     src/assets/AssimpMeshImporter.cpp
     src/assets/ShaderImporter.cpp
@@ -241,6 +244,7 @@ set(ENGINE_CORE_SOURCES
     src/core/Subsystem.cpp
     src/project/Project.cpp
     src/scene/Scene.cpp
+    src/scene/SceneDocument.cpp
 )
 
 foreach(engine_target IN ITEMS engine engine_static)
@@ -257,3 +261,7 @@ foreach(engine_target IN ITEMS engine engine_static)
 endforeach()
 
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${ENGINE_CORE_HEADERS} ${ENGINE_CORE_SOURCES})
+
+add_executable(sri-asset-meta tools/asset_meta.cpp)
+target_link_libraries(sri-asset-meta PRIVATE Engine::EngineStatic)
+set_project_warnings(sri-asset-meta)

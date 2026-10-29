@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "material": { "id": "7c777892-9e2b-4c1d-bf91-efe9b5b31ac0", "path": "game/materials/default.material.json" },
+  "parameters": {
+    "albedoTexture": { "id": "3795bc1d-4267-4fab-8cc4-06f3e730f415", "path": "game/models/Hammer/texture.png" },
+    "shininess": 96
+  }
+}

@@ -100,6 +100,10 @@ AssetSystem::AssetSystem(Engine& engine) : engine_(engine) {}
 AssetSystem::~AssetSystem() = default;
 
 void AssetSystem::Initialize() {
+    std::string catalogError;
+    if (!catalog_.Scan(AssetPathResolver::GetGameRoot(), AssetPathResolver::GetRoot() / "engine", catalogError)) {
+        spdlog::error("AssetSystem: cannot build asset catalog: {}", catalogError);
+    }
     importers_[static_cast<size_t>(AssetKind::Mesh)] = std::make_unique<AssimpMeshImporter>();
     importers_[static_cast<size_t>(AssetKind::Texture)] = std::make_unique<TextureImporter>();
     importers_[static_cast<size_t>(AssetKind::Shader)] = std::make_unique<ShaderImporter>();
@@ -241,6 +245,76 @@ AssetHandle<MeshAsset> AssetSystem::RequestMesh(const std::string_view name, con
     return Request<MeshAsset>(std::move(desc));
 }
 
+void AssetSystem::UnloadAll() {
+    for (const auto& job : inFlight_) engine_.GetTaskScheduler().WaitforTask(job.get());
+    inFlight_.clear(); // do not publish a scene that has already gone away
+    if (auto* rendering = engine_.GetSubsystem<RenderingSubsystem>()) {
+        auto& gpu = rendering->GetResourceManager();
+        materialInstances_.ForEachReady([&](const MaterialInstanceAsset& value) {
+            gpu.DestroyMaterialInstance(value.instance);
+        });
+        materials_.ForEachReady([&](const MaterialAsset& value) { gpu.DestroyMaterial(value.material); });
+        shaders_.ForEachReady([&](const ShaderAsset& value) { gpu.DestroyShader(value.shader); });
+        textures_.ForEachReady([&](const TextureAsset& value) { gpu.DestroyTexture(value.texture); });
+        meshes_.ForEachReady([&](const MeshAsset& value) { gpu.DestroyMesh(value.mesh); });
+    }
+    materialInstances_.EvictAll();
+    materials_.EvictAll();
+    shaders_.EvictAll();
+    textures_.EvictAll();
+    meshes_.EvictAll();
+}
+
+std::optional<AssetReference> AssetSystem::ReferenceFor(AssetHandle<MeshAsset> handle) const {
+    const auto* record = meshes_.Get(handle);
+    if (!record) return std::nullopt;
+    const auto source = AssetPathResolver::ResolveMesh(record->desc);
+    const auto* entry = catalog_.FindPath(AssetPathResolver::ToName(source));
+    if (!entry || entry->metadata.kind != CatalogAssetKind::Mesh) return std::nullopt;
+    return AssetReference{entry->metadata.id, entry->path};
+}
+
+std::optional<AssetReference> AssetSystem::ReferenceFor(AssetHandle<MaterialInstanceAsset> handle) const {
+    const auto* record = materialInstances_.Get(handle);
+    if (!record) return std::nullopt;
+    const auto* entry = catalog_.FindPath(record->desc.name);
+    if (!entry || entry->metadata.kind != CatalogAssetKind::MaterialInstance) return std::nullopt;
+    return AssetReference{entry->metadata.id, entry->path};
+}
+
+const CatalogEntry* AssetSystem::Resolve(const AssetReference& reference, const CatalogAssetKind kind) const {
+    const CatalogEntry* entry = catalog_.Find(reference.id, kind);
+    if (entry == nullptr) {
+        spdlog::error("AssetSystem: missing or wrong-kind UUID '{}' (hint '{}')", reference.id, reference.path);
+        return nullptr;
+    }
+    if (NormalizeName(reference.path) != NormalizeName(entry->path)) {
+        spdlog::warn("AssetSystem: stale path hint '{}' for UUID '{}', now at '{}'",
+                     reference.path, reference.id, entry->path);
+    }
+    return entry;
+}
+
+AssetHandle<MeshAsset> AssetSystem::RequestMesh(const AssetReference& reference) {
+    const auto* entry = Resolve(reference, CatalogAssetKind::Mesh);
+    return entry ? RequestMesh(entry->path, entry->metadata.centerOnLoad) : AssetHandle<MeshAsset>{};
+}
+
+AssetHandle<TextureAsset> AssetSystem::RequestTexture(const AssetReference& reference) {
+    const auto* entry = Resolve(reference, CatalogAssetKind::Texture);
+    return entry ? RequestTexture(entry->path) : AssetHandle<TextureAsset>{};
+}
+
+AssetHandle<MaterialAsset> AssetSystem::RequestMaterial(const AssetReference& reference) {
+    const auto* entry = Resolve(reference, CatalogAssetKind::Material);
+    return entry ? RequestMaterial(entry->path) : AssetHandle<MaterialAsset>{};
+}
+
+AssetHandle<MaterialInstanceAsset> AssetSystem::RequestMaterialInstance(const AssetReference& reference) {
+    const auto* entry = Resolve(reference, CatalogAssetKind::MaterialInstance);
+    return entry ? RequestMaterialInstance(entry->path) : AssetHandle<MaterialInstanceAsset>{};
+}
+
 AssetHandle<TextureAsset> AssetSystem::RequestTexture(const std::string_view name) {
     AssetDesc desc;
     desc.name = NormalizeName(name);
@@ -250,6 +324,7 @@ AssetHandle<TextureAsset> AssetSystem::RequestTexture(const std::string_view nam
 
 template <typename T>
 AssetHandle<T> AssetSystem::Request(AssetDesc&& desc) {
+    desc.catalog = &catalog_;
     AssetTable<T>& table = Table<T>();
     const std::string name = desc.name;
 
@@ -366,9 +441,12 @@ AssetSystem::DependencyState AssetSystem::ResolveDependencies(LoadJob& job, bool
     const auto& overrides = instance ? job.payload.materialInstance.parameters : job.payload.material.definition.defaults;
     if (!job.dependenciesRequested) {
         job.dependenciesRequested = true;
-        if (instance) job.materialDependency = RequestMaterial(job.payload.materialInstance.material);
+        if (instance) job.materialDependency = job.payload.materialInstance.version == 2
+            ? RequestMaterial(*job.payload.materialInstance.materialReference)
+            : RequestMaterial(job.payload.materialInstance.material);
         if (overrides.albedoTexture && !overrides.albedoTexture->empty())
-            job.textureDependency = RequestTexture(*overrides.albedoTexture);
+            job.textureDependency = overrides.albedoReference
+                ? RequestTexture(*overrides.albedoReference) : RequestTexture(*overrides.albedoTexture);
     }
     const auto resolve = [&]<typename T>(AssetHandle<T> handle, entt::resource<T>& value,
                                         std::string_view name) -> DependencyState {

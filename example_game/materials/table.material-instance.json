@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "material": { "id": "7c777892-9e2b-4c1d-bf91-efe9b5b31ac0", "path": "game/materials/default.material.json" },
+  "parameters": {
+    "albedoTexture": { "id": "da7a390f-cf1b-4849-a4e7-c40f5842f541", "path": "game/models/Table/texture.png" },
+    "shininess": 64
+  }
+}

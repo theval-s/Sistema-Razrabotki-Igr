@@ -1,14 +1,18 @@
 #include <engine/engine.hpp>
-
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <fstream>
 #include <vector>
 
 #include <TaskScheduler.h>
 #include <spdlog/spdlog.h>
 
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/assets/AssetPathResolver.hpp>
+#include <engine/core/ResourceID.hpp>
+#include <engine/rendering/RenderingSubsystem.hpp>
+#include <engine/scene/SceneDocument.hpp>
 
 namespace engine {
 
@@ -44,6 +48,7 @@ struct Engine::Impl {
     enki::TaskScheduler scheduler;
     // Kernel state, so it is reachable before any subsystem is registered.
     std::unique_ptr<AssetSystem> assets;
+    std::unique_ptr<AssetSystem> sceneAssets;
 };
 
 std::string_view version() noexcept {
@@ -54,6 +59,7 @@ Engine::Engine(EngineConfig config) : impl_(std::make_unique<Impl>(std::move(con
     // Part of the kernel, so it exists from the start: subsystems reach it from their
     // Initialize() regardless of registration order.
     impl_->assets = std::make_unique<AssetSystem>(*this);
+    impl_->sceneAssets = std::make_unique<AssetSystem>(*this);
 }
 
 // Defined here, not in the header: the destructor of unique_ptr<Impl> needs the
@@ -116,6 +122,7 @@ bool Engine::Initialize() {
 
     // Up before the subsystems: they already request assets from their Initialize().
     impl_->assets->Initialize();
+    impl_->sceneAssets->Initialize();
 
     // Size is re-read every iteration: a subsystem may register others from its
     // Initialize(), those get initialized by this same loop.
@@ -147,6 +154,8 @@ void Engine::Shutdown() {
     }
     // After the subsystems (they may still read assets in their Shutdown()), before the
     // scheduler goes away (in-flight loads have to be waited for).
+    impl_->sceneAssets->UnloadAll();
+    impl_->sceneAssets->Shutdown();
     impl_->assets->Shutdown();
     impl_->scheduler.WaitforAllAndShutdown();
     impl_->initialized = false;
@@ -185,6 +194,7 @@ void Engine::Tick() {
     const FrameContext current = frame;
     // Finished background loads become usable before anything can ask for them this frame.
     impl_->assets->Update(current);
+    impl_->sceneAssets->Update(current);
     for (std::size_t i = 0; i < impl_->subsystems.size(); ++i) {
         impl_->subsystems[i].subsystem->Update(current);
     }
@@ -262,8 +272,68 @@ Scene& Engine::GetScene() noexcept {
     return impl_->scene;
 }
 
+bool Engine::LoadScene(const std::filesystem::path& file, std::string& error) {
+    if (!IsInitialized()) { error = "engine must be initialized before loading a scene"; return false; }
+    const auto absolute = AssetPathResolver::ToAbsolute(file);
+    std::ifstream input(absolute, std::ios::binary);
+    if (!input) { error = "cannot open scene file: " + absolute.string(); return false; }
+    const std::string text(std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{});
+    SceneDocument document;
+    if (!ParseSceneDocument(text, document, error)) return false;
+
+    if (auto* rendering = GetSubsystem<RenderingSubsystem>()) rendering->GetWorld().sceneItems.clear();
+    impl_->scene.Clear();
+    impl_->sceneAssets->UnloadAll();
+    PopulateScene(document, *impl_->sceneAssets, impl_->scene);
+    error.clear();
+    return true;
+}
+
+bool Engine::LoadScene(const AssetReference& reference, std::string& error) {
+    const auto* entry = impl_->sceneAssets->GetCatalog().Find(reference.id, CatalogAssetKind::Scene);
+    if (!entry) {
+        error = "missing scene UUID: " + reference.id + " (hint: " + reference.path + ")";
+        return false;
+    }
+    if (NormalizeName(reference.path) != NormalizeName(entry->path))
+        spdlog::warn("Scene UUID '{}' moved from '{}' to '{}'", reference.id, reference.path, entry->path);
+    return LoadScene(entry->source, error);
+}
+
+bool Engine::SaveScene(const std::filesystem::path& file, std::string& error) {
+    SceneDocument document;
+    if (!CaptureSceneDocument(impl_->scene, *impl_->sceneAssets, document, error)) return false;
+    std::string text;
+    if (!SerializeSceneDocument(document, text, error)) return false;
+    const auto absolute = AssetPathResolver::ToAbsolute(file);
+    auto temporary = absolute;
+    temporary += ".tmp." + NewUuid();
+    {
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        if (!output || !(output << text << '\n')) {
+            error = "cannot write scene file: " + temporary.string();
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+            return false;
+        }
+    }
+    std::error_code ec;
+    std::filesystem::rename(temporary, absolute, ec);
+    if (ec) {
+        error = "cannot replace scene file: " + absolute.string() + ": " + ec.message();
+        std::filesystem::remove(temporary, ec);
+        return false;
+    }
+    error.clear();
+    return true;
+}
+
 AssetSystem& Engine::GetAssets() noexcept {
     return *impl_->assets;
+}
+
+AssetSystem& Engine::GetSceneAssets() noexcept {
+    return *impl_->sceneAssets;
 }
 
 enki::TaskScheduler& Engine::GetTaskScheduler() noexcept {

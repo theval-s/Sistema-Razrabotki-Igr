@@ -1,4 +1,45 @@
-# Material assets: runtime and editor contract (JSON version 1)
+# Material assets: runtime and editor contract (JSON versions 1 and 2)
+
+## Current authored format (version 2)
+
+File-backed dependencies now use authoritative UUIDs from adjacent `.meta`
+sidecars. The `path` is an informational hint: renaming a file together with its
+sidecar does not break references. It is never used to resolve an unknown UUID.
+See `docs/scene-assets.md` for metadata generation and scene loading.
+
+~~~json
+{
+  "version": 2,
+  "hooks": [],
+  "defaults": {
+    "albedoTexture": {
+      "id": "959c2e8e-4a7b-46be-9812-744c26456e5b",
+      "path": "engine/primitives/white/texture.png"
+    }
+  }
+}
+~~~
+
+~~~json
+{
+  "version": 2,
+  "material": {
+    "id": "37ed2583-96ec-4820-b86c-281450224e4d",
+    "path": "engine/primitives/default.material.json"
+  },
+  "parameters": { "shininess": 96 }
+}
+~~~
+
+`shaderFile` (when hooks are used), the base `material`, and non-null
+`albedoTexture` all use this object form in version 2. A null albedo texture
+still means clear the inherited texture; omission still means inherit. Version
+1 string references remain readable for existing projects and tests. Code that
+authors new definitions sets `definition.version = 2` and fills the matching
+`shaderReference`, `materialReference` or `albedoReference` as appropriate.
+
+The rest of this document describes the retained version 1 path-based format
+and the common material parameter behavior. New files should use version 2.
 
 The renderer's MaterialDesc, Material, MaterialInstance and GPU handles are
 unchanged. The asset layer adds two disk-backed types:
@@ -104,7 +145,7 @@ albedo slot and PBR fields; it does not introduce arbitrary uniforms/texture slo
 
 ## Names and paths
 
-JSON is UTF-8 (a BOM is accepted). All references are logical asset names,
+JSON is UTF-8 (a BOM is accepted). Version 1 references are logical asset names,
 independent of the current directory and of the containing JSON file. Names under
 game/ use AssetPathResolver::GetGameRoot(), which defaults to <exe>/game and may
 be overridden by the host for a project. Names under engine/ use <exe>/engine.
@@ -119,7 +160,7 @@ and invalid filename characters are rejected.
 * Shader names follow the existing shader resolver:
   game/Stone.hlsl -> &lt;game-root&gt;/shaders/Stone.hlsl;
   engine/Foo.hlsl -> &lt;exe&gt;/engine/shaders/Foo.hlsl.
-* Texture references follow LoadTexture: an image filename is used directly;
+* Version 1 texture references follow LoadTexture: an image filename is used directly;
   a folder name resolves to its texture.png.
 
 For example, when saving game/materials/polished.material-instance.json, do not
@@ -173,10 +214,13 @@ or JSON/dependency loading does not call std::exit.
 
 All registry calls are main-thread calls. GPU resources remain owned by
 RenderingResourceManager; the asset values are thin records like existing mesh and
-texture assets. Do not manually destroy resources obtained from the asset registry.
-Eviction/hot reload remain outside the existing AssetSystem contract. A changed JSON
-file is not automatically reloaded, and existing instances are not live bindings to
-later default changes.
+texture assets. Do not manually destroy resources obtained from an asset registry.
+Use `Engine::GetSceneAssets()` for active-scene resources; switching scenes drains
+its jobs and evicts its records and GPU objects. `Engine::GetAssets()` is the
+separate host-owned registry. `AssetSystem::UnloadAll()` evicts the records in
+the registry on which it is called, so old handles become stale. A changed JSON
+file is not automatically reloaded, and existing instances are not live bindings
+to later default changes.
 
 ## Editor read/write API
 
@@ -207,7 +251,7 @@ if (engine::SerializeMaterialInstanceDefinition(edited, fileBytesToSave, error))
 ~~~
 
 The material equivalents are ParseMaterialDefinition / SerializeMaterialDefinition.
-The serializer writes version 1, preserves sparse overrides and validates the result.
+The serializer preserves the selected version (1 or 2), sparse overrides and validates the result.
 Both parsing and serialization leave the caller's output unchanged on failure.
 Unknown fields, duplicate keys, unsupported versions and malformed values are errors
 (including customBuffer); do not silently drop inspector data.

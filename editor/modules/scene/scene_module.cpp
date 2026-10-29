@@ -156,8 +156,9 @@ private:
         scene.GetTransform(cube).position = DirectX::SimpleMath::Vector3{
             static_cast<float>(index % 5 - 2) * 1.5f, 0.5f, -static_cast<float>(index / 5) * 1.5f};
         // Asynchronous: the cube shows up once the mesh is loaded (immediately after the first one).
-        scene.GetRegistry().emplace<engine::MeshRenderer>(
-            cube, context_->engine().GetAssets().RequestMesh(engine::BuiltinAssets::CubeMesh));
+        scene.AddComponent<engine::MeshRenderer>(cube,
+            context_->engine().GetSceneAssets().RequestMesh(engine::BuiltinAssets::CubeMesh),
+            context_->engine().GetSceneAssets().RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance));
         context_->selection().select(cube);
     }
 

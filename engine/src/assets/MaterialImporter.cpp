@@ -40,8 +40,14 @@ bool MaterialImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, CpuPayload&
     if (!ReadDefinition(desc, false, text, error) || !ParseMaterialDefinition(text, parsed.definition, error))
         return false;
     if (parsed.definition.hooks != MaterialHook::None) {
-        const auto path = AssetPathResolver::ResolveShader({
+        auto path = AssetPathResolver::ResolveShader({
             .path = AssetPathResolver::DefaultPath(parsed.definition.shaderFile, AssetKind::Shader)});
+        if (parsed.definition.version == 2) {
+            const CatalogEntry* entry = desc.catalog
+                ? desc.catalog->Find(parsed.definition.shaderReference->id, CatalogAssetKind::Shader) : nullptr;
+            if (!entry) { error = "missing shader UUID: " + parsed.definition.shaderReference->id; return false; }
+            path = entry->source;
+        }
         for (size_t i = 0; i < Stages.size(); ++i) {
             const auto& stage = Stages[i];
             if (!HasHook(parsed.definition.hooks, stage.hook)) continue;

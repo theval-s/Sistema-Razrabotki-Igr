@@ -41,6 +41,9 @@ struct RenderItem {
 struct RenderWorld {
     FPSCamera camera;
     std::vector<RenderItem> renderItems;
+    // Scene extraction replaces only this list. Host-owned procedural draw
+    // items may coexist without being claimed by the active scene asset scope.
+    std::vector<RenderItem> sceneItems;
     std::vector<LightInfo> lights;
     LightInfo directionalLight; //as for now only one dir light allowed
 

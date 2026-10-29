@@ -5,6 +5,8 @@
 #include <engine/core/FrameContext.hpp>
 #include <engine/engine.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
+#include <engine/rendering/RenderExtractionSubsystem.hpp>
+#include <engine/rendering/RenderComponents.hpp>
 
 #include <chrono>
 #include <filesystem>
@@ -33,6 +35,31 @@ TEST(MaterialDefinitions, MaterialRoundTrip) {
     EXPECT_EQ(roundTrip.defaults.shininess, material.defaults.shininess);
 }
 
+TEST(MaterialDefinitions, UuidReferencesRoundTripAndVersionTypes) {
+    const std::string uuid = NewUuid();
+    MaterialDefinition definition;
+    definition.version = 2;
+    definition.defaults.albedoReference = AssetReference{uuid, "engine/primitives/white/texture.png"};
+    definition.defaults.albedoTexture = definition.defaults.albedoReference->path;
+    std::string json, error;
+    ASSERT_TRUE(SerializeMaterialDefinition(definition, json, error)) << error;
+    MaterialDefinition loaded;
+    ASSERT_TRUE(ParseMaterialDefinition(json, loaded, error)) << error;
+    ASSERT_TRUE(loaded.defaults.albedoReference);
+    EXPECT_EQ(loaded.defaults.albedoReference->id, uuid);
+    EXPECT_FALSE(ParseMaterialDefinition(R"({"version":2,"hooks":[],"defaults":{"albedoTexture":"game/a.png"}})",
+                                         loaded, error));
+    MaterialInstanceDefinition instance;
+    instance.version = 2;
+    instance.materialReference = AssetReference{uuid, "game/materials/stone.material.json"};
+    instance.material = instance.materialReference->path;
+    ASSERT_TRUE(SerializeMaterialInstanceDefinition(instance, json, error)) << error;
+    MaterialInstanceDefinition restored;
+    ASSERT_TRUE(ParseMaterialInstanceDefinition(json, restored, error)) << error;
+    ASSERT_TRUE(restored.materialReference);
+    EXPECT_EQ(restored.materialReference->id, uuid);
+}
+
 TEST(MaterialDefinitions, AcceptsUtf8BomAndBuiltinDefaults) {
     MaterialDefinition material;
     std::string error;
@@ -45,7 +72,7 @@ TEST(MaterialDefinitions, RejectsInvalidMaterialWithoutChangingOutput) {
     MaterialDefinition material;
     std::string error;
     const std::vector<std::string> invalidMaterials{
-        R"({"version":1})", R"({"version":2,"hooks":[]})",
+        R"({"version":1})", R"({"version":3,"hooks":[]})",
         R"({"version":1,"hooks":["GBufferPS"]})",
         R"({"version":1,"hooks":["unknown"]})",
         R"({"version":1,"hooks":["ShadowVS","ShadowVS"],"shaderFile":"game/x"})",
@@ -378,6 +405,66 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     events.failed.clear();
     ASSERT_NO_FATAL_FAILURE(WaitFor(assets, retried, events));
     ASSERT_TRUE(!assets.Peek(missing)) << "stale failed handle became readable";
+
+    MaterialDefinition guidShader;
+    guidShader.version = 2;
+    guidShader.hooks = MaterialHook::GBufferPS;
+    guidShader.shaderReference = AssetReference{"4f860052-e658-479b-bf3a-4e0143f4881f",
+                                                 "game/shaders/old-name.hlsl"};
+    guidShader.shaderFile = guidShader.shaderReference->path;
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("uuid-shader", guidShader));
+    const auto guidMaterial = assets.LoadMaterial(fixture.prefix + "/uuid-shader");
+    ASSERT_TRUE(guidMaterial) << "UUID shader did not survive stale path hint";
+    EXPECT_TRUE(resources.TryGetMaterial(guidMaterial->material)->shaders.gBufferPassPS);
+
+    const auto builtIn = assets.LoadMaterialInstance("engine/primitives/default.material-instance.json");
+    ASSERT_TRUE(builtIn) << "version 2 UUID dependency graph failed";
+    const auto oldBuiltin = assets.RequestMaterialInstance("engine/primitives/default.material-instance.json");
+    ASSERT_TRUE(resources.TryGetMaterialInstance(builtIn->instance));
+    assets.UnloadAll();
+    EXPECT_FALSE(assets.Peek(oldBuiltin));
+    EXPECT_EQ(resources.TryGetMaterialInstance(builtIn->instance), nullptr);
+    const auto reloaded = assets.LoadMaterialInstance("engine/primitives/default.material-instance.json");
+    ASSERT_TRUE(reloaded) << "asset did not reload after GPU eviction";
+    EXPECT_NE(assets.RequestMaterialInstance("engine/primitives/default.material-instance.json"), oldBuiltin);
+    auto& sceneAssets = engine.GetSceneAssets();
+    auto* extraction = engine.AddSubsystem<RenderExtractionSubsystem>();
+    ASSERT_NE(extraction, nullptr);
+    std::string sceneError;
+    ASSERT_TRUE(engine.LoadScene(AssetReference{"2a9a7998-f44d-44d8-8fc3-57e78da18796",
+                                               "game/scenes/old-name.scene.json"}, sceneError)) << sceneError;
+    const auto cube = engine.GetScene().FindById("c8727a24-84b3-4fe7-b1d8-291ba9d2e8df");
+    ASSERT_TRUE(cube != entt::null);
+    const auto sceneHandle = engine.GetScene().TryGetComponent<MeshRenderer>(cube)->materialInstance;
+    const auto untilScene = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    FrameContext sceneFrame;
+    while (!sceneAssets.IsReady(sceneHandle) && std::chrono::steady_clock::now() < untilScene) {
+        sceneAssets.Update(sceneFrame);
+        ++sceneFrame.frameIndex;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(sceneAssets.IsReady(sceneHandle)) << "example scene asset did not load";
+    rendering->GetWorld().renderItems.push_back({}); // host-owned list is not touched by extraction
+    extraction->Update(sceneFrame);
+    EXPECT_EQ(rendering->GetWorld().renderItems.size(), 1u);
+    EXPECT_GE(rendering->GetWorld().sceneItems.size(), 1u);
+    rendering->GetWorld().renderItems.clear();
+    const auto sceneInstance = sceneAssets.Peek(sceneHandle);
+    ASSERT_TRUE(sceneInstance);
+    ASSERT_NO_FATAL_FAILURE(fixture.Write("empty.scene.json", R"({"version":1,"entities":[]})"));
+    ASSERT_TRUE(engine.LoadScene(fixture.root / "empty.scene.json", sceneError)) << sceneError;
+    EXPECT_FALSE(sceneAssets.Peek(sceneHandle));
+    EXPECT_EQ(resources.TryGetMaterialInstance(sceneInstance->instance), nullptr);
+    EXPECT_NE(resources.TryGetMaterialInstance(reloaded->instance), nullptr)
+        << "switching scenes destroyed a host-owned material instance";
+    ASSERT_TRUE(engine.LoadScene(AssetReference{"2a9a7998-f44d-44d8-8fc3-57e78da18796",
+                                               "game/scenes/demo.scene.json"}, sceneError)) << sceneError;
+    const auto newCube = engine.GetScene().FindById("c8727a24-84b3-4fe7-b1d8-291ba9d2e8df");
+    ASSERT_TRUE(newCube != entt::null);
+    const auto nextHandle = engine.GetScene().TryGetComponent<MeshRenderer>(newCube)->materialInstance;
+    EXPECT_NE(nextHandle, sceneHandle);
+    EXPECT_FALSE(sceneAssets.Peek(sceneHandle));
+    ASSERT_TRUE(engine.LoadScene(fixture.root / "empty.scene.json", sceneError)) << sceneError;
 
     ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("shutdown", MaterialDefinition{}));
     ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("shutdown", MaterialInstanceDefinition{.material = fixture.prefix + "/shutdown"}));

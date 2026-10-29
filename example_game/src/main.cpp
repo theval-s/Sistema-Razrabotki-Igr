@@ -7,8 +7,10 @@
 #include <vector>
 
 #include <windows.h>
+#include <spdlog/spdlog.h>
 
 #include <engine/rendering/RenderingSubsystem.hpp>
+#include <engine/rendering/RenderExtractionSubsystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/rendering/UglyUtils.hpp>
 #include <engine/assets/AssetSystem.hpp>
@@ -187,9 +189,8 @@ void UpdateLights(engine::RenderWorld& world, float time) {
 
 } // namespace
 
-/// Host side of the example game: pumps Win32 messages, drives the FPS camera,
-/// the animated props and the lights, and feeds RenderWorld. The models themselves
-/// arrive through the AssetSystem in the background.
+/// Host-owned procedural effects, input and animated point/spot lights. File-backed
+/// meshes and materials come from demo.scene.json through RenderExtractionSubsystem.
 class ExampleGameLogic final : public engine::Subsystem {
 public:
     explicit ExampleGameLogic(HWND window) : window_(window) {
@@ -204,7 +205,6 @@ public:
         if (rendering_ == nullptr) {
             return false;
         }
-        assets_ = &GetEngine().GetAssets();
         auto& resources = rendering_->GetResourceManager();
         auto& world = rendering_->GetWorld();
 
@@ -318,13 +318,15 @@ public:
                 {Vector3{0.75f, 0.48f, 0.95f}, 100.0f}, enchantmentBuffer_)
         });
 
-        tableMesh_ = assets_->RequestMesh("models/Table", true);
-        signMesh_ = assets_->RequestMesh("models/Sign", true);
-        hammerMesh_ = assets_->RequestMesh("models/Hammer", true);
-        editorCubeMesh_ = assets_->RequestMesh(engine::BuiltinAssets::CubeMesh);
-        tableTexture_ = assets_->RequestTexture("models/Table");
-        signTexture_ = assets_->RequestTexture("models/Sign");
-        hammerTexture_ = assets_->RequestTexture("models/Hammer");
+        firstLightMarker_ = objects_.size();
+        for (const engine::TextureHandle texture : lightMarkerTextures_) {
+            objects_.push_back({
+                .transform = Matrix::Identity,
+                .mesh = lightMarkerMesh_,
+                .materialInstance = MakeInstance(defaultMaterial_, texture,
+                    {Vector3{0.4f, 0.4f, 0.4f}, 96.0f})
+            });
+        }
 
         CaptureMouse(window_);
         return true;
@@ -362,34 +364,26 @@ public:
             world.camera.aspectRatio = static_cast<float>(surface.width) / static_cast<float>(surface.height);
         }
         UpdateCamera(world.camera, window_, static_cast<float>(frame.deltaSeconds));
-        if (!sceneBuilt_) {
-            TryBuildScene();
-        }
-
         const float time = static_cast<float>(frame.simulationTimeSeconds);
         rendering_->GetContext().UpdateCBuffer(enchantmentBuffer_, EnchantmentBufferData{time});
         objects_[cubeIndex_].transform = Matrix::CreateRotationY(time * 0.35f) *
             Matrix::CreateTranslation(0.0f, 3.8f + 0.16f * std::sin(time * 1.7f), 0.0f);
-        if (sceneBuilt_) {
-            objects_[orbitingSign_].transform = Matrix::CreateScale(1.5f) *
-                Matrix::CreateRotationY(-time * 1.2f) *
-                Matrix::CreateTranslation(std::cos(time) * 5.0f, 1.25f,
-                                          std::sin(time) * 5.0f);
-            objects_[bobbingHammer_].transform = Matrix::CreateScale(1.4f) *
-                Matrix::CreateRotationX(time * 1.8f) *
-                Matrix::CreateRotationY(time * 0.9f) *
-                Matrix::CreateTranslation(-4.5f, 1.5f + std::sin(time * 2.0f), 3.0f);
-            objects_[spinningHammer_].transform = Matrix::CreateScale(1.2f) *
-                Matrix::CreateRotationZ(time * 2.5f) *
-                Matrix::CreateTranslation(4.5f, 1.2f, 2.5f + std::sin(time) * 1.5f);
+        if (const auto sign = GetEngine().GetScene().FindById("2db1f1f9-3990-478c-bcf9-5a2c63cad3a2");
+            sign != entt::null) {
+            auto& transform = GetEngine().GetScene().GetTransform(sign);
+            transform.rotation = DirectX::SimpleMath::Quaternion::CreateFromYawPitchRoll(-0.35f - time * 0.3f, 0, 0);
+        }
+        if (const auto hammer = GetEngine().GetScene().FindById("36b2149c-e842-4841-885f-e48eab87f6c5");
+            hammer != entt::null) {
+            auto& transform = GetEngine().GetScene().GetTransform(hammer);
+            transform.position.y = 1.0f + std::sin(time * 2.0f) * 0.25f;
+            transform.rotation = DirectX::SimpleMath::Quaternion::CreateFromYawPitchRoll(0, 0, -0.65f + time * 0.8f);
         }
 
         UpdateLights(world, time);
-        if (sceneBuilt_) {
-            for (size_t i = 0; i < lightMarkerTextures_.size(); ++i) {
-                objects_[firstLightMarker_ + i].transform =
-                    Matrix::CreateTranslation(world.lights[i].position);
-            }
+        for (size_t i = 0; i < lightMarkerTextures_.size(); ++i) {
+            objects_[firstLightMarker_ + i].transform =
+                Matrix::CreateTranslation(world.lights[i].position);
         }
         FillRenderWorld(world, objects_);
     }
@@ -409,74 +403,8 @@ private:
         return instance;
     }
 
-    void TryBuildScene() {
-        const auto tableMesh = assets_->Peek(tableMesh_);
-        const auto signMesh = assets_->Peek(signMesh_);
-        const auto hammerMesh = assets_->Peek(hammerMesh_);
-        const auto editorCubeMesh = assets_->Peek(editorCubeMesh_);
-        const auto tableTexture = assets_->Peek(tableTexture_);
-        const auto signTexture = assets_->Peek(signTexture_);
-        const auto hammerTexture = assets_->Peek(hammerTexture_);
-        if (!tableMesh || !signMesh || !hammerMesh || !editorCubeMesh ||
-            !tableTexture || !signTexture || !hammerTexture) {
-            return;
-        }
-
-        const engine::MaterialPBRParameters objectMaterial{
-            Vector3{0.25f, 0.25f, 0.25f}, 0.0f
-        };
-        SceneObject table{
-            .transform = Matrix::CreateScale(3.5f) * Matrix::CreateTranslation(-2.5f, 0.55f, 0.0f),
-            .mesh = tableMesh->mesh,
-            .materialInstance = MakeInstance(defaultMaterial_, tableTexture->texture,
-                {objectMaterial.specularColor, 64.0f})
-        };
-        SceneObject sign{
-            .transform = Matrix::CreateScale(3.0f) * Matrix::CreateRotationY(-0.35f) *
-            Matrix::CreateTranslation(2.5f, 1.5f, -1.0f),
-            .mesh = signMesh->mesh,
-            .materialInstance = MakeInstance(defaultMaterial_, signTexture->texture,
-                {objectMaterial.specularColor, 32.0f})
-        };
-        SceneObject hammer{
-            .transform = Matrix::CreateScale(2.0f) * Matrix::CreateRotationZ(-0.65f) *
-            Matrix::CreateTranslation(0.0f, 1.0f, 1.5f),
-            .mesh = hammerMesh->mesh,
-            .materialInstance = MakeInstance(defaultMaterial_, hammerTexture->texture,
-                {objectMaterial.specularColor, 96.0f})
-        };
-        objects_.push_back(table);
-        objects_.push_back(sign);
-        objects_.push_back(hammer);
-        // Same mesh, dimensions and default white material as the editor's Add Cube action.
-        objects_.push_back({
-            .transform = Matrix::CreateTranslation(-5.0f, 0.5f, -4.0f),
-            .mesh = editorCubeMesh->mesh,
-            .materialInstance = MakeInstance(defaultMaterial_, {}, {})
-        });
-
-        orbitingSign_ = objects_.size();
-        objects_.push_back(sign);
-        bobbingHammer_ = objects_.size();
-        objects_.push_back(hammer);
-        spinningHammer_ = objects_.size();
-        objects_.push_back(hammer);
-
-        firstLightMarker_ = objects_.size();
-        for (const engine::TextureHandle texture : lightMarkerTextures_) {
-            objects_.push_back({
-                .transform = Matrix::Identity,
-                .mesh = lightMarkerMesh_,
-                .materialInstance = MakeInstance(defaultMaterial_, texture,
-                    {Vector3{0.4f, 0.4f, 0.4f}, 96.0f})
-            });
-        }
-        sceneBuilt_ = true;
-    }
-
     HWND window_ = nullptr;
     engine::RenderingSubsystem* rendering_ = nullptr;
-    engine::AssetSystem* assets_ = nullptr;
 
     engine::TextureHandle groundTexture_;
     engine::MaterialHandle defaultMaterial_;
@@ -488,19 +416,7 @@ private:
     engine::MeshHandle lightMarkerMesh_;
     std::vector<engine::TextureHandle> lightMarkerTextures_;
 
-    engine::AssetHandle<engine::MeshAsset> tableMesh_;
-    engine::AssetHandle<engine::MeshAsset> signMesh_;
-    engine::AssetHandle<engine::MeshAsset> hammerMesh_;
-    engine::AssetHandle<engine::MeshAsset> editorCubeMesh_;
-    engine::AssetHandle<engine::TextureAsset> tableTexture_;
-    engine::AssetHandle<engine::TextureAsset> signTexture_;
-    engine::AssetHandle<engine::TextureAsset> hammerTexture_;
-
     std::vector<SceneObject> objects_;
-    bool sceneBuilt_ = false;
-    size_t orbitingSign_ = 0;
-    size_t bobbingHammer_ = 0;
-    size_t spinningHammer_ = 0;
     size_t firstLightMarker_ = 0;
 };
 
@@ -524,7 +440,15 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
     engine::Engine engine{config};
     engine.AddSubsystem<engine::RenderingSubsystem>();
     engine.AddSubsystem<ExampleGameLogic>(window);
+    engine.AddSubsystem<engine::RenderExtractionSubsystem>();
     enginePtr = &engine;
+    if (!engine.Initialize()) return 1;
+    std::string error;
+    if (!engine.LoadScene(engine::AssetReference{"2a9a7998-f44d-44d8-8fc3-57e78da18796",
+                                                 "game/scenes/demo.scene.json"}, error)) {
+        spdlog::error("ExampleGame: cannot load scene: {}", error);
+        return 1;
+    }
     const bool ran = engine.Run();
 
     ReleaseCapture();
