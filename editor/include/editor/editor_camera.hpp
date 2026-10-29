@@ -16,7 +16,7 @@ namespace editor {
 ///   hold RMB    mouse-look, WASD move, Q/E down/up, Shift faster, wheel = speed
 ///   wheel       (without RMB) dolly forward/back
 /// Uses real time, so it keeps working while the simulation is paused.
-/// Register after InputSubsystem and before SceneRenderSubsystem.
+/// Register after InputSubsystem.
 class EditorCameraSubsystem final : public engine::Subsystem {
 public:
     [[nodiscard]] std::string_view GetName() const override;

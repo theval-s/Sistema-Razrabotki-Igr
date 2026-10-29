@@ -3,11 +3,13 @@
 #include <array>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <type_traits>
 #include <vector>
 
 #include <engine/assets/AssetCommon.hpp>
+#include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/AssetHandle.hpp>
 #include <engine/assets/AssetTable.hpp>
 #include <engine/assets/AssetTypes.hpp>
@@ -50,11 +52,14 @@ public:
     /// per Tick, before the subsystems run.
     void Update(const FrameContext& frame);
     void Shutdown();
+    /// Drop in-flight work and evict asset-backed GPU resources after clearing
+    /// all render-world references. Handles from the old scene become stale.
+    void UnloadAll();
 
     /// Blocking loads, for boot-time assets: the CPU phase may already run on a worker
     /// (started by the Request* inside), the call waits for it and uploads on this thread.
-    /// The returned resource keeps the asset alive on its own, so it stays readable after a
-    /// failed re-load recycled the record. Empty resource on failure.
+    /// A returned resource retains the value record, not the GPU object: after
+    /// UnloadAll its embedded GPU handle must no longer be used. Empty on failure.
     entt::resource<MeshAsset> LoadMesh(std::string_view name, bool centerOnLoad = false);
     entt::resource<TextureAsset> LoadTexture(std::string_view name);
     /// JSON names are exe-relative. Extensionless names gain .material.json / .material-instance.json.
@@ -72,6 +77,14 @@ public:
     /// asset (logged) ; a Failed attempt must be re-requested explicitly.
     AssetHandle<MeshAsset> RequestMesh(std::string_view name, bool centerOnLoad = false);
     AssetHandle<TextureAsset> RequestTexture(std::string_view name);
+    /// Resolve authored UUIDs against metadata; path is a non-authoritative hint.
+    AssetHandle<MeshAsset> RequestMesh(const AssetReference& reference);
+    AssetHandle<TextureAsset> RequestTexture(const AssetReference& reference);
+    AssetHandle<MaterialAsset> RequestMaterial(const AssetReference& reference);
+    AssetHandle<MaterialInstanceAsset> RequestMaterialInstance(const AssetReference& reference);
+    [[nodiscard]] const AssetCatalog& GetCatalog() const noexcept { return catalog_; }
+    [[nodiscard]] std::optional<AssetReference> ReferenceFor(AssetHandle<MeshAsset> handle) const;
+    [[nodiscard]] std::optional<AssetReference> ReferenceFor(AssetHandle<MaterialInstanceAsset> handle) const;
     /// Ready only after the JSON, declared shaders and referenced assets are ready.
     AssetHandle<MaterialAsset> RequestMaterial(std::string_view name);
     AssetHandle<MaterialInstanceAsset> RequestMaterialInstance(std::string_view name);
@@ -116,6 +129,7 @@ public:
     }
 
 private:
+    [[nodiscard]] const CatalogEntry* Resolve(const AssetReference& reference, CatalogAssetKind kind) const;
     static std::string NormalizeAssetName(std::string_view name, AssetKind kind);
     AssetHandle<ShaderAsset> RequestShaderVariant(AssetDesc&& desc);
     template <typename T>
@@ -173,6 +187,7 @@ private:
     AssetTable<ShaderAsset> shaders_;
     AssetTable<MaterialAsset> materials_;
     AssetTable<MaterialInstanceAsset> materialInstances_;
+    AssetCatalog catalog_;
     std::array<std::unique_ptr<IAssetImporter>, static_cast<size_t>(AssetKind::Count)> importers_{};
     /// Queued CPU-phase jobs. Touched only from the main thread, so no lock is needed:
     /// workers see just each job's own fields.

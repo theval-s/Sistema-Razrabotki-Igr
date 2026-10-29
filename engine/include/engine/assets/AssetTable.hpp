@@ -136,6 +136,29 @@ public:
         return records_.size();
     }
 
+    template <class Fn>
+    void ForEachReady(Fn&& fn) const {
+        for (const auto& record : records_) {
+            if (record->state == AssetState::Ready) fn(*record->value);
+        }
+    }
+
+    // Releases records without resetting generations: an old handle must remain
+    // invalid even when a subsequent scene loads the same name into the same slot.
+    void EvictAll() {
+        index_.clear();
+        freeSlots_.clear();
+        for (std::size_t i = 0; i < records_.size(); ++i) {
+            auto& record = *records_[i];
+            ++record.generation;
+            record.state = AssetState::Unloaded;
+            record.value = {};
+            record.desc = {};
+            record.error.clear();
+            freeSlots_.push_back(static_cast<uint32_t>(i));
+        }
+    }
+
 private:
     std::vector<std::unique_ptr<Record>> records_;
     std::unordered_map<ResourceID, uint32_t> index_;

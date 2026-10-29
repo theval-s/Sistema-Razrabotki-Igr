@@ -5,15 +5,9 @@
 #include <spdlog/spdlog.h>
 
 #include <engine/assets/AssetPathResolver.hpp>
+#include <engine/core/PathUtils.hpp>
 
 namespace engine {
-namespace {
-std::string Utf8Name(const std::wstring& name) {
-    const auto utf8 = std::filesystem::path(name).u8string();
-    return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
-}
-} // namespace
-
 void RenderingResourceManager::Initialize(ID3D11Device* device) {
     device_ = device;
 }
@@ -96,7 +90,7 @@ bool RenderingResourceManager::DestroyMesh(const MeshHandle meshHandle, const bo
 ShaderHandle RenderingResourceManager::CompileShader(const std::wstring& fileName, const ShaderType shaderType,
                                                       const ShaderCompileOptions& options) {
     AssetDesc desc;
-    desc.path = AssetPathResolver::DefaultPath(Utf8Name(fileName), AssetKind::Shader);
+    desc.path = AssetPathResolver::DefaultPath(ToUtf8(fileName), AssetKind::Shader);
     auto shader = ShaderContext::CompileShader(device_.Get(), inputLayoutCache_,
                                                 AssetPathResolver::ResolveShader(desc), shaderType, options);
     if (!shader) {
@@ -140,7 +134,7 @@ MaterialHandle RenderingResourceManager::CreateMaterial(const MaterialDesc& desc
     auto compile = [&](MaterialHook hook, ShaderType type, const char* define, ShaderHandle& target) {
         if (!HasHook(desc.hooks, hook)) return true;
         const auto path = AssetPathResolver::ResolveShader({
-            .path = AssetPathResolver::DefaultPath(Utf8Name(desc.shaderFile), AssetKind::Shader)});
+            .path = AssetPathResolver::DefaultPath(ToUtf8(desc.shaderFile), AssetKind::Shader)});
         auto compiled = ShaderContext::CompileCpu(path, type, {.defines = {{define, "1"}, {"MATERIAL_HAS_HOOK", "1"}}});
         if (!compiled) return false;
         target = RegisterCompiledShader(*compiled);

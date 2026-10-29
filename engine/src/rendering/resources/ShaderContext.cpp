@@ -11,6 +11,7 @@
 #include <spdlog/spdlog.h>
 
 #include <engine/assets/AssetPathResolver.hpp>
+#include <engine/core/PathUtils.hpp>
 
 namespace engine {
 namespace {
@@ -36,14 +37,14 @@ public:
         } else if (type == D3D_INCLUDE_LOCAL) {
             const auto it = files_.find(parent);
             const auto& includingFile = it == files_.end() ? sourcePath_ : it->second->path;
-            path = includingFile.parent_path() / AssetPathResolver::Utf8Path(includeName);
+            path = includingFile.parent_path() / FromUtf8(includeName);
         } else {
             return E_FAIL; // system includes must name an explicit root
         }
         path = path.lexically_normal();
         std::ifstream input(path, std::ios::binary);
         if (!input) {
-            spdlog::error("Cannot include shader file '{}' from '{}'", path.string(), sourcePath_.string());
+            spdlog::error("Cannot include shader file '{}' from '{}'", ToUtf8(path), ToUtf8(sourcePath_));
             return E_FAIL;
         }
         std::string contents{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
@@ -116,7 +117,7 @@ std::optional<CompiledShader> ShaderContext::CompileCpu(const std::filesystem::p
                                                         const ShaderCompileOptions& options) {
     std::ifstream input(fileName, std::ios::binary);
     if (!input) {
-        spdlog::error("Missing shader file: {}", fileName.string());
+        spdlog::error("Missing shader file: {}", ToUtf8(fileName));
         return std::nullopt;
     }
     std::string source{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
@@ -131,7 +132,7 @@ std::optional<CompiledShader> ShaderContext::CompileSource(const std::string_vie
     CompiledShader result{};
     result.type = shaderType;
     const auto sourcePath = AssetPathResolver::ToAbsolute(virtualPath);
-    const auto displayName = sourcePath.string();
+    const auto displayName = ToUtf8(sourcePath);
     ShaderIncludes includes{sourcePath};
     std::vector<D3D_SHADER_MACRO> macros;
     macros.reserve(options.defines.size() + 1);

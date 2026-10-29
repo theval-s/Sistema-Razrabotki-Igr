@@ -17,8 +17,17 @@ NLOHMANN_JSON_SERIALIZE_ENUM(MaterialHook, {
 })
 
 void from_json(const Json& j, MaterialParameterOverrides& value) {
-    if (j.contains("albedoTexture"))
-        value.albedoTexture = j.at("albedoTexture").is_null() ? "" : j.at("albedoTexture").get<std::string>();
+    if (j.contains("albedoTexture")) {
+        const auto& texture = j.at("albedoTexture");
+        if (texture.is_null()) value.albedoTexture = "";
+        else if (texture.is_object()) {
+            std::string error;
+            AssetReference ref;
+            if (!ParseAssetReference(texture.dump(), ref, error)) throw std::invalid_argument(error);
+            value.albedoTexture = ref.path;
+            value.albedoReference = std::move(ref);
+        } else value.albedoTexture = texture.get<std::string>();
+    }
     if (j.contains("specularColor")) {
         const auto color = j.at("specularColor").get<std::array<float, 3>>();
         value.specularColor = Vector3{color[0], color[1], color[2]};
@@ -28,15 +37,30 @@ void from_json(const Json& j, MaterialParameterOverrides& value) {
 
 void to_json(Json& j, const MaterialParameterOverrides& value) {
     j = Json::object();
-    if (value.albedoTexture)
-        j["albedoTexture"] = value.albedoTexture->empty() ? Json(nullptr) : Json(*value.albedoTexture);
+    if (value.albedoTexture) {
+        if (value.albedoTexture->empty()) j["albedoTexture"] = nullptr;
+        else if (value.albedoReference) {
+            std::string text, error;
+            if (!SerializeAssetReference(*value.albedoReference, text, error)) throw std::invalid_argument(error);
+            j["albedoTexture"] = Json::parse(text);
+        } else j["albedoTexture"] = *value.albedoTexture;
+    }
     if (value.specularColor)
         j["specularColor"] = {value.specularColor->x, value.specularColor->y, value.specularColor->z};
     if (value.shininess) j["shininess"] = *value.shininess;
 }
 
 void from_json(const Json& j, MaterialDefinition& value) {
-    value.shaderFile = j.value("shaderFile", std::string{});
+    value.version = j.at("version").get<int>();
+    if (j.contains("shaderFile")) {
+        if (j.at("shaderFile").is_object()) {
+            std::string error;
+            AssetReference ref;
+            if (!ParseAssetReference(j.at("shaderFile").dump(), ref, error)) throw std::invalid_argument(error);
+            value.shaderFile = ref.path;
+            value.shaderReference = std::move(ref);
+        } else value.shaderFile = j.at("shaderFile").get<std::string>();
+    }
     for (const auto hook : j.at("hooks").get<std::vector<MaterialHook>>()) value.hooks = value.hooks | hook;
     value.defaults = j.value("defaults", MaterialParameterOverrides{});
 }
@@ -45,19 +69,35 @@ void to_json(Json& j, const MaterialDefinition& value) {
     constexpr unsigned knownHooks = 7;
     if ((static_cast<unsigned>(value.hooks) & ~knownHooks) != 0)
         throw std::invalid_argument("unknown material hook bits");
-    j = {{"version", 1}, {"hooks", Json::array()}, {"defaults", value.defaults}};
+    j = {{"version", value.version}, {"hooks", Json::array()}, {"defaults", value.defaults}};
     for (const auto hook : {MaterialHook::GBufferVS, MaterialHook::GBufferPS, MaterialHook::ShadowVS})
         if (HasHook(value.hooks, hook)) j["hooks"].push_back(hook);
-    if (!value.shaderFile.empty()) j["shaderFile"] = value.shaderFile;
+    if (value.shaderReference) {
+        std::string text, error;
+        if (!SerializeAssetReference(*value.shaderReference, text, error)) throw std::invalid_argument(error);
+        j["shaderFile"] = Json::parse(text);
+    } else if (!value.shaderFile.empty()) j["shaderFile"] = value.shaderFile;
 }
 
 void from_json(const Json& j, MaterialInstanceDefinition& value) {
-    j.at("material").get_to(value.material);
+    value.version = j.at("version").get<int>();
+    if (j.at("material").is_object()) {
+        std::string error;
+        AssetReference ref;
+        if (!ParseAssetReference(j.at("material").dump(), ref, error)) throw std::invalid_argument(error);
+        value.material = ref.path;
+        value.materialReference = std::move(ref);
+    } else j.at("material").get_to(value.material);
     value.parameters = j.value("parameters", MaterialParameterOverrides{});
 }
 
 void to_json(Json& j, const MaterialInstanceDefinition& value) {
-    j = {{"version", 1}, {"material", value.material}, {"parameters", value.parameters}};
+    j = {{"version", value.version}, {"parameters", value.parameters}};
+    if (value.materialReference) {
+        std::string text, error;
+        if (!SerializeAssetReference(*value.materialReference, text, error)) throw std::invalid_argument(error);
+        j["material"] = Json::parse(text);
+    } else j["material"] = value.material;
 }
 
 namespace {
@@ -84,6 +124,16 @@ Json Read(std::string_view text) {
     };
     auto root = Json::parse(text.begin(), text.end(), callback);
     Validator().validate(root);
+    const int version = root.at("version").get<int>();
+    const auto checkRef = [version](const Json& object, const char* field) {
+        if (object.contains(field) && !object.at(field).is_null() &&
+            object.at(field).is_object() != (version == 2))
+            throw std::invalid_argument(std::string(field) + " must be a " +
+                                        (version == 2 ? "UUID reference" : "path") + " in this version");
+    };
+    checkRef(root, root.contains("material") ? "material" : "shaderFile");
+    if (root.contains("defaults")) checkRef(root.at("defaults"), "albedoTexture");
+    if (root.contains("parameters")) checkRef(root.at("parameters"), "albedoTexture");
     return root;
 }
 

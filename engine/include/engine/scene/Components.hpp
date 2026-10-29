@@ -16,6 +16,21 @@ struct Name {
     std::string value;
 };
 
+struct Tags {
+    std::vector<std::string> values;
+};
+
+// Authored opt-in policy for save games. The entity's static scene data remains
+// in its scene file; spawned persistent entities carry an authored snapshot.
+struct GamePersistence {
+    bool transform = false;
+    bool controllerState = false;
+};
+
+struct EntityId {
+    std::string value; // persistent UUID, independent of EnTT's transient entity value
+};
+
 struct Hierarchy {
     entt::entity parent{entt::null};
     std::vector<entt::entity> children;

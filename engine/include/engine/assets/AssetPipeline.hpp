@@ -13,6 +13,7 @@
 
 #include <engine/rendering/RenderingResourceManager.hpp>
 #include <engine/core/ResourceID.hpp>
+#include <engine/core/PathUtils.hpp>
 #include <engine/rendering/resources/ShaderContext.hpp>
 #include <engine/rendering/UglyUtils.hpp>
 #include <engine/assets/AssetCommon.hpp>
@@ -132,18 +133,18 @@ inline bool ReadWholeFileInto(const std::filesystem::path& path, std::vector<uin
                               std::string& error) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
-        error = "Cannot open file: " + path.string();
+        error = "Cannot open file: " + ToUtf8(path);
         return false;
     }
     const auto size = file.tellg();
     if (size <= 0) {
-        error = "File is empty: " + path.string();
+        error = "File is empty: " + ToUtf8(path);
         return false;
     }
     out.resize(static_cast<size_t>(size));
     file.seekg(0);
     if (!file.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(size))) {
-        error = "Failed to read: " + path.string();
+        error = "Failed to read: " + ToUtf8(path);
         return false;
     }
     return true;

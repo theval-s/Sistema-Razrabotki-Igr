@@ -1,0 +1,6 @@
+{
+  "version": 2,
+  "shaderFile": { "id": "569ce82d-4d62-46d1-bd0d-63554092bc9e", "path": "game/shaders/EnchantedCube.hlsl" },
+  "hooks": ["GBufferVS", "GBufferPS", "ShadowVS"],
+  "defaults": { "specularColor": [0.75, 0.48, 0.95], "shininess": 100 }
+}

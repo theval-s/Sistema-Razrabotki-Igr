@@ -1,8 +1,11 @@
 {
-  "version": 1,
+  "version": 2,
   "hooks": [],
   "defaults": {
-    "albedoTexture": "engine/primitives/white",
+    "albedoTexture": {
+      "id": "959c2e8e-4a7b-46be-9812-744c26456e5b",
+      "path": "engine/primitives/white/texture.png"
+    },
     "specularColor": [0.25, 0.25, 0.25],
     "shininess": 32
   }

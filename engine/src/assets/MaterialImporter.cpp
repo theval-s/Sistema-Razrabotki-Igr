@@ -1,5 +1,6 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
+#include <engine/core/PathUtils.hpp>
 
 #include <array>
 #include <utility>
@@ -10,16 +11,16 @@ namespace {
 bool ReadDefinition(const AssetDesc& desc, bool instance, std::string& text, std::string& error) {
     const auto path = AssetPathResolver::ResolveMaterial(desc, instance);
     std::ifstream input(path, std::ios::binary | std::ios::ate);
-    if (!input) { error = "cannot open material JSON: " + path.string(); return false; }
+    if (!input) { error = "cannot open material JSON: " + ToUtf8(path); return false; }
     const auto size = input.tellg();
     if (size <= 0 || size > 1024 * 1024) {
-        error = "material JSON must contain between 1 byte and 1 MiB: " + path.string();
+        error = "material JSON must contain between 1 byte and 1 MiB: " + ToUtf8(path);
         return false;
     }
     text.resize(static_cast<size_t>(size));
     input.seekg(0);
     if (!input.read(text.data(), static_cast<std::streamsize>(size))) {
-        error = "failed to read material JSON: " + path.string();
+        error = "failed to read material JSON: " + ToUtf8(path);
         return false;
     }
     return true;
@@ -40,8 +41,14 @@ bool MaterialImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, CpuPayload&
     if (!ReadDefinition(desc, false, text, error) || !ParseMaterialDefinition(text, parsed.definition, error))
         return false;
     if (parsed.definition.hooks != MaterialHook::None) {
-        const auto path = AssetPathResolver::ResolveShader({
+        auto path = AssetPathResolver::ResolveShader({
             .path = AssetPathResolver::DefaultPath(parsed.definition.shaderFile, AssetKind::Shader)});
+        if (parsed.definition.version == 2) {
+            const CatalogEntry* entry = desc.catalog
+                ? desc.catalog->Find(parsed.definition.shaderReference->id, CatalogAssetKind::Shader) : nullptr;
+            if (!entry) { error = "missing shader UUID: " + parsed.definition.shaderReference->id.ToString(); return false; }
+            path = entry->source;
+        }
         for (size_t i = 0; i < Stages.size(); ++i) {
             const auto& stage = Stages[i];
             if (!HasHook(parsed.definition.hooks, stage.hook)) continue;

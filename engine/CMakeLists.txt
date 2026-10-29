@@ -195,6 +195,7 @@ find_package(enkiTS CONFIG REQUIRED)
 find_package(assimp CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(nlohmann_json_schema_validator CONFIG REQUIRED)
+find_package(stduuid CONFIG REQUIRED)
 
 # Embed the schema so material parsing does not depend on runtime file locations.
 set(MATERIAL_SCHEMA_FILE "${CMAKE_CURRENT_SOURCE_DIR}/schemas/material.schema.json")
@@ -207,8 +208,9 @@ set(ENGINE_CORE_HEADERS
     include/engine/input/InputTypes.hpp
     include/engine/rendering/RenderingSubsystem.hpp
     include/engine/rendering/RenderComponents.hpp
-    include/engine/rendering/SceneRenderSubsystem.hpp
+    include/engine/rendering/RenderExtractionSubsystem.hpp
     include/engine/assets/AssetCommon.hpp
+    include/engine/assets/AssetCatalog.hpp
     include/engine/assets/AssetEvents.hpp
     include/engine/assets/AssetHandle.hpp
     include/engine/assets/AssetPathResolver.hpp
@@ -219,19 +221,26 @@ set(ENGINE_CORE_HEADERS
     include/engine/assets/MaterialDefinition.hpp
     include/engine/core/CoreEvents.hpp
     include/engine/core/FrameContext.hpp
+    include/engine/core/PathUtils.hpp
     include/engine/core/Subsystem.hpp
     include/engine/core/Surface.hpp
     include/engine/project/Project.hpp
     include/engine/scene/Components.hpp
+    include/engine/scene/Controller.hpp
+    include/engine/scene/StateValue.hpp
+    include/engine/scene/SceneQueries.hpp
     include/engine/scene/Scene.hpp
+    include/engine/scene/SceneDocument.hpp
+    include/engine/scene/GameDocument.hpp
     include/engine/scene/Transform.hpp
 )
 
 set(ENGINE_CORE_SOURCES
     src/rendering/RenderingSubsystem.cpp
     src/input/InputSubsystem.cpp
-    src/rendering/SceneRenderSubsystem.cpp
+    src/rendering/RenderExtractionSubsystem.cpp
     src/assets/AssetPathResolver.cpp
+    src/assets/AssetCatalog.cpp
     src/assets/AssetSystem.cpp
     src/assets/AssimpMeshImporter.cpp
     src/assets/ShaderImporter.cpp
@@ -241,6 +250,10 @@ set(ENGINE_CORE_SOURCES
     src/core/Subsystem.cpp
     src/project/Project.cpp
     src/scene/Scene.cpp
+    src/scene/SceneDocument.cpp
+    src/scene/GameDocument.cpp
+    src/scene/StateValue.cpp
+    src/scene/SceneQueries.cpp
 )
 
 foreach(engine_target IN ITEMS engine engine_static)
@@ -252,8 +265,12 @@ foreach(engine_target IN ITEMS engine engine_static)
         target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
         # Assimp is PRIVATE on purpose: AssimpMeshImporter.cpp is its only user and no
         # public header mentions it. Static consumers still get it via the link-only interface.
-        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator)
+        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid)
     endif()
 endforeach()
 
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${ENGINE_CORE_HEADERS} ${ENGINE_CORE_SOURCES})
+
+add_executable(sri-asset-meta tools/asset_meta.cpp)
+target_link_libraries(sri-asset-meta PRIVATE Engine::EngineStatic)
+set_project_warnings(sri-asset-meta)

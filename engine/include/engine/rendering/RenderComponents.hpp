@@ -1,11 +1,12 @@
 #pragma once
 
 #include <engine/assets/AssetHandle.hpp>
+#include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/AssetTypes.hpp>
 #include <engine/rendering/RenderWorld.hpp>
 #include <engine/rendering/resources/Material.hpp>
 
-// Scene components the renderer understands. SceneRenderSubsystem copies them into
+// Scene components the renderer understands. RenderExtractionSubsystem copies them into
 // the RenderWorld every frame.
 
 namespace engine {
@@ -14,10 +15,11 @@ namespace engine {
 /// Engine::GetAssets(); until they are loaded the entity is simply not drawn.
 struct MeshRenderer {
     AssetHandle<MeshAsset> mesh;
-    /// Empty = plain white (BuiltinAssets::WhiteTexture).
-    AssetHandle<TextureAsset> texture{};
-    /// Defaults: specular 0.25 gray, shininess 32. Drawn with the default material.
-    MaterialPBRParameters material{};
+    AssetHandle<MaterialInstanceAsset> materialInstance;
+    // Retain authored UUIDs even when an asynchronous request fails and its
+    // generational handle retires. Runtime handles are never written to JSON.
+    AssetReference meshReference;
+    AssetReference materialReference;
 };
 
 /// Renders the scene from the entity's world position, looking along its local -Z
@@ -40,6 +42,7 @@ struct DirectionalLight {
 namespace BuiltinAssets {
 inline constexpr const char* CubeMesh = "engine/primitives/cube";
 inline constexpr const char* WhiteTexture = "engine/primitives/white";
+inline constexpr const char* DefaultMaterialInstance = "engine/primitives/default.material-instance.json";
 }  // namespace BuiltinAssets
 
 }  // namespace engine

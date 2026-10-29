@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "activeCamera": null,
+  "directionalLight": "34fb74e3-a33c-4f20-8f44-792f841f9be8",
+  "entities": [
+    {
+      "id": "34fb74e3-a33c-4f20-8f44-792f841f9be8",
+      "name": "Sun",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [-0.435, 0.203, 0, 0.877], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.85], "intensity": 1.25 }
+      }
+    },
+    {
+      "id": "fd869429-c5af-467e-89e5-42f64dd8c1b2",
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "Bounds": { "min": [-15, -0.01, -15], "max": [15, 0.01, 15] }
+      }
+    },
+    {
+      "id": "ae324f0a-44ad-4664-97e6-04bf82673402",
+      "name": "Table",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-2.5, 0.55, 0], "rotation": [0, 0, 0, 1], "scale": [3.5, 3.5, 3.5] },
+        "MeshRenderer": {
+          "mesh": { "id": "e88c191b-dd29-4fd5-a2c4-80c5dd2095b2", "path": "game/models/Table/model.obj" },
+          "materialInstance": { "id": "e683818c-8706-4ac6-b953-a4462735d854", "path": "game/materials/table.material-instance.json" }
+        }
+      }
+    },
+    {
+      "id": "2db1f1f9-3990-478c-bcf9-5a2c63cad3a2",
+      "name": "Sign",
+      "tags": ["animated", "decor"],
+      "parent": null,
+      "components": {
+        "Transform": { "position": [2.5, 1.5, -1], "rotation": [0, -0.1741, 0, 0.9847], "scale": [3, 3, 3] },
+        "MeshRenderer": {
+          "mesh": { "id": "82f134b1-e44c-4c0e-bb48-ab42b9ff560c", "path": "game/models/Sign/model.obj" },
+          "materialInstance": { "id": "36ef3590-fadf-45a8-997c-201c09dd67ef", "path": "game/materials/sign.material-instance.json" }
+        },
+        "Controller": { "type": "example/sign", "version": 1, "enabled": true, "data": 0.3 },
+        "GamePersistence": { "transform": true, "controllerState": true }
+      }
+    },
+    {
+      "id": "36b2149c-e842-4841-885f-e48eab87f6c5",
+      "name": "Hammer",
+      "tags": ["animated", "tool"],
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 1, 1.5], "rotation": [0, 0, -0.3193, 0.9476], "scale": [2, 2, 2] },
+        "MeshRenderer": {
+          "mesh": { "id": "191d0b2e-d99d-4940-9852-e33847768686", "path": "game/models/Hammer/model.obj" },
+          "materialInstance": { "id": "76dd8719-fbce-450b-a098-a69e9b129812", "path": "game/materials/hammer.material-instance.json" }
+        },
+        "Controller": { "type": "example/hammer", "version": 1, "enabled": true, "data": 0.8 },
+        "GamePersistence": { "transform": true, "controllerState": true }
+      }
+    },
+    {
+      "id": "c8727a24-84b3-4fe7-b1d8-291ba9d2e8df",
+      "name": "Editor cube",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-5, 0.5, -4], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "MeshRenderer": {
+          "mesh": { "id": "a1051591-1cee-4520-a41d-0b282d7103b4", "path": "engine/primitives/cube/model.obj" },
+          "materialInstance": { "id": "8d3e822a-2c06-4660-8f75-12396a136929", "path": "engine/primitives/default.material-instance.json" }
+        }
+      }
+    }
+  ]
+}

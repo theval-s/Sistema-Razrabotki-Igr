@@ -9,6 +9,7 @@
 
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
+#include <engine/core/PathUtils.hpp>
 
 namespace engine {
 namespace {
@@ -82,7 +83,7 @@ bool TextureImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPa
         static const WicApartment apartment;
         const ScopedCom com;
         if (!apartment || !com) {
-            error = std::format("cannot initialize COM on this thread to decode '{}'", path.string());
+            error = std::format("cannot initialize COM on this thread to decode '{}'", ToUtf8(path));
             return false;
         }
         // The device-only overload: with a context DirectXTK would defer the mip chain to a
@@ -102,7 +103,7 @@ bool TextureImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPa
     }
 
     if (FAILED(res) || !view) {
-        error = std::format("decoding '{}' failed with {:08x}", path.string(), static_cast<unsigned>(res));
+        error = std::format("decoding '{}' failed with {:08x}", ToUtf8(path), static_cast<unsigned>(res));
         return false;
     }
 

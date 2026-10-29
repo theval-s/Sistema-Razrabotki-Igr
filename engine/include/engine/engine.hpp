@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -17,6 +18,7 @@
 #include <engine/core/Subsystem.hpp>
 #include <engine/core/Surface.hpp>
 #include <engine/scene/Scene.hpp>
+#include <engine/rendering/resources/Material.hpp>
 
 namespace enki {
 class TaskScheduler;  // include <TaskScheduler.h> to use it
@@ -25,6 +27,7 @@ class TaskScheduler;  // include <TaskScheduler.h> to use it
 namespace engine {
 
 class AssetSystem;
+struct AssetReference;
 
 [[nodiscard]] ENGINE_API std::string_view version() noexcept;
 
@@ -120,10 +123,31 @@ public:
     /// are delivered at the start of the next Tick(). Main thread only.
     [[nodiscard]] ENGINE_API entt::dispatcher& GetEvents() noexcept;
     [[nodiscard]] ENGINE_API Scene& GetScene() noexcept;
+    /// Parse and validate before switching. Missing assets are diagnosed and
+    /// their renderers remain absent; invalid scene structure preserves the old scene.
+    [[nodiscard]] ENGINE_API bool LoadScene(const std::filesystem::path& file, std::string& error);
+    /// UUID-based scene lookup; path is only a recovery hint.
+    [[nodiscard]] ENGINE_API bool LoadScene(const AssetReference& reference, std::string& error);
+    [[nodiscard]] ENGINE_API bool SaveScene(const std::filesystem::path& file, std::string& error);
+    /// Save only opted-in runtime state, persistent spawns, and deletions against
+    /// the loaded catalog-backed scene. Does not modify the authored scene file.
+    [[nodiscard]] ENGINE_API bool SaveGame(const std::filesystem::path& file, std::string& error);
+    /// Reads its scene UUID, validates references, then restores state before enable.
+    [[nodiscard]] ENGINE_API bool LoadGame(const std::filesystem::path& file, std::string& error);
+    /// First edit clones the ready asset instance. Subsequent edits touch only this entity.
+    [[nodiscard]] ENGINE_API bool EditEntityMaterial(entt::entity entity,
+        const std::function<void(MaterialParameters&)>& edit, std::string& error);
+    [[nodiscard]] ENGINE_API bool SetEntityAlbedoTexture(entt::entity entity,
+        AssetHandle<TextureAsset> texture, std::string& error);
+    /// Transient clone owned by the active scene runtime; empty if none exists.
+    [[nodiscard]] ENGINE_API MaterialInstanceHandle GetEntityMaterialOverride(entt::entity entity) const;
     /// Meshes, textures and shaders by name. Kernel state rather than a subsystem: it
     /// exists from construction, is ready as soon as Initialize() has started the
     /// scheduler, and is pumped once per Tick before the subsystems update.
     [[nodiscard]] ENGINE_API AssetSystem& GetAssets() noexcept;
+    /// The active scene's isolated asset registry. It is drained and GPU-evicted
+    /// on a scene switch; GetAssets() is for non-scene/host-owned assets.
+    [[nodiscard]] ENGINE_API AssetSystem& GetSceneAssets() noexcept;
     /// enkiTS scheduler, running between Initialize() and Shutdown().
     /// The calling (main) thread takes part in WaitforTask().
     [[nodiscard]] ENGINE_API enki::TaskScheduler& GetTaskScheduler() noexcept;

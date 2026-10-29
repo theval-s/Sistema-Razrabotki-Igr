@@ -41,14 +41,14 @@ void EditorCameraSubsystem::Update(const engine::FrameContext& frame) {
     using engine::Key;
 
     engine::Scene& scene = GetEngine().GetScene();
-    const entt::entity camera = scene.GetRegistry().view<engine::Camera>().front();
+    const entt::entity camera = scene.GetActiveCamera();
     if (camera == entt::null) {
         camera_ = entt::null;
         return;
     }
     engine::Transform& transform = scene.GetTransform(camera);
 
-    // Same convention as SceneRenderSubsystem: the camera looks along local -Z. Re-read on
+    // Same convention as RenderExtractionSubsystem: the camera looks along local -Z. Re-read on
     // every RMB press too, in case something else turned the camera meanwhile.
     if (camera != camera_ || input_->WasPressed(engine::MouseButton::Right)) {
         camera_ = camera;

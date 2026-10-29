@@ -28,7 +28,10 @@ add_custom_target(ExampleGameAssets ALL
         "$<TARGET_FILE_DIR:ExampleGame>/game/materials"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/models"
-        "$<TARGET_FILE_DIR:ExampleGame>/models"
+        "$<TARGET_FILE_DIR:ExampleGame>/game/models"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/scenes"
+        "$<TARGET_FILE_DIR:ExampleGame>/game/scenes"
     COMMENT "Copying ExampleGame runtime assets"
     VERBATIM
 )

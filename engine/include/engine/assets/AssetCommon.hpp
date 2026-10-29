@@ -8,6 +8,7 @@
 #include <engine/rendering/resources/ShaderContext.hpp>
 
 namespace engine {
+class AssetCatalog;
 
 /// Which asset table a name belongs to. Also the index of the importer that handles it.
 enum class AssetKind : uint8_t {
@@ -35,6 +36,7 @@ struct AssetDesc {
     ShaderCompileOptions shaderOptions;
     bool shaderFromMemory = false;
     std::string shaderSource;     /// generated shader source, owned by the record while the worker compiles
+    const AssetCatalog* catalog = nullptr; /// read-only catalog for authored UUIDs in importer jobs
 };
 
 }  // namespace engine

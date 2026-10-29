@@ -20,15 +20,17 @@ inline std::vector<MaterialDraw> BuildMaterialDrawList(const RenderWorld& world,
     const RenderingResourceManager& manager, bool shadow, ShaderHandle defaultVS,
     ShaderHandle defaultPS = {}) {
     std::vector<MaterialDraw> draws;
-    draws.reserve(world.renderItems.size());
-    for (const auto& item : world.renderItems) {
+    draws.reserve(world.renderItems.size() + world.sceneItems.size());
+    const auto append = [&](const RenderItem& item) {
         const auto* instance = manager.TryGetMaterialInstance(item.materialInstance);
         const auto* material = instance ? manager.TryGetMaterial(instance->material) : nullptr;
-        if (!material) continue;
+        if (!material) return;
         const auto vs = shadow ? material->shaders.shadowPassVS : material->shaders.gBufferPassVS;
         const auto ps = shadow ? ShaderHandle{} : material->shaders.gBufferPassPS;
         draws.push_back({&item, instance, material, vs ? vs : defaultVS, ps ? ps : defaultPS});
-    }
+    };
+    for (const auto& item : world.renderItems) append(item);
+    for (const auto& item : world.sceneItems) append(item);
     const auto key = [](const MaterialDraw& draw) {
         const auto& instance = draw.item->materialInstance;
         const auto& mesh = draw.item->mesh;

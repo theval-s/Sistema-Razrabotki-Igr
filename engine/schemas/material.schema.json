@@ -4,6 +4,15 @@
       "type": "string",
       "pattern": "^(?!(?:.*[/\\\\])?\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\x00-\\x1f:*?\"<>|]+(?:[/\\\\][^/\\\\\\x00-\\x1f:*?\"<>|]+)*$"
     },
+    "assetReference": {
+      "type": "object",
+      "required": ["id", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+        "path": {"$ref": "#/definitions/reference"}
+      }
+    },
     "number": {
       "type": "number",
       "minimum": 0,
@@ -18,6 +27,7 @@
             {
               "$ref": "#/definitions/reference"
             },
+            {"$ref": "#/definitions/assetReference"},
             {
               "type": "null"
             }
@@ -47,10 +57,10 @@
       "additionalProperties": false,
       "properties": {
         "version": {
-          "const": 1
+          "enum": [1, 2]
         },
         "shaderFile": {
-          "$ref": "#/definitions/reference"
+          "anyOf": [{"$ref": "#/definitions/reference"}, {"$ref": "#/definitions/assetReference"}]
         },
         "hooks": {
           "type": "array",
@@ -91,10 +101,10 @@
       "additionalProperties": false,
       "properties": {
         "version": {
-          "const": 1
+          "enum": [1, 2]
         },
         "material": {
-          "$ref": "#/definitions/reference"
+          "anyOf": [{"$ref": "#/definitions/reference"}, {"$ref": "#/definitions/assetReference"}]
         },
         "parameters": {
           "$ref": "#/definitions/parameters"

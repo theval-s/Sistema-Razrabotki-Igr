@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "hooks": [],
+  "defaults": {
+    "albedoTexture": {
+      "id": "959c2e8e-4a7b-46be-9812-744c26456e5b",
+      "path": "engine/primitives/white/texture.png"
+    }
+  }
+}

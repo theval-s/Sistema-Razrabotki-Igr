@@ -11,7 +11,7 @@
 namespace engine {
 
 /// Thin records: they name GPU resources owned by RenderingResourceManager, they do not
-/// hold D3D objects or free anything. The handles they carry stay valid for the process.
+/// hold D3D objects or free anything. UnloadAll invalidates their GPU handles.
 
 /// Axis-aligned bounds in imported mesh-local space (after centerOnLoad, if enabled).
 struct Aabb {
