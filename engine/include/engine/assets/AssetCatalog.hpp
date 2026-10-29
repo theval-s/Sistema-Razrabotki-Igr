@@ -19,13 +19,14 @@ namespace engine {
 [[nodiscard]] ENGINE_API std::string NewUuid();
 
 /// Compact asset identity. Default construction denotes an unset identity;
-/// construction from text rejects malformed UUIDs. JSON uses canonical text.
+/// malformed or non-canonical text also yields it, so check IsValid() or use
+/// Parse(). JSON uses canonical text.
 class ENGINE_API AssetUuid {
 public:
     AssetUuid() = default;
-    AssetUuid(std::string_view text);
-    AssetUuid(const std::string& text) : AssetUuid(std::string_view(text)) {}
-    AssetUuid(const char* text) : AssetUuid(std::string_view(text)) {}
+    AssetUuid(std::string_view text) noexcept;
+    AssetUuid(const std::string& text) noexcept : AssetUuid(std::string_view(text)) {}
+    AssetUuid(const char* text) noexcept : AssetUuid(std::string_view(text)) {}
     [[nodiscard]] static std::optional<AssetUuid> Parse(std::string_view text) noexcept;
     [[nodiscard]] std::string ToString() const;
     [[nodiscard]] bool IsValid() const noexcept;
@@ -35,8 +36,13 @@ private:
     std::array<std::uint8_t, 16> bytes_{};
 };
 
+// Inline so DLL consumers can hash without an exported symbol. FNV-1a.
 struct AssetUuidHash {
-    [[nodiscard]] std::size_t operator()(const AssetUuid& id) const noexcept;
+    [[nodiscard]] std::size_t operator()(const AssetUuid& id) const noexcept {
+        std::size_t hash = 14695981039346656037ull;
+        for (const auto byte : id.Bytes()) hash = (hash ^ byte) * 1099511628211ull;
+        return hash;
+    }
 };
 
 struct AssetReference {

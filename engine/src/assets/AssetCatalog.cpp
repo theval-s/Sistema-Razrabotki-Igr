@@ -2,13 +2,16 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <fstream>
+#include <functional>
 #include <random>
 #include <set>
 #include <stdexcept>
 #include <unordered_set>
 
 #include <nlohmann/json.hpp>
+#include <stduuid/uuid.h>
 
 #include <engine/core/ResourceID.hpp>
 
@@ -146,16 +149,11 @@ bool IsUuid(std::string_view text) noexcept {
     return true;
 }
 
-AssetUuid::AssetUuid(std::string_view text) {
-    if (!IsUuid(text)) throw std::invalid_argument("invalid asset UUID");
-    auto digit = [](char c) -> std::uint8_t {
-        return static_cast<std::uint8_t>(c <= '9' ? c - '0' : c - 'a' + 10);
-    };
-    std::size_t pos = 0;
-    for (auto& byte : bytes_) {
-        if (text[pos] == '-') ++pos;
-        byte = static_cast<std::uint8_t>((digit(text[pos]) << 4) | digit(text[pos + 1]));
-        pos += 2;
+AssetUuid::AssetUuid(std::string_view text) noexcept {
+    if (!IsUuid(text)) return;
+    if (const auto parsed = uuids::uuid::from_string(text)) {
+        std::ranges::transform(parsed->as_bytes(), bytes_.begin(),
+                               [](std::byte byte) { return std::to_integer<std::uint8_t>(byte); });
     }
 }
 
@@ -169,39 +167,20 @@ bool AssetUuid::IsValid() const noexcept {
 }
 
 std::string AssetUuid::ToString() const {
-    constexpr char hex[] = "0123456789abcdef";
-    std::string result;
-    result.reserve(36);
-    for (std::size_t i = 0; i < bytes_.size(); ++i) {
-        if (i == 4 || i == 6 || i == 8 || i == 10) result += '-';
-        result += hex[bytes_[i] >> 4];
-        result += hex[bytes_[i] & 15];
-    }
-    return result;
-}
-
-std::size_t AssetUuidHash::operator()(const AssetUuid& id) const noexcept {
-    std::size_t hash = 14695981039346656037ull;
-    for (auto byte : id.Bytes()) hash = (hash ^ byte) * 1099511628211ull;
-    return hash;
+    return uuids::to_string(uuids::uuid(bytes_.begin(), bytes_.end()));
 }
 
 std::string NewUuid() {
-    std::random_device source;
-    std::uniform_int_distribution<int> byte(0, 255);
-    std::array<unsigned char, 16> bytes{};
-    for (auto& value : bytes) value = static_cast<unsigned char>(byte(source));
-    bytes[6] = static_cast<unsigned char>((bytes[6] & 0x0f) | 0x40);
-    bytes[8] = static_cast<unsigned char>((bytes[8] & 0x3f) | 0x80);
-    constexpr char hex[] = "0123456789abcdef";
-    std::string result;
-    result.reserve(36);
-    for (std::size_t i = 0; i < bytes.size(); ++i) {
-        if (i == 4 || i == 6 || i == 8 || i == 10) result += '-';
-        result += hex[bytes[i] >> 4];
-        result += hex[bytes[i] & 15];
-    }
-    return result;
+    //mt for faster gen
+    thread_local std::mt19937 engine = [] {
+        std::random_device device;
+        std::array<std::uint32_t, std::mt19937::state_size> seed{};
+        std::ranges::generate(seed, std::ref(device));
+        std::seed_seq sequence(seed.begin(), seed.end());
+        return std::mt19937(sequence);
+    }();
+    thread_local uuids::uuid_random_generator generator{engine};
+    return uuids::to_string(generator());
 }
 
 bool ParseAssetMetadata(std::string_view json, AssetMetadata& value, std::string& error) {
