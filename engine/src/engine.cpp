@@ -23,6 +23,34 @@ namespace engine {
 
 //TODO: Log system 
 
+namespace {
+// path to file, what to write, `what` names the file in error messages.
+bool WriteFileReplacing(const std::filesystem::path& file, const std::string& text,
+                        std::string_view what, std::string& error) {
+    const auto absolute = AssetPathResolver::ToAbsolute(file);
+    auto temporary = absolute;
+    temporary += ".tmp." + NewUuid();
+    {
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        if (!output || !(output << text << '\n')) {
+            error = "cannot write " + std::string(what) + ": " + temporary.string();
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+            return false;
+        }
+    }
+    std::error_code ec;
+    std::filesystem::rename(temporary, absolute, ec);
+    if (ec) {
+        error = "cannot replace " + std::string(what) + ": " + absolute.string() + ": " + ec.message();
+        std::filesystem::remove(temporary, ec);
+        return false;
+    }
+    error.clear();
+    return true;
+}
+} // namespace
+
 struct Engine::Impl {
     struct SceneRuntimeResources {
         std::unordered_map<entt::entity, MaterialInstanceHandle> overrides;
@@ -378,27 +406,7 @@ bool Engine::SaveScene(const std::filesystem::path& file, std::string& error) {
     if (!CaptureSceneDocument(impl_->scene, *impl_->sceneAssets, document, error)) return false;
     std::string text;
     if (!SerializeSceneDocument(document, text, error)) return false;
-    const auto absolute = AssetPathResolver::ToAbsolute(file);
-    auto temporary = absolute;
-    temporary += ".tmp." + NewUuid();
-    {
-        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-        if (!output || !(output << text << '\n')) {
-            error = "cannot write scene file: " + temporary.string();
-            std::error_code ignored;
-            std::filesystem::remove(temporary, ignored);
-            return false;
-        }
-    }
-    std::error_code ec;
-    std::filesystem::rename(temporary, absolute, ec);
-    if (ec) {
-        error = "cannot replace scene file: " + absolute.string() + ": " + ec.message();
-        std::filesystem::remove(temporary, ec);
-        return false;
-    }
-    error.clear();
-    return true;
+    return WriteFileReplacing(file, text, "scene file", error);
 }
 
 bool Engine::SaveGame(const std::filesystem::path& file, std::string& error) {
@@ -444,23 +452,7 @@ bool Engine::SaveGame(const std::filesystem::path& file, std::string& error) {
         }
     std::string text;
     if (!SerializeGameDocument(game, text, error)) return false;
-    const auto absolute = AssetPathResolver::ToAbsolute(file);
-    auto temporary = absolute;
-    temporary += ".tmp." + NewUuid();
-    {
-        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
-        if (!out || !(out << text << '\n')) {
-            error = "cannot write save game: " + temporary.string();
-            std::error_code ignored;
-            std::filesystem::remove(temporary, ignored);
-            return false;
-        }
-    }
-    std::error_code ec;
-    std::filesystem::rename(temporary, absolute, ec);
-    if (ec) { error = "cannot replace save game: " + ec.message(); std::filesystem::remove(temporary, ec); return false; }
-    error.clear();
-    return true;
+    return WriteFileReplacing(file, text, "save game", error);
 }
 
 bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
