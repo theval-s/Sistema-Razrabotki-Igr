@@ -285,12 +285,12 @@ std::optional<AssetReference> AssetSystem::ReferenceFor(AssetHandle<MaterialInst
 const CatalogEntry* AssetSystem::Resolve(const AssetReference& reference, const CatalogAssetKind kind) const {
     const CatalogEntry* entry = catalog_.Find(reference.id, kind);
     if (entry == nullptr) {
-        spdlog::error("AssetSystem: missing or wrong-kind UUID '{}' (hint '{}')", reference.id, reference.path);
+        spdlog::error("AssetSystem: missing or wrong-kind UUID '{}' (hint '{}')", reference.id.ToString(), reference.path);
         return nullptr;
     }
     if (NormalizeName(reference.path) != NormalizeName(entry->path)) {
         spdlog::warn("AssetSystem: stale path hint '{}' for UUID '{}', now at '{}'",
-                     reference.path, reference.id, entry->path);
+                      reference.path, reference.id.ToString(), entry->path);
     }
     return entry;
 }

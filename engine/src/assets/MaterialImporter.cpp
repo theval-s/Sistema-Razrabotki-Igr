@@ -45,7 +45,7 @@ bool MaterialImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, CpuPayload&
         if (parsed.definition.version == 2) {
             const CatalogEntry* entry = desc.catalog
                 ? desc.catalog->Find(parsed.definition.shaderReference->id, CatalogAssetKind::Shader) : nullptr;
-            if (!entry) { error = "missing shader UUID: " + parsed.definition.shaderReference->id; return false; }
+            if (!entry) { error = "missing shader UUID: " + parsed.definition.shaderReference->id.ToString(); return false; }
             path = entry->source;
         }
         for (size_t i = 0; i < Stages.size(); ++i) {

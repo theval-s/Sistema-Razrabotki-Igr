@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -54,6 +55,9 @@ public:
     entt::entity CreateEntityWithId(std::string_view id, std::string_view name = "Entity",
                                     entt::entity parent = entt::null);
     /// Destroys the entity and all of its descendants.
+    /// Destruction, Clear, controller attachment/removal and activation requested
+    /// from a controller callback run FIFO after the outermost callback/teardown.
+    /// Controllers attached during UpdateControllers first update on the next call.
     void DestroyEntity(entt::entity entity);
     void Clear();
 
@@ -74,17 +78,25 @@ public:
     void SetControllerEnabled(entt::entity entity, bool enabled);
     [[nodiscard]] const ControllerDefinition* GetControllerDefinition(entt::entity entity) const;
     // Explicit authoring operation; controller runtime mutations do not change saved data.
-    void SetControllerAuthoredData(entt::entity entity, std::string data);
+    void SetControllerAuthoredData(entt::entity entity, StateValue data);
+    [[nodiscard]] bool CommitControllerAuthored(entt::entity entity, std::string& error);
+    [[nodiscard]] std::optional<StateValue> CaptureControllerGameState(entt::entity entity, std::string& error) const;
+    [[nodiscard]] bool RestoreControllerGameState(entt::entity entity, const StateValue& state, std::string& error);
     void SetControllersActive(bool active);
     void UpdateControllers(double deltaSeconds);
     [[nodiscard]] bool IsInControllerCallback() const noexcept { return inControllerCallback_; }
-    void SetMaterialOverrideReleaser(std::function<void(MaterialInstanceHandle)> releaser);
-    void ReleaseMaterialOverride(entt::entity entity);
+    enum class LifecycleEvent { ComponentRemoving, EntityDestroying };
+    using LifecycleHandler = std::function<void(LifecycleEvent, entt::entity, entt::id_type)>;
+    /// Called before the component/entity is removed, while its data is still accessible.
+    /// Returns a subscription token; remove observers before their captured state dies.
+    [[nodiscard]] std::size_t AddLifecycleObserver(LifecycleHandler handler);
+    void RemoveLifecycleObserver(std::size_t token);
     void SetActiveCamera(entt::entity entity);
     [[nodiscard]] entt::entity GetActiveCamera() const;
     void SetDirectionalLight(entt::entity entity);
     [[nodiscard]] entt::entity GetDirectionalLight() const;
     [[nodiscard]] bool HasUnsupportedComponents() const noexcept { return !unsupported_.empty(); }
+    [[nodiscard]] bool HasUnsupportedComponents(entt::entity entity) const noexcept { return unsupported_.contains(entity); }
 
     template <class T, class... Args>
     T* AddComponent(entt::entity entity, Args&&... args) {
@@ -100,7 +112,7 @@ public:
     bool RemoveComponent(entt::entity entity) {
         static_assert(!IsRequiredComponent<T>, "required components are managed by Scene");
         if (!IsValid(entity) || !registry_.all_of<T>(entity)) return false;
-        if constexpr (std::is_same_v<T, MeshRenderer>) ReleaseMaterialOverride(entity);
+        NotifyLifecycle(LifecycleEvent::ComponentRemoving, entity, entt::type_hash<T>::value());
         registry_.remove<T>(entity);
         if constexpr (!IsSerializableComponent<T>) {
             if (auto it = unsupported_.find(entity); it != unsupported_.end()) {
@@ -172,18 +184,28 @@ private:
                                                  std::is_same_v<T, Tags>;
     template <class T>
     static constexpr bool IsSerializableComponent = std::is_same_v<T, MeshRenderer> ||
-        std::is_same_v<T, Camera> || std::is_same_v<T, DirectionalLight> || std::is_same_v<T, Bounds>;
+        std::is_same_v<T, Camera> || std::is_same_v<T, DirectionalLight> || std::is_same_v<T, Bounds> ||
+        std::is_same_v<T, GamePersistence>;
     /// Logs and returns false for an invalid entity. `caller` names the public function.
     [[nodiscard]] bool CheckEntity(entt::entity entity, std::string_view caller) const;
     void Detach(entt::entity entity);
     void Attach(entt::entity entity, entt::entity parent);
     void Visit(const std::function<void(entt::entity)>& callback) const;
-    void DrainControllerOperations();
+    void FlushCommands();
     void DestroyController(entt::entity entity);
+    void NotifyLifecycle(LifecycleEvent event, entt::entity entity, entt::id_type component);
 
     struct ControllerSlot {
         ControllerDefinition definition;
         std::unique_ptr<Controller> instance;
+        bool active = false;
+    };
+
+    struct Command {
+        enum class Kind { DestroyEntity, Clear, AttachController, RemoveController, SetControllerEnabled, SetControllersActive };
+        Kind kind;
+        entt::entity entity = entt::null;
+        ControllerDefinition definition;
         bool active = false;
     };
 
@@ -192,8 +214,13 @@ private:
     std::unordered_map<entt::entity, std::unordered_set<entt::id_type>> unsupported_;
     std::unordered_map<std::string, ControllerRegistration> controllerTypes_;
     std::unordered_map<entt::entity, ControllerSlot> controllers_;
-    std::vector<std::function<void()>> pendingControllerOperations_;
-    std::function<void(MaterialInstanceHandle)> materialOverrideReleaser_;
+    std::unordered_map<entt::entity, StateValue> pendingGameStates_;
+    // FIFO. Callbacks enqueue; the outermost controller/destruction operation
+    // flushes at its safe point. Commands appended while flushing run last.
+    std::deque<Command> commands_;
+    bool flushingCommands_ = false;
+    std::unordered_map<std::size_t, LifecycleHandler> lifecycleObservers_;
+    std::size_t nextLifecycleObserver_ = 0;
     bool controllersActive_ = false;
     bool inControllerCallback_ = false;
     std::size_t destructionDepth_ = 0;

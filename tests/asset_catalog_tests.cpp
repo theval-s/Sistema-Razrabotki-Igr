@@ -14,9 +14,13 @@ struct Fixture {
 };
 
 TEST(AssetCatalog, ReferencesAndMetadataValidateWithoutChangingOutput) {
+    static_assert(sizeof(engine::AssetUuid) == 16);
     engine::AssetReference ref{engine::NewUuid(), "game/models/table/model.obj"};
+    EXPECT_EQ(engine::AssetUuid(ref.id.ToString()), ref.id);
+    EXPECT_FALSE(engine::AssetUuid::Parse("invalid"));
     std::string json, error;
     ASSERT_TRUE(engine::SerializeAssetReference(ref, json, error)) << error;
+    EXPECT_NE(json.find(ref.id.ToString()), std::string::npos);
     engine::AssetReference read;
     ASSERT_TRUE(engine::ParseAssetReference(json, read, error)) << error;
     EXPECT_EQ(ref.id, read.id);

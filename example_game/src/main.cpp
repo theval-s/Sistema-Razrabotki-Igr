@@ -1,7 +1,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <charconv>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -53,6 +52,7 @@ engine::MeshHandle MakeGroundMesh(engine::RenderingResourceManager& resourceMana
             {Vector4{extent, 0.0f, -extent, 1.0f}, normal, Vector2{repetitions, repetitions}},
             {Vector4{-extent, 0.0f, -extent, 1.0f}, normal, Vector2{0.0f, repetitions}}
         },
+        // Match CreateCube's clockwise front-face convention (viewed from above).
         .indicies = {0, 2, 1, 2, 0, 3}
     };
     return engine::ugly_utils::FromRawMesh(resourceManager, mesh);
@@ -193,7 +193,11 @@ void UpdateLights(engine::RenderWorld& world, float time) {
 
 class ExampleMotionController final : public engine::Controller {
 public:
-    ExampleMotionController(bool hammer, float speed) : hammer_(hammer), speed_(speed) {}
+    explicit ExampleMotionController(bool hammer) : hammer_(hammer) {}
+    void LoadAuthored(const engine::StateValue& data) override { speed_ = static_cast<float>(data.Number()); }
+    void SaveAuthored(engine::StateValue& data) const override { data = static_cast<double>(speed_); }
+    void LoadGameState(const engine::StateValue& data) override { time_ = static_cast<float>(data.At("time").Number()); }
+    void SaveGameState(engine::StateValue& data) const override { data["time"] = static_cast<double>(time_); }
     void OnCreate() override { startPosition_ = GetScene().GetTransform(GetEntity()).position; }
     void Update(double deltaSeconds) override {
         time_ += static_cast<float>(deltaSeconds);
@@ -207,27 +211,20 @@ public:
     }
 private:
     bool hammer_;
-    float speed_;
+    float speed_ = 0;
     float time_ = 0;
     Vector3 startPosition_{};
 };
 
 engine::ControllerRegistration MotionRegistration(bool hammer) {
-    auto parse = [](std::string_view data, float& speed) {
-        auto [end, error] = std::from_chars(data.data(), data.data() + data.size(), speed);
-        return error == std::errc{} && end == data.data() + data.size() && std::isfinite(speed) && speed > 0;
-    };
     return {1,
-        [parse](std::string_view data, std::string& error) {
-            float speed = 0;
-            if (parse(data, speed)) return true;
-            error = "motion speed must be a positive number";
-            return false;
+        [](const engine::StateValue& data, std::string& error) {
+            try { if (std::isfinite(data.Number()) && data.Number() > 0) return true; }
+            catch (const std::exception&) {}
+            error = "motion speed must be a positive number"; return false;
         },
-        [parse, hammer](std::string_view data) -> std::unique_ptr<engine::Controller> {
-            float speed = 0;
-            if (!parse(data, speed)) return nullptr;
-            return std::make_unique<ExampleMotionController>(hammer, speed);
+        [hammer]() -> std::unique_ptr<engine::Controller> {
+            return std::make_unique<ExampleMotionController>(hammer);
         }};
 }
 
@@ -325,13 +322,6 @@ public:
         };
 
         groundTexture_ = MakeCheckerTexture(resources);
-        auto& assets = GetEngine().GetSceneAssets();
-        groundInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"966cd1ab-72b2-46dc-84dc-8e81b984a0ac",
-            "game/materials/ground.material-instance.json"});
-        enchantedInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"b9e1fbd1-dfa0-416b-857e-8823b736da81",
-            "game/materials/enchanted.material-instance.json"});
-        markerInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"70da8a2f-d0b1-40fd-bd45-7ad5e610e855",
-            "game/materials/glossy.material-instance.json"});
         enchantmentBuffer_ = resources.CreateConstantBuffer<EnchantmentBufferData>();
         lightMarkerMesh_ = engine::ugly_utils::FromRawMesh(
             resources, engine::ugly_utils::CreateSphere(0.15f));
@@ -369,9 +359,8 @@ public:
     void Shutdown() override {
         auto& resources = rendering_->GetResourceManager();
         rendering_->GetWorld().renderItems.clear();
-        for (const auto instance : instances_) resources.DestroyMaterialInstance(instance);
+        ReleaseSceneInstances();
         if (enchantmentBuffer_) resources.DestroyBuffer(enchantmentBuffer_);
-        instances_.clear();
     }
 
     void Update(const engine::FrameContext& frame) override {
@@ -395,6 +384,28 @@ public:
             world.camera.aspectRatio = static_cast<float>(surface.width) / static_cast<float>(surface.height);
         }
         UpdateCamera(world.camera, window_, static_cast<float>(frame.deltaSeconds));
+        if (GetAsyncKeyState(VK_F5) & 1) {
+            std::string error;
+            if (!GetEngine().SaveGame("game/example.save.json", error)) spdlog::error("Save game: {}", error);
+            else spdlog::info("Saved game/example.save.json");
+        }
+        if (GetAsyncKeyState(VK_F9) & 1) {
+            ReleaseSceneInstances();
+            std::string error;
+            if (!GetEngine().LoadGame("game/example.save.json", error)) spdlog::error("Load game: {}", error);
+            else if (!error.empty()) spdlog::warn("Load game: {}", error);
+            RequestSceneMaterials();
+        }
+        // LoadScene unloads the scene asset scope. Request procedural materials
+        // only after that initial load (and again after a save-game reload).
+        if (!sceneMaterialsRequested_) RequestSceneMaterials();
+        if (GetAsyncKeyState('R') & 1) {
+            const Matrix rotation = Matrix::CreateFromYawPitchRoll(world.camera.yaw, world.camera.pitch, 0);
+            const Vector3 direction = Vector3::TransformNormal(Vector3::Forward, rotation);
+            const auto hits = engine::RaycastAll(GetEngine().GetScene(), GetEngine().GetSceneAssets(),
+                world.camera.position, direction, 100.0f);
+            if (!hits.empty()) spdlog::info("Ray hit {} at {}", GetEngine().GetScene().GetName(hits[0].entity), hits[0].distance);
+        }
         const float time = static_cast<float>(frame.simulationTimeSeconds);
         if (!objects_[0].materialInstance) objects_[0].materialInstance = MakeInstance(groundInstance_, groundTexture_);
         if (!objects_[cubeIndex_].materialInstance)
@@ -415,6 +426,25 @@ public:
     }
 
 private:
+    void RequestSceneMaterials() {
+        auto& assets = GetEngine().GetSceneAssets();
+        groundInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"966cd1ab-72b2-46dc-84dc-8e81b984a0ac",
+            "game/materials/ground.material-instance.json"});
+        enchantedInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"b9e1fbd1-dfa0-416b-857e-8823b736da81",
+            "game/materials/enchanted.material-instance.json"});
+        markerInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"70da8a2f-d0b1-40fd-bd45-7ad5e610e855",
+            "game/materials/glossy.material-instance.json"});
+        sceneMaterialsRequested_ = true;
+    }
+
+    void ReleaseSceneInstances() {
+        rendering_->GetWorld().renderItems.clear();
+        auto& resources = rendering_->GetResourceManager();
+        for (const auto instance : instances_) resources.DestroyMaterialInstance(instance);
+        instances_.clear();
+        for (auto& object : objects_) object.materialInstance = {};
+    }
+
     engine::MaterialInstanceHandle MakeInstance(engine::AssetHandle<engine::MaterialInstanceAsset> asset,
                                                  engine::TextureHandle texture, engine::BufferHandle customBuffer = {}) {
         const auto ready = GetEngine().GetSceneAssets().Peek(asset);
@@ -442,6 +472,7 @@ private:
     engine::AssetHandle<engine::MaterialInstanceAsset> groundInstance_;
     engine::AssetHandle<engine::MaterialInstanceAsset> enchantedInstance_;
     engine::AssetHandle<engine::MaterialInstanceAsset> markerInstance_;
+    bool sceneMaterialsRequested_ = false;
     engine::BufferHandle enchantmentBuffer_;
     size_t cubeIndex_ = 0;
     std::vector<engine::MaterialInstanceHandle> instances_;

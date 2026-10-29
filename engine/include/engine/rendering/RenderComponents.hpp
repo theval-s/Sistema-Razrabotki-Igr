@@ -20,7 +20,6 @@ struct MeshRenderer {
     // generational handle retires. Runtime handles are never written to JSON.
     AssetReference meshReference;
     AssetReference materialReference;
-    MaterialInstanceHandle materialOverride; // transient per-entity clone, never serialized
 };
 
 /// Renders the scene from the entity's world position, looking along its local -Z

@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include <entt/entity/entity.hpp>
+#include <engine/scene/StateValue.hpp>
 
 namespace engine {
 class Scene;
@@ -16,12 +17,16 @@ struct ControllerDefinition {
     std::string type;
     int version = 1;
     bool enabled = true;
-    std::string data = "{}"; // JSON value, kept even if the type is unavailable
+    StateValue data; // authored JSON-compatible value, retained if unavailable
 };
 
 class Controller {
 public:
     virtual ~Controller() = default;
+    virtual void LoadAuthored(const StateValue& data) { (void)data; }
+    virtual void SaveAuthored(StateValue& data) const { (void)data; }
+    virtual void LoadGameState(const StateValue& state) { (void)state; }
+    virtual void SaveGameState(StateValue& state) const { (void)state; }
     virtual void OnCreate() {}
     virtual void OnEnable() {}
     virtual void Update(double deltaSeconds) { (void)deltaSeconds; }
@@ -38,11 +43,11 @@ private:
     entt::entity entity_ = entt::null;
 };
 
-// Validate is pure and called before replacing the scene; factory runs after
-// commit. Both receive the controller-owned, JSON-compatible data payload.
+// Validate is side-effect free and called before replacing the scene.
+// Factory creates an unattached controller; LoadAuthored runs after commitment.
 struct ControllerRegistration {
     int version = 1;
-    std::function<bool(std::string_view data, std::string& error)> validate;
-    std::function<std::unique_ptr<Controller>(std::string_view data)> create;
+    std::function<bool(const StateValue& data, std::string& error)> validate;
+    std::function<std::unique_ptr<Controller>()> create;
 };
 } // namespace engine

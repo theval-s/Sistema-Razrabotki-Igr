@@ -13,6 +13,15 @@
       }
     },
     {
+      "id": "fd869429-c5af-467e-89e5-42f64dd8c1b2",
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "Bounds": { "min": [-15, -0.01, -15], "max": [15, 0.01, 15] }
+      }
+    },
+    {
       "id": "ae324f0a-44ad-4664-97e6-04bf82673402",
       "name": "Table",
       "parent": null,
@@ -35,7 +44,8 @@
           "mesh": { "id": "82f134b1-e44c-4c0e-bb48-ab42b9ff560c", "path": "game/models/Sign/model.obj" },
           "materialInstance": { "id": "36ef3590-fadf-45a8-997c-201c09dd67ef", "path": "game/materials/sign.material-instance.json" }
         },
-        "Controller": { "type": "example/sign", "version": 1, "enabled": true, "data": 0.3 }
+        "Controller": { "type": "example/sign", "version": 1, "enabled": true, "data": 0.3 },
+        "GamePersistence": { "transform": true, "controllerState": true }
       }
     },
     {
@@ -49,7 +59,8 @@
           "mesh": { "id": "191d0b2e-d99d-4940-9852-e33847768686", "path": "game/models/Hammer/model.obj" },
           "materialInstance": { "id": "76dd8719-fbce-450b-a098-a69e9b129812", "path": "game/materials/hammer.material-instance.json" }
         },
-        "Controller": { "type": "example/hammer", "version": 1, "enabled": true, "data": 0.8 }
+        "Controller": { "type": "example/hammer", "version": 1, "enabled": true, "data": 0.8 },
+        "GamePersistence": { "transform": true, "controllerState": true }
       }
     },
     {

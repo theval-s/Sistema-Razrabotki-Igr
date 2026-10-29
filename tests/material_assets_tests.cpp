@@ -458,14 +458,22 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     ASSERT_TRUE(engine.EditEntityMaterial(cube, [](MaterialParameters& parameters) {
         parameters.parameters.shininess = 17;
     }, sceneError)) << sceneError;
-    const auto clone = engine.GetScene().TryGetComponent<MeshRenderer>(cube)->materialOverride;
+    const auto clone = engine.GetEntityMaterialOverride(cube);
     ASSERT_TRUE(clone);
     EXPECT_NE(clone, baseInstance);
-    EXPECT_FALSE(engine.GetScene().TryGetComponent<MeshRenderer>(otherCube)->materialOverride);
+    EXPECT_FALSE(engine.GetEntityMaterialOverride(otherCube));
     EXPECT_FLOAT_EQ(resources.TryGetMaterialInstance(baseInstance)->parameters.parameters.shininess, baseShininess);
     EXPECT_FLOAT_EQ(resources.TryGetMaterialInstance(clone)->parameters.parameters.shininess, 17);
     engine.GetScene().DestroyEntity(cube);
     EXPECT_EQ(resources.TryGetMaterialInstance(clone), nullptr);
+    ASSERT_TRUE(engine.EditEntityMaterial(otherCube, [](MaterialParameters& parameters) {
+        parameters.parameters.shininess = 19;
+    }, sceneError)) << sceneError;
+    const auto otherClone = engine.GetEntityMaterialOverride(otherCube);
+    ASSERT_TRUE(otherClone);
+    EXPECT_TRUE(engine.GetScene().RemoveComponent<MeshRenderer>(otherCube));
+    EXPECT_FALSE(engine.GetEntityMaterialOverride(otherCube));
+    EXPECT_EQ(resources.TryGetMaterialInstance(otherClone), nullptr);
     rendering->GetWorld().renderItems.push_back({}); // host-owned list is not touched by extraction
     extraction->Update(sceneFrame);
     EXPECT_EQ(rendering->GetWorld().renderItems.size(), 1u);

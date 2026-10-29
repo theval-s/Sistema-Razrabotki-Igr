@@ -94,7 +94,7 @@ AssetReference ReferenceFromJson(const Json& j) {
     if (!j.is_object() || j.size() != 2 || !j.contains("id") || !j.contains("path"))
         throw std::invalid_argument("reference needs exactly id and path");
     AssetReference ref{j.at("id").get<std::string>(), j.at("path").get<std::string>()};
-    if (!IsUuid(ref.id) || !ValidPath(ref.path))
+    if (!ref.id.IsValid() || !ValidPath(ref.path))
         throw std::invalid_argument("invalid asset UUID or root-qualified path hint");
     return ref;
 }
@@ -104,8 +104,8 @@ AssetMetadata MetadataFromJson(const Json& j) {
         j.at("version") != 1 || j.size() > 4)
         throw std::invalid_argument("metadata needs version 1, id and kind");
     AssetMetadata meta;
-    meta.id = j.at("id").get<std::string>();
-    if (!IsUuid(meta.id)) throw std::invalid_argument("invalid metadata UUID");
+    meta.id = AssetUuid(j.at("id").get<std::string>());
+    if (!meta.id.IsValid()) throw std::invalid_argument("invalid metadata UUID");
     const auto kind = j.at("kind").get<std::string>();
     bool found = false;
     for (const auto candidate : {CatalogAssetKind::Mesh, CatalogAssetKind::Texture, CatalogAssetKind::Shader,
@@ -146,6 +146,46 @@ bool IsUuid(std::string_view text) noexcept {
     return true;
 }
 
+AssetUuid::AssetUuid(std::string_view text) {
+    if (!IsUuid(text)) throw std::invalid_argument("invalid asset UUID");
+    auto digit = [](char c) -> std::uint8_t {
+        return static_cast<std::uint8_t>(c <= '9' ? c - '0' : c - 'a' + 10);
+    };
+    std::size_t pos = 0;
+    for (auto& byte : bytes_) {
+        if (text[pos] == '-') ++pos;
+        byte = static_cast<std::uint8_t>((digit(text[pos]) << 4) | digit(text[pos + 1]));
+        pos += 2;
+    }
+}
+
+std::optional<AssetUuid> AssetUuid::Parse(std::string_view text) noexcept {
+    if (!IsUuid(text)) return std::nullopt;
+    return AssetUuid(text);
+}
+
+bool AssetUuid::IsValid() const noexcept {
+    return std::any_of(bytes_.begin(), bytes_.end(), [](auto byte) { return byte != 0; });
+}
+
+std::string AssetUuid::ToString() const {
+    constexpr char hex[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(36);
+    for (std::size_t i = 0; i < bytes_.size(); ++i) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) result += '-';
+        result += hex[bytes_[i] >> 4];
+        result += hex[bytes_[i] & 15];
+    }
+    return result;
+}
+
+std::size_t AssetUuidHash::operator()(const AssetUuid& id) const noexcept {
+    std::size_t hash = 14695981039346656037ull;
+    for (auto byte : id.Bytes()) hash = (hash ^ byte) * 1099511628211ull;
+    return hash;
+}
+
 std::string NewUuid() {
     std::random_device source;
     std::uniform_int_distribution<int> byte(0, 255);
@@ -170,7 +210,7 @@ bool ParseAssetMetadata(std::string_view json, AssetMetadata& value, std::string
 
 bool SerializeAssetMetadata(const AssetMetadata& value, std::string& json, std::string& error) {
     try {
-        Json encoded = {{"version", 1}, {"id", value.id}, {"kind", KindName(value.kind)}};
+        Json encoded = {{"version", 1}, {"id", value.id.ToString()}, {"kind", KindName(value.kind)}};
         if (value.kind == CatalogAssetKind::Mesh) encoded["centerOnLoad"] = value.centerOnLoad;
         const auto text = encoded.dump(2);
         [[maybe_unused]] const auto checked = MetadataFromJson(Read(text));
@@ -186,7 +226,7 @@ bool ParseAssetReference(std::string_view json, AssetReference& value, std::stri
 
 bool SerializeAssetReference(const AssetReference& value, std::string& json, std::string& error) {
     try {
-        const auto text = Json{{"id", value.id}, {"path", value.path}}.dump();
+        const auto text = Json{{"id", value.id.ToString()}, {"path", value.path}}.dump();
         [[maybe_unused]] const auto checked = ReferenceFromJson(Read(text));
         json = text;
         error.clear();
@@ -196,8 +236,8 @@ bool SerializeAssetReference(const AssetReference& value, std::string& json, std
 
 bool AssetCatalog::Scan(const std::filesystem::path& gameRoot, const std::filesystem::path& engineRoot,
                         std::string& error) {
-    std::unordered_map<std::string, CatalogEntry> entries;
-    std::unordered_map<std::string, std::string> paths;
+    std::unordered_map<AssetUuid, CatalogEntry, AssetUuidHash> entries;
+    std::unordered_map<std::string, AssetUuid> paths;
     std::string missingError;
     try {
         for (const auto& [root, prefix] : {std::pair{gameRoot, std::string("game")},
@@ -231,7 +271,7 @@ bool AssetCatalog::Scan(const std::filesystem::path& gameRoot, const std::filesy
                 if (!paths.emplace(key, meta.id).second)
                     throw std::runtime_error("duplicate asset path: " + logical);
                 const auto [it, inserted] = entries.emplace(meta.id, CatalogEntry{meta, logical, source});
-                if (!inserted) throw std::runtime_error("duplicate asset UUID: " + meta.id + " at " + Utf8(source));
+                if (!inserted) throw std::runtime_error("duplicate asset UUID: " + meta.id.ToString() + " at " + Utf8(source));
             }
         }
     } catch (const std::exception& e) { error = e.what(); return false; }
@@ -242,11 +282,21 @@ bool AssetCatalog::Scan(const std::filesystem::path& gameRoot, const std::filesy
 }
 
 const CatalogEntry* AssetCatalog::Find(std::string_view uuid) const {
-    const auto it = entries_.find(std::string(uuid));
+    const auto parsed = AssetUuid::Parse(uuid);
+    return parsed ? Find(*parsed) : nullptr;
+}
+
+const CatalogEntry* AssetCatalog::Find(const AssetUuid& uuid) const {
+    const auto it = entries_.find(uuid);
     return it == entries_.end() ? nullptr : &it->second;
 }
 
 const CatalogEntry* AssetCatalog::Find(std::string_view uuid, CatalogAssetKind kind) const {
+    const auto* entry = Find(uuid);
+    return entry && entry->metadata.kind == kind ? entry : nullptr;
+}
+
+const CatalogEntry* AssetCatalog::Find(const AssetUuid& uuid, CatalogAssetKind kind) const {
     const auto* entry = Find(uuid);
     return entry && entry->metadata.kind == kind ? entry : nullptr;
 }

@@ -16,6 +16,7 @@ Scene::Scene() {
     static_cast<void>(registry_.storage<Camera>());
     static_cast<void>(registry_.storage<DirectionalLight>());
     static_cast<void>(registry_.storage<Bounds>());
+    static_cast<void>(registry_.storage<GamePersistence>());
 }
 Scene::~Scene() { Clear(); }
 
@@ -50,7 +51,7 @@ entt::entity Scene::CreateEntityWithId(const std::string_view id, const std::str
 
 void Scene::DestroyEntity(const entt::entity entity) {
     if (inControllerCallback_) {
-        pendingControllerOperations_.push_back([this, entity] { if (IsValid(entity)) DestroyEntity(entity); });
+        commands_.push_back({Command::Kind::DestroyEntity, entity});
         return;
     }
     if (!CheckEntity(entity, "DestroyEntity")) {
@@ -65,7 +66,8 @@ void Scene::DestroyEntity(const entt::entity entity) {
     }
 
     DestroyController(entity);
-    ReleaseMaterialOverride(entity);
+    pendingGameStates_.erase(entity);
+    NotifyLifecycle(LifecycleEvent::EntityDestroying, entity, 0);
 
     Detach(entity);
     const auto& id = registry_.get<EntityId>(entity).value;
@@ -75,14 +77,15 @@ void Scene::DestroyEntity(const entt::entity entity) {
     unsupported_.erase(entity);
     registry_.destroy(entity);
     ++revision_;
-    if (--destructionDepth_ == 0) DrainControllerOperations();
+    if (--destructionDepth_ == 0) FlushCommands();
 }
 
 void Scene::Clear() {
     if (inControllerCallback_) {
-        pendingControllerOperations_.push_back([this] { Clear(); });
+        commands_.push_back({Command::Kind::Clear});
         return;
     }
+    ++destructionDepth_;
     const std::vector<entt::entity> roots = roots_;
     for (const entt::entity root : roots) {
         DestroyEntity(root);
@@ -91,9 +94,11 @@ void Scene::Clear() {
     ids_.clear();
     unsupported_.clear();
     controllers_.clear();
+    pendingGameStates_.clear();
     activeCameraId_.clear();
     directionalLightId_.clear();
     ++revision_;
+    if (--destructionDepth_ == 0) FlushCommands();
 }
 
 bool Scene::IsValid(const entt::entity entity) const {
@@ -165,9 +170,9 @@ bool Scene::RegisterController(std::string_view type, ControllerRegistration reg
     for (auto& [entity, slot] : controllers_)
         if (slot.definition.type == type && !slot.instance) {
             const auto definition = slot.definition;
-            pendingControllerOperations_.push_back([this, entity, definition] { AttachController(entity, definition); });
+            commands_.push_back({Command::Kind::AttachController, entity, definition});
         }
-    DrainControllerOperations();
+    FlushCommands();
     return true;
 }
 
@@ -187,9 +192,7 @@ bool Scene::ValidateController(const ControllerDefinition& definition, std::stri
 
 void Scene::AttachController(entt::entity entity, ControllerDefinition definition) {
     if (inControllerCallback_) {
-        pendingControllerOperations_.push_back([this, entity, definition = std::move(definition)]() mutable {
-            AttachController(entity, std::move(definition));
-        });
+        commands_.push_back({Command::Kind::AttachController, entity, std::move(definition)});
         return;
     }
     if (!IsValid(entity)) return;
@@ -200,12 +203,17 @@ void Scene::AttachController(entt::entity entity, ControllerDefinition definitio
     std::string error;
     if (ValidateController(slot.definition, error)) {
         try {
-            slot.instance = controllerTypes_.at(slot.definition.type).create(slot.definition.data);
+            slot.instance = controllerTypes_.at(slot.definition.type).create();
             if (slot.instance) {
                 slot.instance->scene_ = this;
                 slot.instance->entity_ = entity;
                 inControllerCallback_ = true;
+                slot.instance->LoadAuthored(slot.definition.data);
                 slot.instance->OnCreate();
+                if (const auto pending = pendingGameStates_.find(entity); pending != pendingGameStates_.end()) {
+                    slot.instance->LoadGameState(pending->second);
+                    pendingGameStates_.erase(pending);
+                }
                 if (controllersActive_ && slot.definition.enabled) {
                     slot.active = true;
                     slot.instance->OnEnable();
@@ -225,7 +233,7 @@ void Scene::AttachController(entt::entity entity, ControllerDefinition definitio
     }
     if (!error.empty()) spdlog::error("Scene controller on {}: {}", GetId(entity), error);
     ++revision_;
-    DrainControllerOperations();
+    FlushCommands();
 }
 
 void Scene::DestroyController(entt::entity entity) {
@@ -247,16 +255,16 @@ void Scene::DestroyController(entt::entity entity) {
 
 void Scene::RemoveController(entt::entity entity) {
     if (inControllerCallback_) {
-        pendingControllerOperations_.push_back([this, entity] { RemoveController(entity); });
+        commands_.push_back({Command::Kind::RemoveController, entity});
         return;
     }
     DestroyController(entity);
-    DrainControllerOperations();
+    FlushCommands();
 }
 
 void Scene::SetControllerEnabled(entt::entity entity, bool enabled) {
     if (inControllerCallback_) {
-        pendingControllerOperations_.push_back([this, entity, enabled] { SetControllerEnabled(entity, enabled); });
+        commands_.push_back({Command::Kind::SetControllerEnabled, entity, {}, enabled});
         return;
     }
     auto it = controllers_.find(entity);
@@ -272,7 +280,7 @@ void Scene::SetControllerEnabled(entt::entity entity, bool enabled) {
         inControllerCallback_ = false;
     }
     ++revision_;
-    DrainControllerOperations();
+    FlushCommands();
 }
 
 const ControllerDefinition* Scene::GetControllerDefinition(entt::entity entity) const {
@@ -280,16 +288,54 @@ const ControllerDefinition* Scene::GetControllerDefinition(entt::entity entity) 
     return it == controllers_.end() ? nullptr : &it->second.definition;
 }
 
-void Scene::SetControllerAuthoredData(entt::entity entity, std::string data) {
+void Scene::SetControllerAuthoredData(entt::entity entity, StateValue data) {
     if (auto it = controllers_.find(entity); it != controllers_.end()) {
         it->second.definition.data = std::move(data);
         ++revision_;
     }
 }
 
+bool Scene::CommitControllerAuthored(entt::entity entity, std::string& error) {
+    auto it = controllers_.find(entity);
+    if (it == controllers_.end() || !it->second.instance) { error = "controller is unavailable"; return false; }
+    try {
+        auto authored = it->second.definition.data;
+        it->second.instance->SaveAuthored(authored);
+        if (!ValidateController(ControllerDefinition{it->second.definition.type,
+            it->second.definition.version, it->second.definition.enabled, authored}, error)) return false;
+        it->second.definition.data = std::move(authored);
+        ++revision_;
+        error.clear();
+        return true;
+    } catch (const std::exception& e) { error = e.what(); return false; }
+}
+
+std::optional<StateValue> Scene::CaptureControllerGameState(entt::entity entity, std::string& error) const {
+    auto it = controllers_.find(entity);
+    if (it == controllers_.end() || !it->second.instance) {
+        if (const auto pending = pendingGameStates_.find(entity); pending != pendingGameStates_.end())
+            return pending->second;
+        return std::nullopt;
+    }
+    try {
+        StateValue state;
+        it->second.instance->SaveGameState(state);
+        error.clear();
+        return state;
+    } catch (const std::exception& e) { error = e.what(); return std::nullopt; }
+}
+
+bool Scene::RestoreControllerGameState(entt::entity entity, const StateValue& state, std::string& error) {
+    auto it = controllers_.find(entity);
+    if (it == controllers_.end()) { error = "controller is missing"; return false; }
+    if (!it->second.instance) { pendingGameStates_[entity] = state; error = "controller is unavailable; state retained"; return true; }
+    try { it->second.instance->LoadGameState(state); error.clear(); return true; }
+    catch (const std::exception& e) { error = e.what(); return false; }
+}
+
 void Scene::SetControllersActive(bool active) {
     if (inControllerCallback_) {
-        pendingControllerOperations_.push_back([this, active] { SetControllersActive(active); });
+        commands_.push_back({Command::Kind::SetControllersActive, entt::null, {}, active});
         return;
     }
     controllersActive_ = active;
@@ -304,7 +350,7 @@ void Scene::SetControllersActive(bool active) {
         } catch (const std::exception& e) { spdlog::error("Controller activation: {}", e.what()); }
         inControllerCallback_ = false;
     });
-    DrainControllerOperations();
+    FlushCommands();
 }
 
 void Scene::UpdateControllers(double deltaSeconds) {
@@ -320,26 +366,48 @@ void Scene::UpdateControllers(double deltaSeconds) {
         }
     }
     inControllerCallback_ = false;
-    DrainControllerOperations();
+    FlushCommands();
 }
 
-void Scene::DrainControllerOperations() {
-    if (inControllerCallback_ || destructionDepth_ != 0) return;
-    while (!pendingControllerOperations_.empty()) {
-        auto operations = std::move(pendingControllerOperations_);
-        pendingControllerOperations_.clear();
-        for (auto& operation : operations) operation();
+void Scene::FlushCommands() {
+    if (flushingCommands_ || inControllerCallback_ || destructionDepth_ != 0) return;
+    flushingCommands_ = true;
+    while (!commands_.empty()) {
+        Command command = std::move(commands_.front());
+        commands_.pop_front();
+        switch (command.kind) {
+        case Command::Kind::DestroyEntity:
+            if (IsValid(command.entity)) DestroyEntity(command.entity);
+            break;
+        case Command::Kind::Clear: Clear(); break;
+        case Command::Kind::AttachController:
+            if (IsValid(command.entity)) AttachController(command.entity, std::move(command.definition));
+            break;
+        case Command::Kind::RemoveController: RemoveController(command.entity); break;
+        case Command::Kind::SetControllerEnabled: SetControllerEnabled(command.entity, command.active); break;
+        case Command::Kind::SetControllersActive: SetControllersActive(command.active); break;
+        }
     }
+    flushingCommands_ = false;
 }
 
-void Scene::SetMaterialOverrideReleaser(std::function<void(MaterialInstanceHandle)> releaser) {
-    materialOverrideReleaser_ = std::move(releaser);
+std::size_t Scene::AddLifecycleObserver(LifecycleHandler handler) {
+    const auto token = ++nextLifecycleObserver_;
+    lifecycleObservers_.emplace(token, std::move(handler));
+    return token;
 }
 
-void Scene::ReleaseMaterialOverride(entt::entity entity) {
-    if (auto* renderer = registry_.try_get<MeshRenderer>(entity); renderer && renderer->materialOverride) {
-        if (materialOverrideReleaser_) materialOverrideReleaser_(renderer->materialOverride);
-        renderer->materialOverride = {};
+void Scene::RemoveLifecycleObserver(std::size_t token) {
+    lifecycleObservers_.erase(token);
+}
+
+void Scene::NotifyLifecycle(LifecycleEvent event, entt::entity entity, entt::id_type component) {
+    std::vector<std::size_t> tokens;
+    tokens.reserve(lifecycleObservers_.size());
+    for (const auto& [token, handler] : lifecycleObservers_) tokens.push_back(token);
+    for (const auto token : tokens) {
+        if (const auto it = lifecycleObservers_.find(token); it != lifecycleObservers_.end())
+            it->second(event, entity, component);
     }
 }
 

@@ -225,9 +225,11 @@ set(ENGINE_CORE_HEADERS
     include/engine/project/Project.hpp
     include/engine/scene/Components.hpp
     include/engine/scene/Controller.hpp
+    include/engine/scene/StateValue.hpp
     include/engine/scene/SceneQueries.hpp
     include/engine/scene/Scene.hpp
     include/engine/scene/SceneDocument.hpp
+    include/engine/scene/GameDocument.hpp
     include/engine/scene/Transform.hpp
 )
 
@@ -247,6 +249,8 @@ set(ENGINE_CORE_SOURCES
     src/project/Project.cpp
     src/scene/Scene.cpp
     src/scene/SceneDocument.cpp
+    src/scene/GameDocument.cpp
+    src/scene/StateValue.cpp
     src/scene/SceneQueries.cpp
 )
 

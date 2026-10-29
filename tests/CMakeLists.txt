@@ -8,6 +8,21 @@ add_executable(scene_document_tests scene_document_tests.cpp)
 target_link_libraries(scene_document_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 target_compile_definitions(scene_document_tests PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
 set_project_warnings(scene_document_tests)
+add_custom_command(TARGET scene_document_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${PROJECT_SOURCE_DIR}/engine/primitives" "$<TARGET_FILE_DIR:scene_document_tests>/engine/primitives"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${PROJECT_SOURCE_DIR}/engine/shaders" "$<TARGET_FILE_DIR:scene_document_tests>/engine/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${PROJECT_SOURCE_DIR}/example_game/models" "$<TARGET_FILE_DIR:scene_document_tests>/game/models"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${PROJECT_SOURCE_DIR}/example_game/materials" "$<TARGET_FILE_DIR:scene_document_tests>/game/materials"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${PROJECT_SOURCE_DIR}/example_game/shaders" "$<TARGET_FILE_DIR:scene_document_tests>/game/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${PROJECT_SOURCE_DIR}/example_game/scenes" "$<TARGET_FILE_DIR:scene_document_tests>/game/scenes"
+    VERBATIM
+)
 
 add_executable(material_assets_tests material_assets_tests.cpp)
 target_link_libraries(material_assets_tests PRIVATE Engine::Engine GTest::gtest user32)

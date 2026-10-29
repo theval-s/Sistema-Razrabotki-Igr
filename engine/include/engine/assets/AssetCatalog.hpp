@@ -1,6 +1,8 @@
 #pragma once
 
 #include <filesystem>
+#include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,15 +18,36 @@ namespace engine {
 [[nodiscard]] ENGINE_API bool IsUuid(std::string_view text) noexcept;
 [[nodiscard]] ENGINE_API std::string NewUuid();
 
+/// Compact asset identity. Default construction denotes an unset identity;
+/// construction from text rejects malformed UUIDs. JSON uses canonical text.
+class ENGINE_API AssetUuid {
+public:
+    AssetUuid() = default;
+    AssetUuid(std::string_view text);
+    AssetUuid(const std::string& text) : AssetUuid(std::string_view(text)) {}
+    AssetUuid(const char* text) : AssetUuid(std::string_view(text)) {}
+    [[nodiscard]] static std::optional<AssetUuid> Parse(std::string_view text) noexcept;
+    [[nodiscard]] std::string ToString() const;
+    [[nodiscard]] bool IsValid() const noexcept;
+    [[nodiscard]] bool operator==(const AssetUuid&) const noexcept = default;
+    [[nodiscard]] const std::array<std::uint8_t, 16>& Bytes() const noexcept { return bytes_; }
+private:
+    std::array<std::uint8_t, 16> bytes_{};
+};
+
+struct AssetUuidHash {
+    [[nodiscard]] std::size_t operator()(const AssetUuid& id) const noexcept;
+};
+
 struct AssetReference {
-    std::string id;
+    AssetUuid id;
     std::string path; // diagnostic hint only; never used as a fallback lookup key
 };
 
 enum class CatalogAssetKind { Mesh, Texture, Shader, Material, MaterialInstance, Scene };
 
 struct AssetMetadata {
-    std::string id;
+    AssetUuid id;
     CatalogAssetKind kind = CatalogAssetKind::Mesh;
     bool centerOnLoad = false; // mesh import setting
 };
@@ -51,12 +74,14 @@ public:
                             const std::filesystem::path& engineRoot, std::string& error);
     [[nodiscard]] const CatalogEntry* Find(std::string_view uuid, CatalogAssetKind kind) const;
     [[nodiscard]] const CatalogEntry* Find(std::string_view uuid) const;
+    [[nodiscard]] const CatalogEntry* Find(const AssetUuid& uuid, CatalogAssetKind kind) const;
+    [[nodiscard]] const CatalogEntry* Find(const AssetUuid& uuid) const;
     [[nodiscard]] const CatalogEntry* FindPath(std::string_view logicalPath) const;
     [[nodiscard]] std::size_t Size() const noexcept { return entries_.size(); }
 
 private:
-    std::unordered_map<std::string, CatalogEntry> entries_;
-    std::unordered_map<std::string, std::string> paths_;
+    std::unordered_map<AssetUuid, CatalogEntry, AssetUuidHash> entries_;
+    std::unordered_map<std::string, AssetUuid> paths_;
 };
 
 // Explicit authoring operation: creates metadata only for recognized files

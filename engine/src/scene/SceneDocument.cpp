@@ -82,7 +82,12 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
     }
     if (j.contains("parent")) entity.parent = OptionalId(j.at("parent"));
     const auto& components = j.at("components");
-    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "Controller", "Bounds"});
+    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "Controller", "Bounds", "GamePersistence"});
+    if (components.contains("GamePersistence")) {
+        const auto& persist = components.at("GamePersistence");
+        Fields(persist, {"transform", "controllerState"});
+        entity.persistence = GamePersistence{persist.at("transform").get<bool>(), persist.at("controllerState").get<bool>()};
+    }
     if (components.contains("Bounds")) {
         const auto& bounds = components.at("Bounds");
         Fields(bounds, {"min", "max"});
@@ -102,7 +107,8 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         value.version = controller.at("version").get<int>();
         if (value.version < 1) throw std::invalid_argument("invalid controller version");
         value.enabled = controller.at("enabled").get<bool>();
-        value.data = controller.at("data").dump();
+        std::string error;
+        if (!ParseStateValue(controller.at("data").dump(), value.data, error)) throw std::invalid_argument(error);
         entity.controller = std::move(value);
     }
     const auto& transform = components.at("Transform");
@@ -199,9 +205,17 @@ Json Encode(const SceneDocument& document) {
                                                 {"intensity", entity.directionalLight->intensity}};
         if (entity.controller)
             components["Controller"] = {{"type", entity.controller->type}, {"version", entity.controller->version},
-                                        {"enabled", entity.controller->enabled}, {"data", Json::parse(entity.controller->data)}};
+                                         {"enabled", entity.controller->enabled}, {"data", [&] {
+                                             std::string json, error;
+                                             if (!SerializeStateValue(entity.controller->data, json, error))
+                                                 throw std::invalid_argument(error);
+                                             return Json::parse(json);
+                                         }()}};
         if (entity.bounds)
             components["Bounds"] = {{"min", Encode(entity.bounds->local.min)}, {"max", Encode(entity.bounds->local.max)}};
+        if (entity.persistence)
+            components["GamePersistence"] = {{"transform", entity.persistence->transform},
+                                              {"controllerState", entity.persistence->controllerState}};
         root["entities"].push_back({{"id", entity.id}, {"name", entity.name}, {"tags", entity.tags},
                                      {"parent", Encode(entity.parent)},
                                      {"components", std::move(components)}});
@@ -238,9 +252,10 @@ bool SerializeSceneDocument(const SceneDocument& document, std::string& json, st
     } catch (const std::exception& e) { error = e.what(); return false; }
 }
 
-bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDocument& result, std::string& error) {
+bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDocument& result, std::string& error,
+                          bool ignoreTransientComponents) {
     try {
-        if (scene.HasUnsupportedComponents())
+        if (!ignoreTransientComponents && scene.HasUnsupportedComponents())
             throw std::invalid_argument("scene contains components without a version 1 codec");
         SceneDocument captured;
         const auto camera = scene.GetActiveCamera();
@@ -255,13 +270,14 @@ bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDo
             definition.tags.assign(tags.begin(), tags.end());
             if (const auto* controller = scene.GetControllerDefinition(entity)) definition.controller = *controller;
             if (const auto* bounds = scene.TryGetComponent<Bounds>(entity)) definition.bounds = *bounds;
+            if (const auto* persistence = scene.TryGetComponent<GamePersistence>(entity)) definition.persistence = *persistence;
             if (auto parent = scene.GetParent(entity); parent != entt::null)
                 definition.parent = scene.GetId(parent);
             definition.transform = scene.GetTransform(entity);
             if (const auto* renderer = scene.TryGetComponent<MeshRenderer>(entity)) {
                 auto authored = [&](const AssetReference& ref, CatalogAssetKind kind)
                     -> std::optional<AssetReference> {
-                    if (!IsUuid(ref.id)) return std::nullopt;
+                    if (!ref.id.IsValid()) return std::nullopt;
                     if (const auto* entry = assets.GetCatalog().Find(ref.id, kind))
                         return AssetReference{ref.id, entry->path};
                     return ref; // missing asset: keep the hand-editable recovery hint
@@ -303,6 +319,7 @@ void PopulateScene(const SceneDocument& document, AssetSystem& assets, Scene& de
         if (definition.camera) destination.AddComponent<Camera>(entity, *definition.camera);
         if (definition.directionalLight) destination.AddComponent<DirectionalLight>(entity, *definition.directionalLight);
         if (definition.bounds) destination.AddComponent<Bounds>(entity, *definition.bounds);
+        if (definition.persistence) destination.AddComponent<GamePersistence>(entity, *definition.persistence);
         if (definition.controller) destination.AttachController(entity, *definition.controller);
     }
     if (document.activeCamera) destination.SetActiveCamera(destination.FindById(*document.activeCamera));

@@ -65,7 +65,8 @@ Store a scene under the game root as `<name>.scene.json` and give it its own
 
 The cube and material UUIDs above match checked-in engine sidecars. Entity UUIDs
 are illustrative and unique within the scene. Parent values refer to entity UUIDs
-within the same file. The codec also supports `Bounds` and `Controller` (below);
+within the same file. The codec also supports `Bounds`, `Controller` and
+`GamePersistence` (below);
 it rejects unknown fields/components, duplicate keys, cycles, invalid numbers,
 and bad active camera/light selections before scene switching.
 
@@ -133,7 +134,9 @@ One optional `Controller` component is supported per entity:
 `data` can be any JSON value; the engine imposes no fixed controller payload
 schema. Register a stable type name, version, optional side-effect-free validator,
 and factory with `Scene::RegisterController` before loading. The validator receives
-the payload as JSON text and can reject it before the old scene is replaced; an
+an engine `StateValue` (typed objects, arrays, numbers and strings), without raw
+JSON parsing in controller code. `LoadAuthored(const StateValue&)` runs before
+`OnCreate`. An
 unavailable type/version or invalid registered payload is diagnosed in `LoadScene`'s
 `error` output **even when it returns true**. That entity still loads; its authored
 controller definition is retained and saved unchanged. Registering a missing type
@@ -145,10 +148,41 @@ controller enabled, `Update(deltaSeconds)` before render extraction on unpaused
 frames, then `OnDisable` and `OnDestroy` before its entity disappears. Mutations
 to controllers and entity deletion requested in callbacks are deferred until after
 callbacks. Controllers added during an update start on the next update. Controller
-runtime fields are never saved: the stored `data` changes only through
-`Scene::SetControllerAuthoredData`; `SetControllerEnabled` authors the enabled bit.
-The JSON payload must remain valid JSON when explicitly changed. Scene switching
+runtime fields are not written to the scene: the stored authored `data` changes
+through `Scene::SetControllerAuthoredData` or an explicit
+`Scene::CommitControllerAuthored` (calls `Controller::SaveAuthored`).
+`SetControllerEnabled` authors the enabled bit. Scene switching
 from an update callback is deferred until before render extraction.
+
+## Playthrough saves
+
+`SaveScene` writes authored starting configuration. `SaveGame` writes a separate
+`*.save.json` artifact against the **catalog-backed scene UUID**; `LoadGame` loads
+that scene by UUID before applying the playthrough changes. For example:
+
+~~~cpp
+scene.AddComponent<engine::GamePersistence>(npc, engine::GamePersistence{true, true});
+engine.SaveGame("game/example.save.json", error);
+engine.LoadGame("game/example.save.json", error);
+~~~
+
+`GamePersistence` is an optional authored scene component with `transform` and
+`controllerState` boolean fields. Only opted-in existing entities get state
+records. The engine captures/restores transforms independently of controllers;
+controllers opt into live state with `SaveGameState(StateValue&)` and
+`LoadGameState(const StateValue&)`. These callbacks never change the authored
+controller payload. Unavailable controllers retain both their scene definition
+and saved game state for later registration. Persistent runtime-spawned entities
+carry authored snapshots; deletion markers name authored UUIDs removed during
+play. UUIDs must stay unique across both sets. Spawn parent UUIDs are stored
+separately, allowing parents from either set. Missing parent references, cycles,
+duplicate IDs, type/version mismatches and invalid JSON fail validation before
+the old scene is replaced. Missing assets still follow normal scene loading rules.
+Controllers receive authored data and `OnCreate`, then saved transforms and
+controller state, then `OnEnable` and the first update. `LoadGame` can succeed
+with nonempty diagnostics for unavailable controllers. Game saves are atomic
+replacements; save files do not need `.meta` sidecars. ExampleGame uses **F5** to
+save, **F9** to restore, and **R** to raycast from the camera.
 
 An optional `Bounds` component adds local-space min/max arrays for non-rendered
 entities, e.g. `"Bounds": { "min": [-1,-1,-1], "max": [1,1,1] }`.

@@ -9,6 +9,7 @@
 #include <engine/engine_export.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/Transform.hpp>
+#include <engine/scene/Components.hpp>
 #include <engine/scene/Controller.hpp>
 #include <engine/scene/SceneQueries.hpp>
 
@@ -33,6 +34,7 @@ struct SceneEntityDefinition {
     std::optional<DirectionalLight> directionalLight;
     std::optional<ControllerDefinition> controller;
     std::optional<Bounds> bounds;
+    std::optional<GamePersistence> persistence;
 };
 
 struct SceneDocument {
@@ -47,7 +49,8 @@ struct SceneDocument {
 [[nodiscard]] ENGINE_API bool ParseSceneDocument(std::string_view json, SceneDocument& result, std::string& error);
 [[nodiscard]] ENGINE_API bool SerializeSceneDocument(const SceneDocument& document, std::string& json, std::string& error);
 [[nodiscard]] ENGINE_API bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets,
-                                                   SceneDocument& result, std::string& error);
+                                                   SceneDocument& result, std::string& error,
+                                                   bool ignoreTransientComponents = false);
 // Called only after ParseSceneDocument has validated the document, on an empty
 // destination scene. Missing assets yield invalid handles but do not abort loading.
 ENGINE_API void PopulateScene(const SceneDocument& document, AssetSystem& assets, Scene& destination);
