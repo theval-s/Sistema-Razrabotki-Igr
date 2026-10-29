@@ -1,7 +1,6 @@
 #pragma once
 #include <cstdint>
 #include <map>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -10,8 +9,9 @@
 
 namespace engine {
 // A JSON-compatible tree; controller code needs no JSON library or text parsing.
-// Objects and arrays can be freely nested. Invalid types/absent required keys
-// throw std::invalid_argument, reported by scene/game loading diagnostics.
+// Objects and arrays can be freely nested. Reads of missing fields or values
+// of a different type return empty/default values; use HasValue to distinguish
+// a missing field from a present field (including one containing JSON null).
 struct StateValue {
     using Object = std::map<std::string, StateValue>;
     using Array = std::vector<StateValue>;
@@ -31,45 +31,50 @@ struct StateValue {
 
     [[nodiscard]] const StateValue* Find(std::string_view key) const {
         const auto* object = std::get_if<Object>(&value);
-        if (!object) throw std::invalid_argument("expected state object");
+        if (!object) return nullptr;
         const auto it = object->find(std::string(key));
         return it == object->end() ? nullptr : &it->second;
     }
+    [[nodiscard]] bool HasValue(std::string_view key) const { return Find(key) != nullptr; }
     [[nodiscard]] const StateValue& At(std::string_view key) const {
         if (const auto* found = Find(key)) return *found;
-        throw std::invalid_argument("missing state field: " + std::string(key));
+        static const StateValue missing{nullptr};
+        return missing;
     }
     [[nodiscard]] StateValue& operator[](std::string key) {
         auto* object = std::get_if<Object>(&value);
-        if (!object) throw std::invalid_argument("expected state object");
+        if (!object) object = &value.emplace<Object>();
         return (*object)[std::move(key)];
     }
     [[nodiscard]] double Number() const {
         if (const auto* v = std::get_if<double>(&value)) return *v;
         if (const auto* v = std::get_if<std::int64_t>(&value)) return static_cast<double>(*v);
         if (const auto* v = std::get_if<std::uint64_t>(&value)) return static_cast<double>(*v);
-        throw std::invalid_argument("expected state number");
+        return 0.0;
     }
     [[nodiscard]] std::uint64_t Unsigned() const {
         if (const auto* v = std::get_if<std::uint64_t>(&value)) return *v;
         if (const auto* v = std::get_if<std::int64_t>(&value); v && *v >= 0) return static_cast<std::uint64_t>(*v);
-        throw std::invalid_argument("expected nonnegative state integer");
+        return 0;
     }
     [[nodiscard]] bool Boolean() const {
         if (const auto* v = std::get_if<bool>(&value)) return *v;
-        throw std::invalid_argument("expected state boolean");
+        return false;
     }
     [[nodiscard]] const std::string& String() const {
         if (const auto* v = std::get_if<std::string>(&value)) return *v;
-        throw std::invalid_argument("expected state string");
+        static const std::string empty;
+        return empty;
     }
     [[nodiscard]] const Array& Items() const {
         if (const auto* v = std::get_if<Array>(&value)) return *v;
-        throw std::invalid_argument("expected state array");
+        static const Array empty;
+        return empty;
     }
     [[nodiscard]] const Object& Fields() const {
         if (const auto* v = std::get_if<Object>(&value)) return *v;
-        throw std::invalid_argument("expected state object");
+        static const Object empty;
+        return empty;
     }
 };
 

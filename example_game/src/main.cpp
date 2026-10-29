@@ -219,8 +219,7 @@ private:
 engine::ControllerRegistration MotionRegistration(bool hammer) {
     return {1,
         [](const engine::StateValue& data, std::string& error) {
-            try { if (std::isfinite(data.Number()) && data.Number() > 0) return true; }
-            catch (const std::exception&) {}
+            if (std::isfinite(data.Number()) && data.Number() > 0) return true;
             error = "motion speed must be a positive number"; return false;
         },
         [hammer]() -> std::unique_ptr<engine::Controller> {

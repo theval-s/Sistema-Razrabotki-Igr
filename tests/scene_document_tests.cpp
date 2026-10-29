@@ -60,6 +60,29 @@ struct CommandController final : engine::Controller {
 };
 }
 
+TEST(StateValue, MissingFieldsAndWrongTypesHaveDefaults) {
+    engine::StateValue state = engine::StateValue::Object{{"present", nullptr}, {"count", 12}};
+    EXPECT_TRUE(state.HasValue("present"));
+    EXPECT_FALSE(state.HasValue("missing"));
+    EXPECT_EQ(state.Find("missing"), nullptr);
+    EXPECT_EQ(state.At("missing").Number(), 0);
+    EXPECT_FALSE(state.At("missing").Boolean());
+    EXPECT_TRUE(state.At("missing").String().empty());
+    EXPECT_TRUE(state.At("missing").Items().empty());
+    EXPECT_TRUE(state.At("missing").Fields().empty());
+    EXPECT_EQ(state.At("count").Unsigned(), 12u);
+    EXPECT_EQ(state.At("count").String(), "");
+
+    engine::StateValue scalar = "text";
+    EXPECT_FALSE(scalar.HasValue("child"));
+    EXPECT_EQ(scalar.Find("child"), nullptr);
+    EXPECT_EQ(scalar.At("child").Unsigned(), 0u);
+    scalar["child"]["value"] = true;
+    EXPECT_TRUE(scalar.HasValue("child"));
+    EXPECT_TRUE(scalar.At("child").At("value").Boolean());
+    EXPECT_EQ(engine::StateValue{-1}.Unsigned(), 0u);
+}
+
 TEST(SceneDocument, ControllerCommandsFlushInFifoOrderWithoutReentry) {
     engine::Scene scene;
     std::vector<std::string> events;
