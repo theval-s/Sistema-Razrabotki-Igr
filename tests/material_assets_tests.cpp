@@ -3,6 +3,7 @@
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/assets/MaterialDefinition.hpp>
 #include <engine/core/FrameContext.hpp>
+#include <engine/core/PathUtils.hpp>
 #include <engine/engine.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/rendering/RenderExtractionSubsystem.hpp>
@@ -179,10 +180,10 @@ TEST(AssetPaths, MaterialsAndShadersRespectProjectGameRoot) {
     AssetPathResolver::SetGameRoot(content);
     AssetDesc desc;
     desc.path = AssetPathResolver::DefaultPath("game/materials/цвет", AssetKind::Material);
-    EXPECT_EQ(AssetPathResolver::ResolveMaterial(desc), content / AssetPathResolver::Utf8Path("materials/цвет.material.json"));
-    EXPECT_EQ(AssetPathResolver::ResolveMaterial(desc, true), content / AssetPathResolver::Utf8Path("materials/цвет.material-instance.json"));
+    EXPECT_EQ(AssetPathResolver::ResolveMaterial(desc), content / FromUtf8("materials/цвет.material.json"));
+    EXPECT_EQ(AssetPathResolver::ResolveMaterial(desc, true), content / FromUtf8("materials/цвет.material-instance.json"));
     desc.path = AssetPathResolver::DefaultPath("game/цвет", AssetKind::Shader);
-    EXPECT_EQ(AssetPathResolver::ResolveShader(desc), content / AssetPathResolver::Utf8Path("shaders/цвет.hlsl"));
+    EXPECT_EQ(AssetPathResolver::ResolveShader(desc), content / FromUtf8("shaders/цвет.hlsl"));
     desc.path = AssetPathResolver::DefaultPath("engine/default", AssetKind::Shader);
     EXPECT_EQ(AssetPathResolver::ResolveShader(desc), AssetPathResolver::GetRoot() / "engine/shaders/default.hlsl");
 }
@@ -362,14 +363,14 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     }
     ASSERT_TRUE(textureEvent < materialEvent && materialEvent < instanceEvent) << "dependency publication order is wrong";
 
-    std::filesystem::copy_file(fixture.shaders / "hooks.hlsl", fixture.shaders / AssetPathResolver::Utf8Path("цвет.hlsl"),
+    std::filesystem::copy_file(fixture.shaders / "hooks.hlsl", fixture.shaders / FromUtf8("цвет.hlsl"),
                                std::filesystem::copy_options::overwrite_existing);
     auto unicode = base;
     unicode.shaderFile = fixture.prefix + "/цвет.hlsl";
     ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("unicode", unicode));
     ASSERT_TRUE(static_cast<bool>(assets.LoadMaterial(fixture.prefix + "/unicode"))) << "UTF-8 shader reference failed";
     const auto legacyUnicode = resources.CreateMaterial({
-        .shaderFile = AssetPathResolver::Utf8Path(unicode.shaderFile).wstring(),
+        .shaderFile = FromUtf8(unicode.shaderFile).wstring(),
         .hooks = MaterialHook::GBufferPS});
     ASSERT_TRUE(static_cast<bool>(legacyUnicode)) << "wstring material API lost Unicode compatibility";
     ASSERT_TRUE(resources.DestroyMaterial(legacyUnicode)) << "legacy material cleanup failed";
@@ -475,7 +476,7 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     EXPECT_FALSE(engine.GetEntityMaterialOverride(otherCube));
     EXPECT_EQ(resources.TryGetMaterialInstance(otherClone), nullptr);
     rendering->GetWorld().renderItems.push_back({}); // host-owned list is not touched by extraction
-    extraction->Update(sceneFrame);
+    extraction->LateUpdate(sceneFrame);
     EXPECT_EQ(rendering->GetWorld().renderItems.size(), 1u);
     EXPECT_GE(rendering->GetWorld().sceneItems.size(), 1u);
     rendering->GetWorld().renderItems.clear();
