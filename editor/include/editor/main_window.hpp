@@ -22,6 +22,7 @@ class sink;
 
 namespace editor {
 
+class EditorCameraSubsystem;
 class EditorContext;
 class ModuleLoader;
 class ViewportWidget;
@@ -62,6 +63,7 @@ private:
 
     ads::CDockManager* dock_manager_ = nullptr;
     ViewportWidget* viewport_ = nullptr;
+    EditorCameraSubsystem* camera_ = nullptr;
     QPlainTextEdit* log_view_ = nullptr;
     QLabel* status_label_ = nullptr;
     QTimer* tick_timer_ = nullptr;

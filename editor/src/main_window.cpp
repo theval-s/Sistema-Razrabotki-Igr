@@ -149,12 +149,12 @@ void MainWindow::startEngine() {
     // its initial buffer size and DXGI stretches it, so proportions stay right if blurrier.
     connect(viewport_, &ViewportWidget::surfaceResized, this,
             [this](quint32 width, quint32 height) { engine_.ResizeSurface(width, height); });
-    // Input first, so it's latched before anything reads it; the camera moves before
-    // RenderExtractionSubsystem copies it into the RenderWorld.
+    // Input first, so it's latched before anything reads it; the editor camera last, so it
+    // replaces the scene camera that RenderExtractionSubsystem copied into the RenderWorld.
     viewport_->setInput(engine_.AddSubsystem<engine::InputSubsystem>());
-    engine_.AddSubsystem<EditorCameraSubsystem>();
     engine_.AddSubsystem<engine::RenderingSubsystem>();
     engine_.AddSubsystem<engine::RenderExtractionSubsystem>();
+    camera_ = engine_.AddSubsystem<EditorCameraSubsystem>();
 
     // On failure keep the window up so the Log dock shows why, but don't tick.
     if (!engine_.Initialize()) {
@@ -172,13 +172,7 @@ void MainWindow::setupDefaultScene() {
     using DirectX::SimpleMath::Vector3;
     engine::Scene& scene = engine_.GetScene();
 
-    // Looking down at the origin; EditorCameraSubsystem flies it.
-    const entt::entity camera = scene.CreateEntity("Camera");
-    scene.GetTransform(camera).position = Vector3{0.0f, 4.0f, 9.0f};
-    scene.GetTransform(camera).rotation = Quaternion::CreateFromYawPitchRoll(0.0f, -0.4f, 0.0f);
-    scene.AddComponent<engine::Camera>(camera);
-    scene.SetActiveCamera(camera);
-
+    // No camera: the editor has its own viewpoint.
     const entt::entity sun = scene.CreateEntity("Sun");
     Vector3 sun_direction{-0.45f, -1.0f, -0.3f};
     sun_direction.Normalize();
@@ -187,11 +181,9 @@ void MainWindow::setupDefaultScene() {
     scene.SetDirectionalLight(sun);
 
     const entt::entity ground = scene.CreateEntity("Ground");
-    engine::Transform& transform = scene.GetTransform(ground);
-    transform.position = Vector3{0.0f, -0.05f, 0.0f};
-    transform.scale = Vector3{20.0f, 0.1f, 20.0f};
+    scene.GetTransform(ground).scale = Vector3{20.0f, 1.0f, 20.0f};
     scene.AddComponent<engine::MeshRenderer>(ground,
-        engine_.GetSceneAssets().RequestMesh(engine::BuiltinAssets::CubeMesh),
+        engine_.GetSceneAssets().RequestMesh(engine::BuiltinAssets::PlaneMesh),
         engine_.GetSceneAssets().RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance));
 }
 
