@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QCloseEvent>
+#include <QKeySequence>
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -14,6 +15,8 @@
 #include <QString>
 #include <QTimer>
 
+#include <filesystem>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -23,7 +26,9 @@
 #include <DockManager.h>
 #include <DockWidget.h>
 
+#include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/core/PathUtils.hpp>
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
@@ -34,6 +39,7 @@
 #include <editor/module_loader.hpp>
 #include <editor/paths.hpp>
 #include <editor/project_dialog.hpp>
+#include <editor/scene_document.hpp>
 #include <editor/viewport_widget.hpp>
 
 namespace editor {
@@ -59,7 +65,6 @@ engine::EngineConfig makeEngineConfig() {
 
 MainWindow::MainWindow(engine::Project project, QWidget* parent)
     : QMainWindow(parent), project_(std::move(project)), engine_(makeEngineConfig()) {
-    setWindowTitle(tr("%1 — SRI Editor").arg(QString::fromStdString(project_.name)));
     resize(1280, 720);
 
     status_label_ = new QLabel(this);
@@ -75,6 +80,17 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     dock_manager_->setCentralWidget(viewport_dock);
 
     context_ = std::make_unique<EditorContext>(engine_, project_, *this, *dock_manager_);
+    SceneDocument& document = context_->sceneDocument();
+    connect(&document, &SceneDocument::stateChanged, this, [this] {
+        refreshTitle();
+        adoptStartupScene();
+    });
+    connect(&document, &SceneDocument::opened, this, [this] {
+        if (camera_ != nullptr) {
+            camera_->ResetToSceneCamera();
+        }
+    });
+    refreshTitle();
     buildMenus();
     buildLogDock();  // before modules and engine init, so their startup messages show up
 
@@ -108,6 +124,11 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    if (!context_->sceneDocument().maybeSave(this)) {
+        relaunch_project_.clear();
+        event->ignore();
+        return;
+    }
     QSettings settings;
     settings.setValue(GeometryKey, saveGeometry());
     settings.setValue(DockStateKey, dock_manager_->saveState(LayoutVersion));
@@ -161,10 +182,22 @@ void MainWindow::startEngine() {
         spdlog::critical("Engine failed to initialize, see log above");
         return;
     }
-    setupDefaultScene();
+    openStartupScene();
 
     tick_timer_->start(16);
     refreshStatus();
+}
+
+void MainWindow::openStartupScene() {
+    if (!project_.startupScene.empty()) {
+        std::string error;
+        if (context_->sceneDocument().open(engine::AssetPathResolver::ToAbsolute(engine::FromUtf8(project_.startupScene)),
+                                           error)) {
+            return;
+        }
+        spdlog::error("Startup scene '{}': {}", project_.startupScene, error);
+    }
+    setupDefaultScene();
 }
 
 void MainWindow::setupDefaultScene() {
@@ -185,6 +218,30 @@ void MainWindow::setupDefaultScene() {
     scene.AddComponent<engine::MeshRenderer>(ground,
         engine_.GetSceneAssets().RequestMesh(engine::BuiltinAssets::PlaneMesh),
         engine_.GetSceneAssets().RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance));
+    context_->sceneDocument().markClean();
+}
+
+void MainWindow::refreshTitle() {
+    const SceneDocument& document = context_->sceneDocument();
+    // [*] shows the unsaved-changes mark set by setWindowModified().
+    setWindowTitle(tr("%1[*] — %2 — SRI Editor").arg(document.displayName(), QString::fromStdString(project_.name)));
+    setWindowModified(document.isDirty());
+}
+
+void MainWindow::adoptStartupScene() {
+    const std::filesystem::path& file = context_->sceneDocument().filePath();
+    if (!project_.startupScene.empty() || file.empty() || context_->sceneDocument().isDirty()) {
+        return;
+    }
+    const std::string name = engine::AssetPathResolver::ToName(file);
+    if (!name.starts_with("game/")) {
+        return;  // outside the project's content
+    }
+    project_.startupScene = name;
+    if (std::string error; !project_.Save(error)) {
+        spdlog::warn("Could not remember {} as the startup scene: {}", name, error);
+        project_.startupScene.clear();
+    }
 }
 
 void MainWindow::tickEngine() {
@@ -196,6 +253,16 @@ void MainWindow::buildMenus() {
     auto* file_menu = context_->menu(tr("&File"));
     file_menu->addAction(tr("New &Project..."), this, [this] { switchProject(createProjectInteractively(this)); });
     file_menu->addAction(tr("&Open Project..."), this, [this] { switchProject(pickProjectFile(this)); });
+    file_menu->addSeparator();
+    SceneDocument& document = context_->sceneDocument();
+    file_menu->addAction(tr("&New Scene..."), QKeySequence::New, this,
+                         [this, &document] { document.createInteractive(this); });
+    file_menu->addAction(tr("Open &Scene..."), QKeySequence::Open, this,
+                         [this, &document] { document.openInteractive(this); });
+    file_menu->addAction(tr("&Save Scene"), QKeySequence::Save, this,
+                         [this, &document] { document.saveInteractive(this, false); });
+    file_menu->addAction(tr("Save Scene &As..."), QKeySequence::SaveAs, this,
+                         [this, &document] { document.saveInteractive(this, true); });
     file_menu->addSeparator();
     file_menu->addAction(tr("E&xit"), this, &QWidget::close);
 

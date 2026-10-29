@@ -4,6 +4,7 @@
 #include <QString>
 #include <Qt>
 
+#include <memory>
 #include <vector>
 
 #include <editor/editor_core_export.hpp>
@@ -27,6 +28,8 @@ struct Project;
 
 namespace editor {
 
+class SceneDocument;
+
 /// What the editor hands to its modules: the engine, the project, the scene being edited, the
 /// selection and the places a module may add UI to. Owned by MainWindow; outlives every module and is
 /// destroyed before the engine.
@@ -46,6 +49,8 @@ public:
     [[nodiscard]] engine::Scene& scene() noexcept;
     /// What the user has selected in the scene. Panels follow and change it through here.
     [[nodiscard]] Selection& selection() noexcept;
+    /// The scene file being edited: open, create and save scenes through it.
+    [[nodiscard]] SceneDocument& sceneDocument() noexcept;
 
     /// Finds the menu-bar menu with this title (ignoring '&' mnemonics) or appends a new one.
     QMenu* menu(const QString& title);
@@ -74,6 +79,7 @@ private:
     QToolBar* tool_bar_ = nullptr;
     std::vector<Panel> panels_;
     Selection selection_;
+    std::unique_ptr<SceneDocument> scene_document_;
 };
 
 }  // namespace editor

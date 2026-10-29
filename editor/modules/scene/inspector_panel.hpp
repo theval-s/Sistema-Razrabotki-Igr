@@ -16,6 +16,7 @@ class Scene;
 }
 
 namespace editor {
+class SceneDocument;
 class Selection;
 }
 
@@ -23,7 +24,8 @@ class Selection;
 /// scene, so changes made elsewhere (e.g. the editor camera flying) show up too.
 class InspectorPanel : public QWidget {
 public:
-    InspectorPanel(engine::Scene& scene, editor::Selection& selection, QWidget* parent = nullptr);
+    InspectorPanel(engine::Scene& scene, editor::Selection& selection, editor::SceneDocument& document,
+                   QWidget* parent = nullptr);
 
 private:
     using Vec3Boxes = std::array<QDoubleSpinBox*, 3>;
@@ -39,6 +41,8 @@ private:
     void applyTransform();
 
     engine::Scene& scene_;
+    /// Told about transform edits, which the scene's revision doesn't count.
+    editor::SceneDocument& document_;
     entt::entity entity_ = entt::null;
     /// What the widgets currently show, to tell our own writes from changes made elsewhere.
     /// Rotation is edited as Euler angles kept in the widgets: converting the quaternion

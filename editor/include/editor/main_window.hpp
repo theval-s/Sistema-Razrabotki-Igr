@@ -46,7 +46,13 @@ private slots:
 private:
     void buildMenus();
     void buildLogDock();
+    /// Opens the project's startup scene, or builds an untitled one if it has none.
+    void openStartupScene();
     void setupDefaultScene();
+    /// Scene name and unsaved-changes mark.
+    void refreshTitle();
+    /// Remembers a saved scene as the project's startup scene if it has none yet.
+    void adoptStartupScene();
     void restoreLayout();
     void refreshStatus();
     void appendLog(const QString& level, const QString& text);

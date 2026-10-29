@@ -15,6 +15,7 @@
 
 #include <engine/scene/Scene.hpp>
 
+#include <editor/scene_document.hpp>
 #include <editor/selection.hpp>
 
 namespace {
@@ -40,8 +41,9 @@ void showVec3(const std::array<QDoubleSpinBox*, 3>& boxes, const Vector3& value)
 
 }  // namespace
 
-InspectorPanel::InspectorPanel(engine::Scene& scene, editor::Selection& selection, QWidget* parent)
-    : QWidget(parent), scene_(scene) {
+InspectorPanel::InspectorPanel(engine::Scene& scene, editor::Selection& selection, editor::SceneDocument& document,
+                               QWidget* parent)
+    : QWidget(parent), scene_(scene), document_(document) {
     form_ = new QWidget(this);
     auto* form = new QFormLayout(form_);
     name_ = new QLineEdit(form_);
@@ -147,4 +149,5 @@ void InspectorPanel::applyTransform() {
                                                                     DirectX::XMConvertToRadians(degrees.y),
                                                                     DirectX::XMConvertToRadians(degrees.z)});
     shown_ = transform;
+    document_.markDirty();
 }

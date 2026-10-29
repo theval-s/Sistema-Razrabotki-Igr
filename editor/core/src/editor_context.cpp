@@ -10,6 +10,8 @@
 
 #include <engine/engine.hpp>
 
+#include <editor/scene_document.hpp>
+
 namespace editor {
 
 namespace {
@@ -33,7 +35,8 @@ ads::DockWidgetArea toAdsArea(const Qt::DockWidgetArea area) {
 /// Context to pass to Modules instead of passing the whole editor to them
 EditorContext::EditorContext(engine::Engine& engine, const engine::Project& project, QMainWindow& window,
                              ads::CDockManager& dock_manager)
-    : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager), selection_(engine.GetScene()) {}
+    : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager), selection_(engine.GetScene()),
+      scene_document_(std::make_unique<SceneDocument>(engine, project, selection_)) {}
 
 EditorContext::~EditorContext() {
     // Panels would otherwise die with the dock manager, after the engine they show.
@@ -60,6 +63,10 @@ engine::Scene& EditorContext::scene() noexcept {
 
 Selection& EditorContext::selection() noexcept {
     return selection_;
+}
+
+SceneDocument& EditorContext::sceneDocument() noexcept {
+    return *scene_document_;
 }
 
 QMenu* EditorContext::menu(const QString& title) {
