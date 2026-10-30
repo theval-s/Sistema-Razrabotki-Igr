@@ -5,6 +5,7 @@
 #include <QWidget>
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 #include "asset_operations.hpp"
@@ -16,6 +17,7 @@ class QHBoxLayout;
 class QLabel;
 class QLineEdit;
 class QListView;
+class QMenu;
 class QModelIndex;
 class QPoint;
 class QSlider;
@@ -29,6 +31,10 @@ namespace editor {
 class EditorContext;
 }
 
+namespace engine {
+class AssetCatalog;
+}
+
 namespace content {
 
 class AssetFilterModel;
@@ -40,6 +46,7 @@ class ContentBrowser : public QWidget {
 
 public:
     explicit ContentBrowser(editor::EditorContext& context, QWidget* parent = nullptr);
+    ~ContentBrowser() override;
 
 private:
     /// A directory tree shown under a logical name, with its own model and folder tree.
@@ -91,6 +98,20 @@ private:
     void copyUuids(const QStringList& paths);
     void showInExplorer(const QString& path);
 
+    // Creating and importing assets, in the shown folder unless one is given.
+    [[nodiscard]] const engine::AssetCatalog& catalog() const;
+    /// Copies `paths` into `folder`; model files from outside the project go through the import dialog.
+    /// Returns the new paths.
+    QStringList copyIn(const QStringList& paths, const QString& folder);
+    /// Shows the import dialog for one model file. Returns the new model folder, or empty.
+    QString importModel(const QString& source, const QString& folder);
+    /// Picks files to import.
+    void importAssets();
+    void newMaterial();
+    /// `albedo`: a texture file to preselect.
+    void newMaterialInstance(const QString& albedo = {});
+    void newScene();
+
     editor::EditorContext& context_;
     AssetOperations operations_;
     std::vector<Root> roots_;
@@ -113,6 +134,11 @@ private:
     QLabel* banner_text_ = nullptr;
     QStackedWidget* trees_ = nullptr;
     QListView* items_ = nullptr;
+    QToolButton* import_button_ = nullptr;
+    QToolButton* new_button_ = nullptr;
+    /// New Folder / Material / Material Instance / Scene. Without a parent: as a popup inside the
+    /// dock it'd get a dock splitter as transient parent (see showItemMenu()).
+    std::unique_ptr<QMenu> new_menu_;
 
     //Better to keep them saved so we can remap keybinds easier in the future
     // but maybe TODO: extract to another class?
@@ -127,6 +153,8 @@ private:
     QAction* copy_path_ = nullptr;
     QAction* copy_uuid_ = nullptr;
     QAction* show_in_explorer_ = nullptr;
+    QAction* import_ = nullptr;
+    QAction* instance_from_texture_ = nullptr;
 };
 
 }  // namespace content

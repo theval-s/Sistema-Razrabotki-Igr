@@ -7,6 +7,7 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QDropEvent>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemModel>
 #include <QFont>
@@ -51,6 +52,7 @@
 #include <editor/paths.hpp>
 #include <editor/scene_document.hpp>
 
+#include "asset_dialogs.hpp"
 #include "asset_filter_model.hpp"
 #include "asset_icons.hpp"
 
@@ -60,6 +62,7 @@ namespace {
 
 const QString IconSizeKey = QStringLiteral("content/iconSize");
 const QString ListModeKey = QStringLiteral("content/listMode");
+const QString ImportDirectoryKey = QStringLiteral("content/importDirectory");
 
 constexpr engine::CatalogAssetKind FilterKinds[] = {
     engine::CatalogAssetKind::Scene,    engine::CatalogAssetKind::Mesh,
@@ -176,6 +179,8 @@ ContentBrowser::ContentBrowser(editor::EditorContext& context, QWidget* parent)
     refreshBanner();
 }
 
+ContentBrowser::~ContentBrowser() = default;
+
 void ContentBrowser::addRoot(const QString& title, const QString& name, const QString& path, const bool read_only) {
     if (!read_only) {
         QDir().mkpath(path);  // a fresh project may not have content yet
@@ -244,6 +249,24 @@ QWidget* ContentBrowser::buildTopBar() {
     auto* bar = new QWidget;
     auto* layout = new QHBoxLayout(bar);
     layout->setContentsMargins(0, 0, 0, 0);
+    const auto add_separator = [layout] {
+        auto* separator = new QFrame;
+        separator->setFrameShape(QFrame::VLine);
+        separator->setFrameShadow(QFrame::Sunken);
+        layout->addWidget(separator);
+    };
+
+    // Their actions and menu come in buildActions().
+    import_button_ = new QToolButton;
+    import_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    import_button_->setAutoRaise(true);
+    layout->addWidget(import_button_);
+    new_button_ = new QToolButton;
+    new_button_->setText(tr("New"));
+    new_button_->setPopupMode(QToolButton::InstantPopup);
+    new_button_->setAutoRaise(true);
+    layout->addWidget(new_button_);
+    add_separator();
 
     auto* group = new QButtonGroup(bar);
     for (std::size_t i = 0; i < roots_.size(); ++i) {
@@ -256,10 +279,7 @@ QWidget* ContentBrowser::buildTopBar() {
         layout->addWidget(button);
         roots_[i].button = button;
     }
-    auto* separator = new QFrame;
-    separator->setFrameShape(QFrame::VLine);
-    separator->setFrameShadow(QFrame::Sunken);
-    layout->addWidget(separator);
+    add_separator();
 
     breadcrumb_ = new QHBoxLayout;
     breadcrumb_->setSpacing(0);
@@ -365,6 +385,25 @@ void ContentBrowser::buildActions() {
         showInExplorer(selected.isEmpty() ? folder_ : selected.front());
     });
     open_->setShortcutVisibleInContextMenu(false);
+
+    import_ = add(tr("Import..."), {}, [this] { importAssets(); });
+    import_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
+    import_->setToolTip(tr("Copies images and models into the shown folder"));
+    import_button_->setDefaultAction(import_);
+    instance_from_texture_ = add(tr("Create Material Instance..."), {},
+                                 [this] { newMaterialInstance(selectedPaths().value(0)); });
+
+    new_menu_ = std::make_unique<QMenu>(tr("New"));
+    new_menu_->addAction(style()->standardIcon(QStyle::SP_DirIcon), tr("Folder"), this,
+                         [this] { newFolder(root_, folder_); });
+    new_menu_->addSeparator();
+    new_menu_->addAction(assetIcon(engine::CatalogAssetKind::Material), tr("Material..."), this,
+                         &ContentBrowser::newMaterial);
+    new_menu_->addAction(assetIcon(engine::CatalogAssetKind::MaterialInstance), tr("Material Instance..."), this,
+                         [this] { newMaterialInstance(); });
+    new_menu_->addAction(assetIcon(engine::CatalogAssetKind::Scene), tr("Scene..."), this,
+                         &ContentBrowser::newScene);
+    new_button_->setMenu(new_menu_.get());
 }
 
 void ContentBrowser::navigate(const std::size_t root, const QString& folder) {
@@ -571,6 +610,12 @@ void ContentBrowser::updateActions() {
     paste_->setEnabled(writable && clipboard != nullptr && !AssetFilterModel::droppedPaths(clipboard).isEmpty());
     delete_->setEnabled(writable && any);
     copy_uuid_->setEnabled(assets);
+    import_->setEnabled(writable);
+    new_menu_->setEnabled(writable);
+    new_button_->setEnabled(writable);
+    instance_from_texture_->setEnabled(
+        writable && selected.size() == 1 &&
+        engine::CatalogKindForFile(editor::toPath(selected.front())) == engine::CatalogAssetKind::Texture);
 }
 
 void ContentBrowser::showItemMenu(const QPoint& pos) {
@@ -585,6 +630,9 @@ void ContentBrowser::showItemMenu(const QPoint& pos) {
     QMenu menu(window());
     if (index.isValid()) {
         menu.addAction(open_);
+        if (instance_from_texture_->isEnabled()) {
+            menu.addAction(instance_from_texture_);
+        }
         menu.addSeparator();
         menu.addActions({cut_, copy_, paste_, duplicate_});
         menu.addSeparator();
@@ -592,7 +640,10 @@ void ContentBrowser::showItemMenu(const QPoint& pos) {
         menu.addSeparator();
         menu.addActions({copy_path_, copy_uuid_, show_in_explorer_});
     } else {
-        menu.addActions({new_folder_, paste_});
+        menu.addMenu(new_menu_.get());
+        menu.addAction(import_);
+        menu.addSeparator();
+        menu.addAction(paste_);
         menu.addSeparator();
         menu.addActions({copy_path_, show_in_explorer_});
     }
@@ -641,7 +692,7 @@ void ContentBrowser::dropItems(const std::size_t root, const QStringList& paths,
         (action == Qt::MoveAction && isWithin(path, roots_[root].path) ? moves : copies) << path;
     }
     QStringList added = operations_.transfer(moves, folder, false);
-    added << operations_.transfer(copies, folder, true);
+    added << copyIn(copies, folder);
     leaveMissingFolder();
     select(added);
 }
@@ -689,7 +740,7 @@ void ContentBrowser::pasteInto(const QString& folder) {
     const QStringList paths = AssetFilterModel::droppedPaths(mime);
     // Anything else on the clipboard, such as files copied in Explorer, is copied in.
     const bool cut = !cut_paths_.isEmpty() && paths == cut_paths_;
-    const QStringList added = operations_.transfer(paths, folder, !cut);
+    const QStringList added = cut ? operations_.transfer(paths, folder, false) : copyIn(paths, folder);
     if (cut) {
         cut_paths_.clear();
         QGuiApplication::clipboard()->clear();  // they're gone from where the URLs point
@@ -728,6 +779,89 @@ void ContentBrowser::showInExplorer(const QString& path) {
     // explorer.exe wants "/select," and the path as separate arguments.
     QProcess::startDetached(QStringLiteral("explorer.exe"),
                             {QStringLiteral("/select,"), QDir::toNativeSeparators(path)});
+}
+
+const engine::AssetCatalog& ContentBrowser::catalog() const {
+    return context_.engine().GetSceneAssets().GetCatalog();
+}
+
+QStringList ContentBrowser::copyIn(const QStringList& paths, const QString& folder) {
+    const auto external_model = [this](const QString& path) {
+        const bool in_project =
+            std::ranges::any_of(roots_, [&path](const Root& root) { return isWithin(path, root.path); });
+        return !in_project && QFileInfo(path).isFile() &&
+               engine::AssetPathResolver::IsModelFile(editor::toPath(path));
+    };
+    QStringList copies;
+    QStringList models;
+    for (const QString& path : paths) {
+        (external_model(path) ? models : copies) << path;
+    }
+    QStringList added = operations_.transfer(copies, folder, true);
+    for (const QString& model : models) {
+        if (const QString imported = importModel(model, folder); !imported.isEmpty()) {
+            added << imported;
+        }
+    }
+    return added;
+}
+
+QString ContentBrowser::importModel(const QString& source, const QString& folder) {
+    ImportModelDialog dialog(catalog(), source, folder, window());
+    if (dialog.exec() != QDialog::Accepted) {
+        return {};
+    }
+    return operations_.importModel(dialog.result(), folder);
+}
+
+void ContentBrowser::importAssets() {
+    QSettings settings;
+    const QStringList files = QFileDialog::getOpenFileNames(
+        window(), tr("Import"), settings.value(ImportDirectoryKey).toString(), importFilter());
+    if (files.isEmpty()) {
+        return;
+    }
+    settings.setValue(ImportDirectoryKey, QFileInfo(files.front()).absolutePath());
+    QStringList sources;
+    for (const QString& file : files) {
+        sources << cleanPath(file);
+    }
+    select(copyIn(sources, folder_));
+}
+
+void ContentBrowser::newMaterial() {
+    MaterialDialog dialog(catalog(), folder_, tr("New Material"), window());
+    if (dialog.exec() == QDialog::Accepted && operations_.createMaterial(dialog.path(), dialog.definition())) {
+        select({dialog.path()});
+    }
+}
+
+void ContentBrowser::newMaterialInstance(const QString& albedo) {
+    QString name = tr("New Material Instance");
+    if (!albedo.isEmpty()) {
+        // Named after the texture, or after its model folder for a model's texture.png.
+        const QFileInfo texture(albedo);
+        name = splitAssetName(texture.fileName(), false).first;
+        if (name.compare(QLatin1String("texture"), Qt::CaseInsensitive) == 0) {
+            name = texture.dir().dirName();
+        }
+    }
+    MaterialInstanceDialog dialog(catalog(), folder_, name, window());
+    if (!albedo.isEmpty()) {
+        dialog.setAlbedo(assetName(albedo));
+    }
+    if (dialog.exec() == QDialog::Accepted &&
+        operations_.createMaterialInstance(dialog.path(), dialog.definition())) {
+        select({dialog.path()});
+    }
+}
+
+void ContentBrowser::newScene() {
+    NewAssetDialog dialog(tr("New Scene"), folder_, QStringLiteral(".scene.json"), tr("New Scene"), window());
+    if (dialog.exec() == QDialog::Accepted &&
+        context_.sceneDocument().createInteractive(window(), editor::toPath(dialog.path()))) {
+        select({dialog.path()});
+    }
 }
 
 }  // namespace content

@@ -20,6 +20,8 @@
 #include <engine/assets/AssetAuthoring.hpp>
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
+#include <engine/assets/MaterialDefinition.hpp>
+#include <engine/core/FileSystem.hpp>
 #include <engine/engine.hpp>
 #include <engine/project/Project.hpp>
 
@@ -244,6 +246,109 @@ bool AssetOperations::remove(const QStringList& paths) {
     return errors.isEmpty();
 }
 
+QString AssetOperations::importModel(const ModelImport& import, const QString& folder) {
+    const QString command = tr("Import Model");
+    const QString name = import.name.trimmed();
+    const QString target = cleanPath(folder) + QLatin1Char('/') + name;
+    if (QFileInfo::exists(target)) {
+        report(command, {tr("%1 already exists").arg(assetName(target))});
+        return {};
+    }
+    if (!QDir().mkdir(target)) {
+        report(command, {tr("Could not create %1").arg(QDir::toNativeSeparators(target))});
+        return {};
+    }
+
+    QString error;
+    // Copies `from` into the new folder as `file`, with a meta when it's an asset.
+    const auto bring = [&](const QString& from, const QString& file, const engine::AssetMetadata* metadata) {
+        const QString to = target + QLatin1Char('/') + file;
+        if (QFile source(from); !source.copy(to)) {
+            error = QStringLiteral("%1: %2").arg(QFileInfo(from).fileName(), source.errorString());
+            return false;
+        }
+        std::string written;
+        if (metadata != nullptr && !engine::WriteAssetMetadata(editor::toPath(to), *metadata, written)) {
+            error = fromUtf8(written);
+            return false;
+        }
+        return true;
+    };
+
+    const QFileInfo source(import.source);
+    // The name AssetPathResolver::ResolveMesh looks for in a model folder.
+    const engine::AssetMetadata mesh{engine::NewUuid(), engine::CatalogAssetKind::Mesh, import.center_on_load};
+    bool done = bring(import.source, QStringLiteral("model.") + source.suffix().toLower(), &mesh);
+    // Files the model refers to by name, so they keep theirs: an .obj's materials, a .gltf's buffers.
+    for (const QLatin1String extension : {QLatin1String("mtl"), QLatin1String("bin")}) {
+        const QFileInfo companion(source.absolutePath() + QLatin1Char('/') + source.completeBaseName() +
+                                  QLatin1Char('.') + extension);
+        if (done && companion.isFile()) {
+            done = bring(companion.filePath(), companion.fileName(), nullptr);
+        }
+    }
+
+    const engine::AssetMetadata texture{engine::NewUuid(), engine::CatalogAssetKind::Texture};
+    const QString texture_file = QStringLiteral("texture.") + QFileInfo(import.texture).suffix().toLower();
+    if (done && !import.texture.isEmpty()) {
+        done = bring(import.texture, texture_file, &texture);
+    }
+
+    if (done && import.material) {
+        engine::MaterialInstanceDefinition definition;
+        definition.version = 2;
+        definition.material = import.material->path;
+        definition.materialReference = import.material;
+        if (!import.texture.isEmpty()) {
+            // A path hint keeps its case, unlike asset names.
+            const QString content = cleanPath(editor::toQString(context_.project().ContentDir()));
+            const std::string hint =
+                (QStringLiteral("game/") + QDir(content).relativeFilePath(target + QLatin1Char('/') + texture_file))
+                    .toStdString();
+            definition.parameters.albedoTexture = hint;
+            definition.parameters.albedoReference = engine::AssetReference{texture.id, hint};
+        }
+        const std::filesystem::path file = editor::toPath(target + QLatin1Char('/') + name +
+                                                          QLatin1String(".material-instance.json"));
+        std::string text;
+        std::string written;
+        done = engine::SerializeMaterialInstanceDefinition(definition, text, written) &&
+               engine::CreateNewFile(file, text + '\n', written) &&
+               engine::WriteAssetMetadata(file, {engine::NewUuid(), engine::CatalogAssetKind::MaterialInstance},
+                                          written);
+        if (!done) {
+            error = fromUtf8(written);
+        }
+    }
+
+    if (!done) {
+        QDir(target).removeRecursively();  // nothing half-imported stays behind
+        report(command, {error});
+        return {};
+    }
+    rescan();
+    return target;
+}
+
+bool AssetOperations::createMaterial(const QString& path, const engine::MaterialDefinition& definition) {
+    std::string text;
+    if (std::string error; !engine::SerializeMaterialDefinition(definition, text, error)) {
+        report(tr("New Material"), {fromUtf8(error)});
+        return false;
+    }
+    return createFile(tr("New Material"), path, text, engine::CatalogAssetKind::Material);
+}
+
+bool AssetOperations::createMaterialInstance(const QString& path,
+                                             const engine::MaterialInstanceDefinition& definition) {
+    std::string text;
+    if (std::string error; !engine::SerializeMaterialInstanceDefinition(definition, text, error)) {
+        report(tr("New Material Instance"), {fromUtf8(error)});
+        return false;
+    }
+    return createFile(tr("New Material Instance"), path, text, engine::CatalogAssetKind::MaterialInstance);
+}
+
 void AssetOperations::adoptNewFiles() {
     std::size_t generated = 0;
     std::string error;
@@ -290,6 +395,24 @@ void AssetOperations::report(const QString& command, const QStringList& errors) 
         spdlog::warn("{}: {}", command.toStdString(), error.toStdString());
     }
     QMessageBox::warning(parent_, command, errors.join(QLatin1Char('\n')));
+}
+
+bool AssetOperations::createFile(const QString& command, const QString& path, const std::string& text,
+                                 const engine::CatalogAssetKind kind) {
+    const std::filesystem::path file = editor::toPath(path);
+    std::string error;
+    if (!engine::CreateNewFile(file, text + '\n', error)) {
+        report(command, {fromUtf8(error)});
+        return false;
+    }
+    if (!engine::WriteAssetMetadata(file, {engine::NewUuid(), kind}, error)) {
+        std::error_code ec;
+        std::filesystem::remove(file, ec);
+        report(command, {fromUtf8(error)});
+        return false;
+    }
+    rescan();
+    return true;
 }
 
 void AssetOperations::followOpenScene(const QString& from, const QString& to) {

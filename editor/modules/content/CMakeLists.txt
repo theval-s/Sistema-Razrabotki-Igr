@@ -8,4 +8,8 @@ sri_add_editor_module(editor_module_content
     asset_icons.hpp
     asset_operations.cpp
     asset_operations.hpp
+    asset_dialogs.cpp
+    asset_dialogs.hpp
+    asset_picker.cpp
+    asset_picker.hpp
 )
