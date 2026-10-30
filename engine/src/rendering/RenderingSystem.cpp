@@ -65,12 +65,15 @@ void RenderingSystem::InitializePasses(const uint32_t screenWidth, const uint32_
     }
 }
 
-void RenderingSystem::RenderFrame() {
+void RenderingSystem::RenderFrame(const FrameContext& frame) {
     if (!ready_) {
         return;
     }
     renderingContext_.ClearState();
     resources_.BindCBuffers(renderingContext_);
+    resources_.frameCBuffer.Update(renderingContext_, [&](FrameBufferData& data) {
+        data.simulationTimeSeconds = static_cast<float>(frame.simulationTimeSeconds);
+    });
     renderingContext_.BindSamplers();
 
     for (const auto& renderPass : renderPasses_) {

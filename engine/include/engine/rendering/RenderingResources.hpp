@@ -31,6 +31,11 @@ struct ViewBufferData {
     float padding3_;
 };
 
+struct FrameBufferData {
+    float simulationTimeSeconds = 0.0f;
+    float padding[3]{};
+};
+
 struct MaterialBufferData {
     Vector3 specularColor;
     float shininess;
@@ -116,8 +121,7 @@ struct RenderingResources {
     uint32_t screenWith = 0;
     uint32_t screenHeight = 0;
 
-    //Frame CBuf is unused for now
-    ConstantBuffer<uint32_t> frameCBuffer;
+    ConstantBuffer<FrameBufferData> frameCBuffer;
     ConstantBuffer<ViewBufferData> viewCBuffer;
     ConstantBuffer<MaterialBufferData> materialCBuffer;
     ConstantBuffer<ObjectBufferData> objectCBuffer;

@@ -3,6 +3,7 @@
 #include <vector>
 
 #include <engine/core/Surface.hpp>
+#include <engine/core/FrameContext.hpp>
 #include <engine/engine_export.hpp>
 
 #include <engine/rendering/passes/GBufferPass.hpp>
@@ -20,7 +21,7 @@ struct ENGINE_API RenderingSystem {
     bool Initialize(const NativeSurface& surface);
     /// Re-inits all screen size dependant resource and sets new screen size (We hope that HWND doesn't change during game run)
     bool Reinitialize(const NativeSurface& surface);
-    void RenderFrame();
+    void RenderFrame(const FrameContext& frame);
     ~RenderingSystem();
 
     [[nodiscard]] RenderingContext& GetRenderingContext();

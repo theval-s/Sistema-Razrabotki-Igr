@@ -418,7 +418,8 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     ASSERT_TRUE(guidMaterial) << "UUID shader did not survive stale path hint";
     EXPECT_TRUE(resources.TryGetMaterial(guidMaterial->material)->shaders.gBufferPassPS);
 
-    for (std::string_view name : {"ground", "enchanted"}) {
+    for (std::string_view name : {"ground", "enchanted", "marker-orange", "marker-blue",
+                                  "marker-green", "marker-magenta"}) {
         const auto authored = assets.LoadMaterialInstance("game/materials/" + std::string(name) + ".material-instance.json");
         ASSERT_TRUE(authored) << name << " ExampleGame disk material did not load";
         EXPECT_NE(resources.TryGetMaterialInstance(authored->instance), nullptr);
@@ -451,6 +452,18 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     ASSERT_TRUE(sceneAssets.IsReady(sceneHandle)) << "example scene asset did not load";
+    const auto marker = engine.GetScene().FindById("3b93eafd-a888-4720-be22-77c5ea028bca");
+    ASSERT_TRUE(marker != entt::null);
+    const auto* markerRenderer = engine.GetScene().TryGetComponent<MeshRenderer>(marker);
+    ASSERT_NE(markerRenderer, nullptr);
+    while ((!sceneAssets.IsReady(markerRenderer->mesh) || !sceneAssets.IsReady(markerRenderer->materialInstance)) &&
+           std::chrono::steady_clock::now() < untilScene) {
+        sceneAssets.Update(sceneFrame);
+        ++sceneFrame.frameIndex;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(sceneAssets.IsReady(markerRenderer->mesh)) << "marker mesh did not load";
+    ASSERT_TRUE(sceneAssets.IsReady(markerRenderer->materialInstance)) << "marker material did not load";
     const auto otherCube = engine.GetScene().CreateEntity("Same material");
     ASSERT_NE(engine.GetScene().AddComponent<MeshRenderer>(otherCube,
         *engine.GetScene().TryGetComponent<MeshRenderer>(cube)), nullptr);

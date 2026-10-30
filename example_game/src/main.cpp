@@ -1,10 +1,9 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
-#include <span>
+#include <memory>
 #include <string_view>
-#include <utility>
-#include <vector>
 
 #include <windows.h>
 #include <spdlog/spdlog.h>
@@ -30,31 +29,13 @@ using DirectX::SimpleMath::Vector2;
 using DirectX::SimpleMath::Vector3;
 using DirectX::SimpleMath::Vector4;
 
-struct SceneObject {
-    Matrix transform;
-    engine::MeshHandle mesh;
-    engine::MaterialInstanceHandle materialInstance;
+constexpr std::string_view CubeId = "e862521f-5ad3-4942-bbd6-aa8dbddae52e";
+constexpr std::array<std::string_view, 4> MarkerIds{
+    "3b93eafd-a888-4720-be22-77c5ea028bca",
+    "16f57ae5-08c2-4f75-a8c7-4f8e2f4199f3",
+    "19296f46-7d6f-4258-af35-b41c0373017e",
+    "cafddd9c-1fe2-4492-8367-637f90ea291f"
 };
-
-struct alignas(16) EnchantmentBufferData {
-    float time;
-    float padding[3]{};
-};
-
-engine::TextureHandle MakeSolidTexture(engine::RenderingResourceManager& resourceManager, uint32_t color) {
-    const D3D11_SUBRESOURCE_DATA data{
-        .pSysMem = &color,
-        .SysMemPitch = sizeof(color),
-        .SysMemSlicePitch = 0
-    };
-    const engine::TextureDesc description{
-        .width = 1,
-        .height = 1,
-        .format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
-        .usage = engine::TextureUsage::ShaderResource
-    };
-    return resourceManager.CreateTexture(description, std::span<const D3D11_SUBRESOURCE_DATA>{&data, 1});
-}
 
 bool IsKeyDown(int key) {
     return (GetAsyncKeyState(key) & 0x8000) != 0;
@@ -105,18 +86,6 @@ void UpdateCamera(engine::FPSCamera& camera, HWND window, float deltaTime) {
         movement.Normalize();
         const float speed = IsKeyDown(VK_SHIFT) ? 12.0f : 5.0f;
         camera.position += movement * speed * deltaTime;
-    }
-}
-
-void FillRenderWorld(engine::RenderWorld& world, const std::vector<SceneObject>& objects) {
-    world.renderItems.clear();
-    world.renderItems.reserve(objects.size());
-    for (const SceneObject& object : objects) {
-        world.renderItems.push_back({
-            .worldMatrix = object.transform,
-            .mesh = object.mesh,
-            .materialInstance = object.materialInstance
-        });
     }
 }
 
@@ -185,8 +154,8 @@ engine::ControllerRegistration MotionRegistration(bool hammer) {
         }};
 }
 
-/// Host-owned procedural effects, input and animated point/spot lights. File-backed
-/// meshes and materials come from demo.scene.json through RenderExtractionSubsystem.
+/// Input and animated point/spot lights. Visible meshes and materials come from
+/// demo.scene.json through RenderExtractionSubsystem.
 class ExampleGameLogic final : public engine::Subsystem {
 public:
     explicit ExampleGameLogic(HWND window) : window_(window) {
@@ -278,40 +247,8 @@ public:
             }
         };
 
-        enchantmentBuffer_ = resources.CreateConstantBuffer<EnchantmentBufferData>();
-        lightMarkerMesh_ = engine::ugly_utils::FromRawMesh(
-            resources, engine::ugly_utils::CreateSphere(0.15f));
-        lightMarkerTextures_ = {
-            MakeSolidTexture(resources, 0xff1440ffu),
-            MakeSolidTexture(resources, 0xffff5914u),
-            MakeSolidTexture(resources, 0xff59ff33u),
-            MakeSolidTexture(resources, 0xffff26d9u)
-        };
-        cubeIndex_ = objects_.size();
-        objects_.push_back({
-            .transform = Matrix::CreateTranslation(0.0f, 3.8f, 0.0f),
-            .mesh = engine::ugly_utils::FromRawMesh(resources, engine::ugly_utils::CreateCube(1.6f, 1.6f, 1.6f)),
-            .materialInstance = {}
-        });
-
-        firstLightMarker_ = objects_.size();
-        for (size_t i = 0; i < lightMarkerTextures_.size(); ++i) {
-            objects_.push_back({
-                .transform = Matrix::Identity,
-                .mesh = lightMarkerMesh_,
-                .materialInstance = {}
-            });
-        }
-
         CaptureMouse(window_);
         return true;
-    }
-
-    void Shutdown() override {
-        auto& resources = rendering_->GetResourceManager();
-        rendering_->GetWorld().renderItems.clear();
-        ReleaseSceneInstances();
-        if (enchantmentBuffer_) resources.DestroyBuffer(enchantmentBuffer_);
     }
 
     void Update(const engine::FrameContext& frame) override {
@@ -341,15 +278,10 @@ public:
             else spdlog::info("Saved game/example.save.json");
         }
         if (GetAsyncKeyState(VK_F9) & 1) {
-            ReleaseSceneInstances();
             std::string error;
             if (!GetEngine().LoadGame("game/example.save.json", error)) spdlog::error("Load game: {}", error);
             else if (!error.empty()) spdlog::warn("Load game: {}", error);
-            RequestSceneMaterials();
         }
-        // LoadScene unloads the scene asset scope. Request procedural materials
-        // only after that initial load (and again after a save-game reload).
-        if (!sceneMaterialsRequested_) RequestSceneMaterials();
         if (GetAsyncKeyState('R') & 1) {
             const Matrix rotation = Matrix::CreateFromYawPitchRoll(world.camera.yaw, world.camera.pitch, 0);
             const Vector3 direction = Vector3::TransformNormal(Vector3::Forward, rotation);
@@ -358,75 +290,22 @@ public:
             if (!hits.empty()) spdlog::info("Ray hit {} at {}", GetEngine().GetScene().GetName(hits[0].entity), hits[0].distance);
         }
         const float time = static_cast<float>(frame.simulationTimeSeconds);
-        if (!objects_[cubeIndex_].materialInstance)
-            objects_[cubeIndex_].materialInstance = MakeInstance(enchantedInstance_, {}, enchantmentBuffer_);
-        for (size_t i = 0; i < lightMarkerTextures_.size(); ++i)
-            if (!objects_[firstLightMarker_ + i].materialInstance)
-                objects_[firstLightMarker_ + i].materialInstance = MakeInstance(markerInstance_, lightMarkerTextures_[i]);
-        rendering_->GetContext().UpdateCBuffer(enchantmentBuffer_, EnchantmentBufferData{time});
-        objects_[cubeIndex_].transform = Matrix::CreateRotationY(time * 0.35f) *
-            Matrix::CreateTranslation(0.0f, 3.8f + 0.16f * std::sin(time * 1.7f), 0.0f);
-
-        UpdateLights(world, time);
-        for (size_t i = 0; i < lightMarkerTextures_.size(); ++i) {
-            objects_[firstLightMarker_ + i].transform =
-                Matrix::CreateTranslation(world.lights[i].position);
+        auto& scene = GetEngine().GetScene();
+        if (const auto cube = scene.FindById(CubeId); cube != entt::null) {
+            auto& transform = scene.GetTransform(cube);
+            transform.rotation = DirectX::SimpleMath::Quaternion::CreateFromYawPitchRoll(time * 0.35f, 0, 0);
+            transform.position.y = 3.8f + 0.16f * std::sin(time * 1.7f);
         }
-        FillRenderWorld(world, objects_);
+        UpdateLights(world, time);
+        for (size_t i = 0; i < MarkerIds.size(); ++i) {
+            if (const auto marker = scene.FindById(MarkerIds[i]); marker != entt::null)
+                scene.GetTransform(marker).position = world.lights[i].position;
+        }
     }
 
 private:
-    void RequestSceneMaterials() {
-        auto& assets = GetEngine().GetSceneAssets();
-        enchantedInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"b9e1fbd1-dfa0-416b-857e-8823b736da81",
-            "game/materials/enchanted.material-instance.json"});
-        markerInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"70da8a2f-d0b1-40fd-bd45-7ad5e610e855",
-            "game/materials/glossy.material-instance.json"});
-        sceneMaterialsRequested_ = true;
-    }
-
-    void ReleaseSceneInstances() {
-        rendering_->GetWorld().renderItems.clear();
-        auto& resources = rendering_->GetResourceManager();
-        for (const auto instance : instances_) resources.DestroyMaterialInstance(instance);
-        instances_.clear();
-        for (auto& object : objects_) object.materialInstance = {};
-    }
-
-    engine::MaterialInstanceHandle MakeInstance(engine::AssetHandle<engine::MaterialInstanceAsset> asset,
-                                                 engine::TextureHandle texture, engine::BufferHandle customBuffer = {}) {
-        const auto ready = GetEngine().GetSceneAssets().Peek(asset);
-        if (!ready) return {};
-        auto& resources = rendering_->GetResourceManager();
-        const auto* base = resources.TryGetMaterialInstance(ready->instance);
-        if (!base) return {};
-        const auto instance = resources.CreateMaterialInstance(base->material);
-        if (!instance) return {};
-        engine::MaterialParameters params = base->parameters;
-        if (texture) params.albedoTexture = texture;
-        params.customBuffer = customBuffer;
-        if (!resources.SetMaterialInstanceParameters(instance, params)) {
-            resources.DestroyMaterialInstance(instance);
-            return {};
-        }
-        instances_.push_back(instance);
-        return instance;
-    }
-
     HWND window_ = nullptr;
     engine::RenderingSubsystem* rendering_ = nullptr;
-
-    engine::AssetHandle<engine::MaterialInstanceAsset> enchantedInstance_;
-    engine::AssetHandle<engine::MaterialInstanceAsset> markerInstance_;
-    bool sceneMaterialsRequested_ = false;
-    engine::BufferHandle enchantmentBuffer_;
-    size_t cubeIndex_ = 0;
-    std::vector<engine::MaterialInstanceHandle> instances_;
-    engine::MeshHandle lightMarkerMesh_;
-    std::vector<engine::TextureHandle> lightMarkerTextures_;
-
-    std::vector<SceneObject> objects_;
-    size_t firstLightMarker_ = 0;
 };
 
 
