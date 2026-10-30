@@ -5,14 +5,19 @@
 
 #include <spdlog/spdlog.h>
 
-#include <fstream>
+#include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <iterator>
+#include <cwchar>
+#include <exception>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <stdexcept>
+#include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -20,6 +25,85 @@
 #include <engine/core/PathUtils.hpp>
 
 namespace engine {
+
+    namespace {
+
+        // Runtime failures are logged here only. Callers propagate the returned text.
+        bool SetError(std::string& error, const std::string& message, bool log = true) {
+            error = message;
+            if (log) spdlog::error("[Lua] {}", error);
+            return false;
+        }
+
+        template <typename Result>
+        bool CheckResult(Result& result, std::string& error, std::string_view context) {
+            if (!result.valid()) {
+                sol::error luaError = result;
+                return SetError(error, std::string(context) + ": " + luaError.what());
+            }
+            error.clear();
+            return true;
+        }
+
+        template <typename... Args>
+        bool ProtectedCall(const sol::protected_function& callback, std::string& error,
+                           std::string_view context, Args&&... args) {
+            try {
+                sol::protected_function_result result = callback(std::forward<Args>(args)...);
+                return CheckResult(result, error, context);
+            } catch (const std::exception& exception) {
+                return SetError(error, std::string(context) + ": " + exception.what());
+            } catch (...) {
+                return SetError(error, std::string(context) + ": unknown C++ callback exception");
+            }
+        }
+
+        std::uint64_t AllocateSession() {
+            static std::atomic<std::uint64_t> next{1};
+            auto token = next.load(std::memory_order_relaxed);
+            while (token != std::numeric_limits<std::uint64_t>::max()) {
+                if (next.compare_exchange_weak(token, token + 1, std::memory_order_relaxed)) return token;
+            }
+            return 0;  // Never wrap and alias an old session.
+        }
+
+        bool IsUnderRoot(const std::filesystem::path& path, const std::filesystem::path& root) {
+            auto inner = path.begin();
+            for (const auto& component : root) {
+                if (inner == path.end()) return false;
+#ifdef _WIN32
+                if (_wcsicmp(inner->c_str(), component.c_str()) != 0) return false;
+#else
+                if (*inner != component) return false;
+#endif
+                ++inner;
+            }
+            return true;
+        }
+
+        bool ModulePath(std::string_view name, std::filesystem::path& relative) {
+            if (name.empty()) return false;
+            std::size_t start = 0;
+            bool first = true;
+            for (std::size_t i = 0; i < name.size(); ++i) {
+                const char c = name[i];
+                if (c == '.') {
+                    if (first) return false;
+                    relative /= std::string(name.substr(start, i - start));
+                    start = i + 1;
+                    first = true;
+                    continue;
+                }
+                const bool letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+                if (!letter && (first || c < '0' || c > '9')) return false;
+                first = false;
+            }
+            if (first) return false;
+            relative /= std::string(name.substr(start));
+            return true;
+        }
+
+    }  // namespace
 
     struct LuaRuntime::Impl {
         struct Instance {
@@ -30,63 +114,134 @@ namespace engine {
             bool started = false;
             bool faulted = false;
             bool destroying = false;
+            std::string failure;
 
             std::string Context() const {
-                return ToGenericUtf8(desc.source) + " [script=" + desc.assetId.ToString() +
+                return ToUtf8(desc.source) + " [script=" + desc.assetId.ToString() +
                     ", entity=" + desc.entityId + "]";
             }
             bool Fail(std::string& error, const std::string& message) {
-                error = Context() + ": " + message;
-                spdlog::error("[Lua] {}", error);
-                return false;
+                faulted = true;
+                failure = Context() + " [callback=CreateInstance]: " + message;
+                return SetError(error, failure);
             }
             bool Invoke(const std::optional<sol::protected_function>& callback,
                         std::string_view name, std::string& error, std::optional<double> delta = {}) {
+                if (faulted) return SetError(error, failure, false);
                 if (!callback) {
                     error.clear();
                     return true;
                 }
-                try {
-                    sol::protected_function_result result = delta
-                        ? (*callback)(table, *delta) : (*callback)(table);
-                    if (!result.valid()) {
-                        sol::error failure = result;
-                        faulted = true;
-                        return Fail(error, std::string(name) + ": " + failure.what());
-                    }
-                } catch (const std::exception& exception) {
+                const std::string context = Context() + " [callback=" + std::string(name) + "]";
+                const bool clean = delta
+                    ? ProtectedCall(*callback, error, context, table, *delta)
+                    : ProtectedCall(*callback, error, context, table);
+                if (!clean) {
                     faulted = true;
-                    return Fail(error, std::string(name) + ": " + exception.what());
+                    failure = error;
                 }
-                error.clear();
-                return true;
+                return clean;
             }
         };
         std::unique_ptr<sol::state> state;
         // Declared after state so all Lua references are released first, including at destruction.
         std::unordered_map<std::uint64_t, std::unique_ptr<Instance>> instances;
+        struct Module {
+            sol::object value;
+            sol::environment environment;
+        };
+        std::unordered_map<std::string, Module> modules;
+        std::vector<std::string> loadingModules;
+        std::filesystem::path moduleRoot;
+        std::unordered_set<std::uint64_t> destroyed;
+        std::uint64_t session = 0;
+        std::uint64_t nextInstance = 1;
+        bool shuttingDown = false;
+
+        // No logging here: Lua's wrapper raises the returned error, and the outer
+        // protected instance/compatibility call reports it once with its own context.
+        bool Require(std::string_view name, sol::object& value, std::string& error) {
+            try {
+                std::filesystem::path relative;
+                if (!ModulePath(name, relative)) {
+                    error = "invalid module name: expected dot-separated ASCII identifiers";
+                    return false;
+                }
+                if (moduleRoot.empty()) {
+                    error = "require has no configured project content root";
+                    return false;
+                }
+                const std::string key(name);
+                if (const auto cached = modules.find(key); cached != modules.end()) {
+                    value = cached->second.value;
+                    return true;
+                }
+                if (std::find(loadingModules.begin(), loadingModules.end(), key) != loadingModules.end()) {
+                    error = "cyclic require: ";
+                    for (const auto& loading : loadingModules) error += loading + " -> ";
+                    error += key;
+                    return false;
+                }
+
+                std::filesystem::path sourcePath;
+                auto file = moduleRoot / relative;
+                file += ".lua";
+                for (const auto& candidate : {file, moduleRoot / relative / "init.lua"}) {
+                    const auto canonical = std::filesystem::weakly_canonical(candidate);
+                    if (!IsUnderRoot(canonical, moduleRoot)) {
+                        error = "require path escapes project content root: " + ToUtf8(candidate);
+                        return false;
+                    }
+                    if (std::filesystem::is_regular_file(canonical)) {
+                        sourcePath = canonical;
+                        break;
+                    }
+                }
+                if (sourcePath.empty()) {
+                    error = "module '" + key + "' not found in project content root " + ToUtf8(moduleRoot);
+                    return false;
+                }
+                std::string source;
+                if (!ReadTextFile(sourcePath, source, error)) return false;
+
+                loadingModules.push_back(key);
+                struct LoadingScope {
+                    std::vector<std::string>& stack;
+                    ~LoadingScope() { stack.pop_back(); }
+                } loadingScope{loadingModules};
+
+                sol::environment environment(*state, sol::create, state->globals());
+                environment["_G"] = environment;
+                sol::load_result loaded = state->load(source, "@" + ToUtf8(sourcePath));
+                if (!loaded.valid()) {
+                    sol::error failure = loaded;
+                    error = failure.what();
+                    return false;
+                }
+                sol::protected_function chunk = loaded;
+                sol::set_environment(environment, chunk);
+                sol::protected_function_result result = chunk();
+                if (!result.valid()) {
+                    sol::error failure = result;
+                    error = failure.what();
+                    return false;
+                }
+                value = result.return_count() == 0 || result.get_type() == sol::type::nil
+                    ? sol::make_object(*state, true) : result.get<sol::object>();
+                modules.emplace(key, Module{value, std::move(environment)});
+                error.clear();
+                return true;
+            } catch (const std::exception& exception) {
+                error = "require '" + std::string(name) + "': " + exception.what();
+                return false;
+            } catch (...) {
+                error = "require: unknown module loading error";
+                return false;
+            }
+        }
     };
 
     namespace {
-
-        void SetError(std::string& error, const std::string& message) {
-            error = message;
-            spdlog::error("[Lua] {}", message);
-        }
-
-        bool CheckResult(
-            sol::protected_function_result& result,
-            std::string& error
-        ) {
-            if (!result.valid()) {
-                sol::error luaError = result;
-                SetError(error, luaError.what());
-                return false;
-            }
-
-            error.clear();
-            return true;
-        }
 
         void RegisterLog(sol::state& state) {
             sol::table log = state.create_named_table("Log");
@@ -115,12 +270,30 @@ namespace engine {
     }
 
     bool LuaRuntime::Initialize(std::string& error) {
-        if (IsInitialized()) {
-            error.clear();
-            return true;
-        }
+        return Initialize({}, error);
+    }
 
+    bool LuaRuntime::Initialize(const std::filesystem::path& root, std::string& error) {
+        std::filesystem::path canonicalRoot;
         try {
+            if (!root.empty()) {
+                if (!root.is_absolute() || !std::filesystem::is_directory(root)) {
+                    return SetError(error, "require root must be an existing absolute project content directory");
+                }
+                canonicalRoot = std::filesystem::canonical(root);
+            }
+            if (IsInitialized()) {
+                if (!root.empty() && canonicalRoot != impl_->moduleRoot) {
+                    return SetError(error, "Cannot change require root during an active Lua session");
+                }
+                error.clear();
+                return true;
+            }
+        } catch (const std::exception& exception) {
+            return SetError(error, exception.what());
+        }
+        try {
+            impl_->moduleRoot = std::move(canonicalRoot);
             impl_->state = std::make_unique<sol::state>();
 
             impl_->state->open_libraries(
@@ -139,6 +312,42 @@ namespace engine {
 
             RegisterLog(*impl_->state);
 
+            // Do not open package: no native searchers, loadlib, or mutable search paths.
+            const sol::object loader = sol::make_object(*impl_->state,
+                [runtime = impl_.get()](sol::object name) -> std::tuple<sol::object, std::string> {
+                    sol::object value = sol::make_object(*runtime->state, sol::nil);
+                    std::string failure;
+                    if (name.get_type() != sol::type::string) {
+                        return {std::move(value), "require expects a string module name"};
+                    }
+                    (void)runtime->Require(name.as<std::string>(), value, failure);
+                    return {std::move(value), std::move(failure)};
+                });
+            // Raise from Lua, after all C++ loader locals have unwound normally.
+            sol::load_result wrapper = impl_->state->load(R"(
+                return function(loader, raise)
+                    return function(name)
+                        local value, failure = loader(name)
+                        if failure ~= '' then raise(failure, 2) end
+                        return value
+                    end
+                end
+            )", "require wrapper");
+            if (!wrapper.valid()) { sol::error failure = wrapper; throw failure; }
+            sol::protected_function wrapperChunk = wrapper;
+            sol::protected_function_result factoryResult = wrapperChunk();
+            if (!factoryResult.valid()) { sol::error failure = factoryResult; throw failure; }
+            sol::protected_function factory = factoryResult.get<sol::protected_function>();
+            sol::protected_function_result requireResult = factory(loader, globals["error"]);
+            if (!requireResult.valid()) { sol::error failure = requireResult; throw failure; }
+            globals["require"] = requireResult.get<sol::protected_function>();
+
+            impl_->session = AllocateSession();
+            if (impl_->session == 0) {
+                throw std::runtime_error("Lua session token space exhausted");
+            }
+            impl_->nextInstance = 1;
+
             error.clear();
 
             spdlog::info(
@@ -155,11 +364,13 @@ namespace engine {
     }
 
     void LuaRuntime::Shutdown() noexcept {
-        if (!impl_->state) return;
+        if (!impl_->state || impl_->shuttingDown) return;
+        impl_->shuttingDown = true;
         // Destroy callbacks run while the state and the instance's table are still alive.
         while (!impl_->instances.empty()) {
             InstanceId id;
             id.value_ = impl_->instances.begin()->first;
+            id.session_ = impl_->session;
             try {
                 std::string error;
                 (void)DestroyInstance(id, error);
@@ -168,7 +379,14 @@ namespace engine {
                 impl_->instances.erase(id.value_);
             }
         }
+        impl_->instances.clear();  // All callbacks, tables and environments die before state.
+        impl_->modules.clear();
+        impl_->loadingModules.clear();
+        impl_->moduleRoot.clear();
+        impl_->destroyed.clear();
+        impl_->session = 0;
         impl_->state.reset();
+        impl_->shuttingDown = false;
 
         spdlog::info("Lua Runtime shutdown");
     }
@@ -178,7 +396,7 @@ namespace engine {
     }
 
     bool LuaRuntime::CreateInstance(const ScriptInstanceDesc& desc, InstanceId& instance, std::string& error) {
-        if (!IsInitialized()) {
+        if (!IsInitialized() || impl_->shuttingDown) {
             SetError(error, "Lua Runtime is not initialized");
             return false;
         }
@@ -197,17 +415,20 @@ namespace engine {
             // defaults) and closures belong to this instance, never a shared prototype.
             record->environment = sol::environment(*impl_->state, sol::create, impl_->state->globals());
             record->environment["_G"] = record->environment;
-            sol::load_result loaded = impl_->state->load(source, "@" + ToGenericUtf8(desc.source));
-            if (!loaded.valid()) {
-                sol::error failure = loaded;
-                return record->Fail(error, failure.what());
+            const std::string context = record->Context() + " [callback=CreateInstance]";
+            sol::load_result loaded = impl_->state->load(source, "@" + ToUtf8(desc.source));
+            if (!CheckResult(loaded, error, context)) {
+                record->faulted = true;
+                record->failure = error;
+                return false;
             }
             sol::protected_function chunk = loaded;
             sol::set_environment(record->environment, chunk);
             sol::protected_function_result result = chunk();
-            if (!result.valid()) {
-                sol::error failure = result;
-                return record->Fail(error, failure.what());
+            if (!CheckResult(result, error, context)) {
+                record->faulted = true;
+                record->failure = error;
+                return false;
             }
             if (result.return_count() != 1 || result.get_type() != sol::type::table) {
                 return record->Fail(error, "script must return one instance table");
@@ -223,11 +444,12 @@ namespace engine {
                 }
                 *callback = value.as<sol::protected_function>();
             }
-            // Process-wide allocation prevents stale IDs from aliasing another runtime/session.
-            static std::atomic<std::uint64_t> next{1};
             InstanceId id;
-            id.value_ = next.fetch_add(1, std::memory_order_relaxed);
-            if (id.value_ == 0) return record->Fail(error, "instance ID space exhausted");
+            if (impl_->nextInstance == std::numeric_limits<std::uint64_t>::max()) {
+                return record->Fail(error, "instance ID space exhausted");
+            }
+            id.value_ = impl_->nextInstance++;
+            id.session_ = impl_->session;
             auto [entry, inserted] = impl_->instances.try_emplace(id.value_);
             if (!inserted) return record->Fail(error, "instance ID space exhausted");
             entry->second = std::move(record);
@@ -240,13 +462,17 @@ namespace engine {
     }
 
     bool LuaRuntime::StartInstance(InstanceId instance, std::string& error) {
+        if (!IsInitialized() || instance.session_ != impl_->session || impl_->shuttingDown) {
+            return SetError(error, "Invalid or stale script session", false);
+        }
         const auto found = impl_->instances.find(instance.value_);
         if (found == impl_->instances.end()) {
-            SetError(error, "Invalid or stale script instance");
+            SetError(error, "Invalid or stale script instance", false);
             return false;
         }
         auto& record = *found->second;
-        if (record.destroying || record.faulted) return record.Fail(error, "cannot start a destroying/faulted instance");
+        if (record.faulted) return SetError(error, record.failure, false);
+        if (record.destroying) return SetError(error, "Cannot start a destroying instance", false);
         if (record.started) {
             error.clear();
             return true;
@@ -256,25 +482,36 @@ namespace engine {
     }
 
     bool LuaRuntime::UpdateInstance(InstanceId instance, double deltaSeconds, std::string& error) {
+        if (!IsInitialized() || instance.session_ != impl_->session || impl_->shuttingDown) {
+            return SetError(error, "Invalid or stale script session", false);
+        }
         const auto found = impl_->instances.find(instance.value_);
         if (found == impl_->instances.end()) {
-            SetError(error, "Invalid or stale script instance");
+            SetError(error, "Invalid or stale script instance", false);
             return false;
         }
         auto& record = *found->second;
-        if (!record.started || record.faulted || record.destroying) {
-            return record.Fail(error, "cannot update an unstarted/faulted/destroying instance");
+        if (record.faulted) return SetError(error, record.failure, false);
+        if (!record.started || record.destroying) {
+            return SetError(error, "Cannot update an unstarted/destroying instance", false);
         }
         if (!std::isfinite(deltaSeconds) || deltaSeconds < 0.0) {
-            return record.Fail(error, "invalid script time step");
+            return SetError(error, "Invalid script time step", false);
         }
         return record.Invoke(record.update, "OnUpdate", error, deltaSeconds);
     }
 
     bool LuaRuntime::DestroyInstance(InstanceId instance, std::string& error) {
+        if (!IsInitialized() || instance.session_ != impl_->session) {
+            return SetError(error, "Invalid or stale script session", false);
+        }
         const auto found = impl_->instances.find(instance.value_);
         if (found == impl_->instances.end()) {
-            SetError(error, "Invalid or stale script instance");
+            if (impl_->destroyed.contains(instance.value_)) {
+                error.clear();
+                return true;
+            }
+            SetError(error, "Invalid or stale script instance", false);
             return false;
         }
         auto& record = *found->second;
@@ -282,8 +519,10 @@ namespace engine {
             error.clear();
             return true;
         }
+        // Allocate the tombstone before invoking Lua; a repeated destroy never runs it again.
+        impl_->destroyed.insert(instance.value_);
         record.destroying = true;
-        const bool clean = !record.started || record.Invoke(record.destroy, "OnDestroy", error);
+        const bool clean = !record.started || record.faulted || record.Invoke(record.destroy, "OnDestroy", error);
         impl_->instances.erase(found);
         if (clean) error.clear();
         return clean;
@@ -295,6 +534,7 @@ namespace engine {
             if (!record->started || record->faulted || record->destroying) continue;
             InstanceId id;
             id.value_ = value;
+            id.session_ = impl_->session;
             ids.push_back(id);
         }
         std::string firstError;
@@ -322,20 +562,14 @@ namespace engine {
                 std::string(chunkName)
             );
 
-            if (!loaded.valid()) {
-                sol::error luaError = loaded;
-                SetError(error, luaError.what());
-                return false;
-            }
+            if (!CheckResult(loaded, error, chunkName)) return false;
 
             sol::protected_function script = loaded;
 
-            sol::protected_function_result result = script();
-
-            return CheckResult(result, error);
+            return ProtectedCall(script, error, chunkName);
         }
         catch (const std::exception& exception) {
-            SetError(error, exception.what());
+            SetError(error, std::string(chunkName) + ": " + exception.what());
             return false;
         }
     }
@@ -349,36 +583,16 @@ namespace engine {
             return false;
         }
 
-        std::ifstream file(path, std::ios::binary);
-
-        if (!file.is_open()) {
-            SetError(
-                error,
-                "Cannot open Lua file: " + path.string()
-            );
-
-            return false;
+        try {
+            std::string source;
+            if (!ReadTextFile(path, source, error)) {
+                const std::string message = error;
+                return SetError(error, message);
+            }
+            return ExecuteString(source, "@" + ToUtf8(path), error);
+        } catch (const std::exception& exception) {
+            return SetError(error, "ExecuteFile " + ToUtf8(path) + ": " + exception.what());
         }
-
-        std::string source{
-            std::istreambuf_iterator<char>(file),
-            std::istreambuf_iterator<char>()
-        };
-
-        if (file.bad()) {
-            SetError(
-                error,
-                "Failed to read Lua file: " + path.string()
-            );
-
-            return false;
-        }
-
-        return ExecuteString(
-            source,
-            path.string(),
-            error
-        );
     }
 
     bool LuaRuntime::CallFunction(
@@ -390,25 +604,16 @@ namespace engine {
             return false;
         }
 
-        sol::object object = impl_->state->get<sol::object>(
-            std::string(functionName)
-        );
-
-        if (object.get_type() != sol::type::function) {
-            SetError(
-                error,
-                "Lua function not found: " + std::string(functionName)
-            );
-
-            return false;
+        try {
+            sol::object object = impl_->state->get<sol::object>(std::string(functionName));
+            if (object.get_type() != sol::type::function) {
+                return SetError(error, "Lua function not found: " + std::string(functionName));
+            }
+            const sol::protected_function function = object.as<sol::protected_function>();
+            return ProtectedCall(function, error, functionName);
+        } catch (const std::exception& exception) {
+            return SetError(error, std::string(functionName) + ": " + exception.what());
         }
-
-        sol::protected_function function =
-            object.as<sol::protected_function>();
-
-        sol::protected_function_result result = function();
-
-        return CheckResult(result, error);
     }
 
     bool LuaRuntime::CallUpdate(
@@ -420,19 +625,17 @@ namespace engine {
             return false;
         }
 
-        sol::object object = impl_->state->get<sol::object>("Update");
-
-        if (object.get_type() != sol::type::function) {
-            error.clear();
-            return true;
+        try {
+            sol::object object = impl_->state->get<sol::object>("Update");
+            if (object.get_type() != sol::type::function) {
+                error.clear();
+                return true;
+            }
+            const sol::protected_function update = object.as<sol::protected_function>();
+            return ProtectedCall(update, error, "Update", deltaSeconds);
+        } catch (const std::exception& exception) {
+            return SetError(error, std::string("Update: ") + exception.what());
         }
-
-        sol::protected_function update =
-            object.as<sol::protected_function>();
-
-        sol::protected_function_result result = update(deltaSeconds);
-
-        return CheckResult(result, error);
     }
 
 }

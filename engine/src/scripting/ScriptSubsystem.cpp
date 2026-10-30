@@ -44,7 +44,7 @@ bool ScriptSubsystem::BeginPlay(const std::filesystem::path& root, std::string& 
     }
     // Also discard any state created through the compatibility runtime accessor.
     runtime_.Shutdown();
-    if (!runtime_.Initialize(error)) return false;
+    if (!runtime_.Initialize(absolute, error)) return false;
     root_ = std::move(absolute);
     playing_ = true;
     return true;

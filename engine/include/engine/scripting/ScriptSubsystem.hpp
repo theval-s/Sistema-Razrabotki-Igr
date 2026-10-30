@@ -15,7 +15,8 @@ public:
     void Shutdown() override;
     void Update(const FrameContext& frame) override;
 
-    /// root is the existing project content directory; asset resolution is handled by the caller.
+    /// root is the project content directory (AssetPathResolver::GetGameRoot()).
+    /// Pins require to that root; instance asset resolution is handled by the caller.
     [[nodiscard]] bool BeginPlay(const std::filesystem::path& root, std::string& error);
     void EndPlay() noexcept;
     [[nodiscard]] bool IsPlaying() const noexcept { return playing_; }

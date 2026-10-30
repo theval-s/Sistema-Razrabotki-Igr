@@ -3,7 +3,11 @@
 `ScriptSubsystem::Initialize()` prepares the subsystem without creating a Lua state.
 After initialization, `BeginPlay(contentRoot, error)` starts a fresh Lua runtime;
 the root must be an existing directory. Calling BeginPlay during Play fails and
-preserves the active session. The root is retained for future asset integration.
+preserves the active session. It passes the canonical absolute content root to
+LuaRuntime::Initialize(root, error), which pins module loading to it. Hosts obtain
+the configured content root from AssetPathResolver::GetGameRoot(), after setting
+it with SetGameRoot(project.ContentDir()). The compatibility Initialize(error)
+overload still works but leaves filesystem require unconfigured.
 
 `EndPlay()` destroys all instances before releasing the state. It is safe to call
 repeatedly; subsystem Shutdown also calls it. A subsequent BeginPlay creates a new
@@ -19,8 +23,10 @@ is a diagnostic hint, never a fallback source. The runtime does not resolve asse
 and an entity ID for diagnostics. It executes the file in a fresh environment and
 retains its returned table. The chunk runs separately for every instance, so table
 literals, including nested defaults, are created anew rather than shallow-copied.
-An instance ID is opaque, transient, and never reused
-across runtimes or Play sessions. Failed creation leaves the output ID unchanged.
+An instance ID is opaque and transient. It combines a local slot and a unique
+session token: slots may be reused after Stop, but old handles cannot address the
+new session or a different runtime. Failed creation releases its temporary record
+and leaves the output ID unchanged; no failed creation is scheduled for gameplay.
 
 Scripts return one table with optional callbacks:
 
@@ -51,15 +57,68 @@ successful no-op. A failed start faults the instance and cannot be retried.
 unpaused, positive simulation time step. It never starts or ends a session and
 does not call the legacy global Update function.
 
-A callback failure faults only that instance. Automatic updates skip faulted
-instances and continue updating others. Errors include the source, asset UUID,
-and entity ID. `DestroyInstance` calls OnDestroy for started instances, even when
-faulted, and releases the record even if OnDestroy fails. Unstarted instances are
-released without an OnDestroy callback. Invalid/stale IDs fail. EndPlay performs the
-same cleanup for all remaining instances and logs callback failures.
+A creation or callback failure faults only that instance. Automatic updates skip
+faulted instances and continue updating others. All subsequent gameplay calls on a
+faulted record return its saved error without running Lua or logging it again.
+Authored enabled flags and source files are unaffected. A new Play session has no
+fault state from the previous one.
+
+Instance callbacks and compatibility callbacks use the same protected-call helper.
+Load errors and call errors preserve the full Lua message and traceback. File chunks
+are named with `@` plus the UTF-8 native path, preserving Cyrillic Windows filenames.
+Instance errors add the callback, source, script UUID, and entity UUID. The runtime's
+SetError is the sole place that logs runtime failures; callers should not log the
+returned message again. Clickable source locations are deferred to stage 07.
+
+`DestroyInstance` marks the record destroying before calling Lua. OnDestroy runs
+only for successfully started, non-faulted instances; faulted and unstarted records
+skip it. Cleanup always releases callbacks, table, and environment even when
+OnDestroy fails. Repeated destruction of a known ID in the current session succeeds
+without invoking Lua again; invalid IDs and stale session tokens fail. EndPlay
+performs the same cleanup for every record, clears bookkeeping, and only then
+destroys the Lua state. Repeated Stop is safe.
 
 Instance environments isolate script globals and tables, but inherit the runtime's
 global bindings; this is not a separate security sandbox. Instance data and Lua
 references stay in `LuaRuntime::Impl` and are never serialized into a scene.
 `ExecuteString`, `ExecuteFile`, `CallFunction`, and `CallUpdate` remain available
 for compatibility; gameplay callbacks use the instance API.
+
+## Shared modules
+
+Use `require('shared.settings')` for shared data or helpers, not to instantiate the
+main behavior file. It checks `<content>/shared/settings.lua` first, then
+`<content>/shared/settings/init.lua`. Each name segment is an ASCII identifier:
+letters or underscore first, followed by letters, digits, or underscores. Empty
+segments, separators, traversal, drive/UNC paths, and absolute names are rejected.
+
+The C++ loader canonicalizes candidates and compares root path components before
+reading. Symlinks and Windows junctions may point inside the canonical content
+root, but cannot escape it. Resolution never uses the working directory. The
+package library is not opened, so no native searchers, loadlib, or mutable search
+paths are available. dofile/loadfile remain disabled. This restricts module
+loading; it is not a promise of a complete Lua security sandbox.
+
+Modules execute in their own environments with access to the shared engine API.
+Their results and environments are cached separately from gameplay instances.
+Repeated require of the same name returns the same result during one session,
+including false. A module that returns nil or no value is cached as true. A
+module should normally return a table. Cycles report the loading chain; failed
+loads leave no loading marker or cached result for that name and can be retried.
+File and Lua errors become ordinary Lua errors that can be caught with pcall;
+uncaught errors use the runtime's existing protected-call diagnostics.
+
+Destroying an instance does not unload its shared modules. Stop destroys instances
+first (so healthy OnDestroy callbacks can still require modules), then releases
+the module cache before destroying the Lua state. A new Play loads fresh modules.
+Behavior chunks still execute independently per instance, including nested defaults.
+
+New scripts created by the editor return a behavior table with initial fields and
+OnStart/OnUpdate/OnDestroy, plus a commented shared-module require example.
+
+Stage 06 will use Scene::AddLifecycleObserver for ComponentRemoving and
+EntityDestroying, while the component/entity data is still accessible. Store the
+subscription token and remove it with RemoveLifecycleObserver before the captured
+subsystem state dies. No scripting observer is registered yet. Lua-driven scene
+mutations will need a safe-operation queue: Scene's current queue protects C++
+Controller callbacks only, not Lua callbacks.

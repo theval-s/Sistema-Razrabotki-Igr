@@ -4,6 +4,7 @@
 #include <QMessageBox>
 
 #include <exception>
+#include <string_view>
 #include <system_error>
 
 #include <spdlog/spdlog.h>
@@ -71,7 +72,28 @@ namespace editor {
         const engine::AssetMetadata metadata{
             engine::NewUuid(), engine::CatalogAssetKind::Script };
 
-        if (!engine::CreateNewFile(target, "-- Lua script\n", error)) {
+        constexpr std::string_view ScriptTemplate = R"(-- This behavior table is created separately for each object.
+-- require is for modules shared throughout the current Play session.
+-- local settings = require("shared.settings")
+
+return {
+    elapsed = 0.0,
+
+    OnStart = function(self)
+        -- Initialize this object's behavior.
+    end,
+
+    OnUpdate = function(self, deltaSeconds)
+        self.elapsed = self.elapsed + deltaSeconds
+    end,
+
+    OnDestroy = function(self)
+        -- Release this object's gameplay resources.
+    end
+}
+)";
+
+        if (!engine::CreateNewFile(target, ScriptTemplate, error)) {
             return false;
         }
 

@@ -2,16 +2,53 @@
 #include <engine/scripting/ScriptSubsystem.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/FrameContext.hpp>
+#include <engine/core/PathUtils.hpp>
+#include <engine/assets/AssetPathResolver.hpp>
+
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/callback_sink.h>
 
 #include <gtest/gtest.h>
 
 #include <string>
+#include <algorithm>
+#include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <winioctl.h>
+#include <cstring>
+#endif
 
 namespace {
+struct LogCapture {
+    std::vector<std::string> errors;
+    std::vector<std::string> messages;
+    std::shared_ptr<spdlog::logger> logger = spdlog::default_logger();
+    std::shared_ptr<spdlog::sinks::callback_sink_mt> sink =
+        std::make_shared<spdlog::sinks::callback_sink_mt>([this](const spdlog::details::log_msg& message) {
+            messages.emplace_back(message.payload.data(), message.payload.size());
+            if (message.level == spdlog::level::err) errors.push_back(messages.back());
+        });
+    LogCapture() { logger->sinks().push_back(sink); }
+    ~LogCapture() { std::erase(logger->sinks(), sink); }
+};
+
 struct ScriptFixture {
     std::filesystem::path root = std::filesystem::temp_directory_path() / ("sri-scripts-" + engine::NewUuid());
     ScriptFixture() { std::filesystem::create_directories(root); }
     ~ScriptFixture() { std::error_code ignored; std::filesystem::remove_all(root, ignored); }
+
+    std::filesystem::path File(const std::filesystem::path& relative, std::string_view source) const {
+        const auto file = root / relative;
+        std::filesystem::create_directories(file.parent_path());
+        std::string error;
+        EXPECT_TRUE(engine::CreateNewFile(file, source, error)) << error;
+        return file;
+    }
 
     engine::ScriptInstanceDesc Write(std::string_view source, const char* name = "behavior.lua") const {
         engine::ScriptInstanceDesc desc{root / name, engine::NewUuid(), engine::NewUuid()};
@@ -20,6 +57,52 @@ struct ScriptFixture {
         return desc;
     }
 };
+
+struct CurrentDirectoryScope {
+    std::filesystem::path previous = std::filesystem::current_path();
+    explicit CurrentDirectoryScope(const std::filesystem::path& directory) { std::filesystem::current_path(directory); }
+    ~CurrentDirectoryScope() { std::error_code ignored; std::filesystem::current_path(previous, ignored); }
+};
+
+struct GameRootScope {
+    std::filesystem::path previous = engine::AssetPathResolver::GetGameRoot();
+    explicit GameRootScope(const std::filesystem::path& root) { engine::AssetPathResolver::SetGameRoot(root); }
+    ~GameRootScope() { engine::AssetPathResolver::SetGameRoot(previous); }
+};
+
+#ifdef _WIN32
+// Junction creation does not require the Windows symbolic-link privilege.
+std::error_code CreateTestJunction(const std::filesystem::path& link, const std::filesystem::path& target) {
+    std::filesystem::create_directory(link);
+    const HANDLE handle = CreateFileW(link.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+                                     FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return {static_cast<int>(GetLastError()), std::system_category()};
+    const std::wstring printName = std::filesystem::canonical(target).native();
+    const std::wstring substitute = L"\\??\\" + printName;
+    struct Header {
+        DWORD tag;
+        WORD dataLength, reserved;
+        WORD substituteOffset, substituteLength, printOffset, printLength;
+    };
+    static_assert(sizeof(Header) == 16);
+    const auto substituteBytes = substitute.size() * sizeof(wchar_t);
+    const auto printBytes = printName.size() * sizeof(wchar_t);
+    const auto total = sizeof(Header) + substituteBytes + printBytes + 2 * sizeof(wchar_t);
+    std::vector<std::byte> buffer(total);
+    auto* header = reinterpret_cast<Header*>(buffer.data());
+    *header = {IO_REPARSE_TAG_MOUNT_POINT, static_cast<WORD>(total - 8), 0,
+               0, static_cast<WORD>(substituteBytes),
+               static_cast<WORD>(substituteBytes + sizeof(wchar_t)), static_cast<WORD>(printBytes)};
+    std::memcpy(buffer.data() + sizeof(Header), substitute.c_str(), substituteBytes + sizeof(wchar_t));
+    std::memcpy(buffer.data() + sizeof(Header) + header->printOffset, printName.c_str(), printBytes + sizeof(wchar_t));
+    DWORD returned = 0;
+    const bool success = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, buffer.data(),
+                                        static_cast<DWORD>(buffer.size()), nullptr, 0, &returned, nullptr) != 0;
+    const DWORD failure = success ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(handle);
+    return {static_cast<int>(failure), std::system_category()};
+}
+#endif
 }
 
 TEST(LuaRuntime, InitializesAndShutsDownWithoutRendering) {
@@ -155,7 +238,7 @@ TEST(LuaInstances, SameFileCreatesIndependentTablesAndEnvironments) {
     EXPECT_TRUE(runtime.UpdateInstance(second, 0.5, error)) << error;
     EXPECT_TRUE(runtime.DestroyInstance(first, error)) << error;
     EXPECT_TRUE(runtime.DestroyInstance(second, error)) << error;
-    EXPECT_FALSE(runtime.DestroyInstance(first, error));
+    EXPECT_TRUE(runtime.DestroyInstance(first, error));
     EXPECT_TRUE(runtime.ExecuteString("assert(stats.starts == 2 and stats.destroys == 2)", "check", error)) << error;
 }
 
@@ -208,11 +291,12 @@ TEST(LuaInstances, FaultedInstancesStopUpdatingButCanBeDestroyed) {
     EXPECT_FALSE(runtime.StartInstance(id, error));
     EXPECT_FALSE(runtime.UpdateInstance(id, 0.1, error));
     EXPECT_TRUE(runtime.DestroyInstance(id, error)) << error;
-    EXPECT_TRUE(runtime.ExecuteString("assert(stats.destroyed)", "check", error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString("assert(stats.destroyed == nil)", "check", error)) << error;
 }
 
 TEST(LuaInstances, DestroyFailureStillReleasesInstanceAndShutdownIsSafe) {
     ScriptFixture fixture;
+    LogCapture logs;
     const auto desc = fixture.Write("return { OnDestroy = function(self) error('destroy failed') end }");
     engine::LuaRuntime runtime;
     std::string error;
@@ -222,6 +306,8 @@ TEST(LuaInstances, DestroyFailureStillReleasesInstanceAndShutdownIsSafe) {
     ASSERT_TRUE(runtime.StartInstance(id, error)) << error;
     EXPECT_FALSE(runtime.DestroyInstance(id, error));
     EXPECT_NE(error.find("destroy failed"), std::string::npos);
+    EXPECT_TRUE(runtime.DestroyInstance(id, error));
+    EXPECT_EQ(logs.errors.size(), 1u);
     EXPECT_FALSE(runtime.StartInstance(id, error));
     ASSERT_TRUE(runtime.CreateInstance(desc, id, error)) << error;
     ASSERT_TRUE(runtime.StartInstance(id, error)) << error;
@@ -230,6 +316,7 @@ TEST(LuaInstances, DestroyFailureStillReleasesInstanceAndShutdownIsSafe) {
     EXPECT_FALSE(runtime.IsInitialized());
     ASSERT_TRUE(runtime.Initialize(error)) << error;
     EXPECT_FALSE(runtime.StartInstance(id, error));
+    EXPECT_EQ(logs.errors.size(), 2u);
 }
 
 TEST(ScriptSubsystem, UpdatesInstancesAndSkipsFaultedOnesWithoutCallingGlobalUpdate) {
@@ -272,6 +359,7 @@ TEST(ScriptSubsystem, UpdatesInstancesAndSkipsFaultedOnesWithoutCallingGlobalUpd
 
 TEST(LuaInstances, FailedStartFaultsInstanceAndUnstartedDestructionDoesNotCallCallback) {
     ScriptFixture fixture;
+    LogCapture logs;
     const auto desc = fixture.Write(R"(
         return {
             OnStart = function(self)
@@ -294,7 +382,8 @@ TEST(LuaInstances, FailedStartFaultsInstanceAndUnstartedDestructionDoesNotCallCa
     EXPECT_FALSE(runtime.StartInstance(failed, error));
     EXPECT_FALSE(runtime.UpdateInstance(failed, 0.1, error));
     EXPECT_TRUE(runtime.DestroyInstance(failed, error)) << error;
-    EXPECT_TRUE(runtime.ExecuteString("assert(stats.starts == 1 and stats.destroys == 1)", "check", error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString("assert(stats.starts == 1 and stats.destroys == 0)", "check", error)) << error;
+    EXPECT_EQ(logs.errors.size(), 1u);
 }
 
 TEST(LuaInstances, ReexecutesChunkAndKeepsNestedDefaultsIndependentForEachObject) {
@@ -424,3 +513,339 @@ TEST(LuaInstances, CapturesProtectedCallbacksAtCreation) {
     EXPECT_TRUE(runtime.ExecuteString("assert(stats.starts == 1 and stats.updates == 1 and stats.destroys == 1)",
                                      "check", error)) << error;
 }
+
+TEST(LuaErrors, UnicodeSyntaxErrorPreservesFileLineAndIdentityAndLogsOnce) {
+    ScriptFixture fixture;
+    LogCapture logs;
+    engine::ScriptInstanceDesc desc{
+        fixture.root / u8"\u0441\u0438\u043d\u0442\u0430\u043a\u0441\u0438\u0441.lua",
+        engine::NewUuid(), engine::NewUuid()};
+    std::string error;
+    ASSERT_TRUE(engine::CreateNewFile(desc.source, "-- header\nlocal = 1\n", error)) << error;
+    engine::LuaRuntime runtime;
+    ASSERT_TRUE(runtime.Initialize(error)) << error;
+    engine::InstanceId id;
+    EXPECT_FALSE(runtime.CreateInstance(desc, id, error));
+    EXPECT_FALSE(id.IsValid());
+    EXPECT_NE(error.find(engine::ToUtf8(desc.source)), std::string::npos);
+    EXPECT_NE(error.find(engine::ToUtf8(desc.source.filename()) + ":2:"), std::string::npos);
+    EXPECT_NE(error.find(desc.assetId.ToString()), std::string::npos);
+    EXPECT_NE(error.find(desc.entityId), std::string::npos);
+    EXPECT_NE(error.find("CreateInstance"), std::string::npos);
+    ASSERT_EQ(logs.errors.size(), 1u);
+    EXPECT_EQ(logs.errors[0], "[Lua] " + error);
+    EXPECT_TRUE(runtime.ExecuteString("assert(1 + 1 == 2)", "still-running", error)) << error;
+}
+
+TEST(LuaErrors, UnicodeUpdateFailureIsLoggedOnceAndOnlyDisablesItsInstance) {
+    ScriptFixture fixture;
+    LogCapture logs;
+    engine::ScriptInstanceDesc desc{
+        fixture.root / u8"\u043e\u0431\u044a\u0435\u043a\u0442.lua",
+        engine::NewUuid(), engine::NewUuid()};
+    std::string error;
+    ASSERT_TRUE(engine::CreateNewFile(desc.source,
+        "return {\nOnUpdate = function(self, dt)\nerror('update failure marker')\nend,\n"
+        "OnDestroy = function(self) stats.badDestroyed = true end\n}\n", error)) << error;
+    const auto healthy = fixture.Write("return {OnUpdate = function(self, dt) stats.good = stats.good + 1 end}");
+    engine::LuaRuntime runtime;
+    ASSERT_TRUE(runtime.Initialize(error)) << error;
+    ASSERT_TRUE(runtime.ExecuteString("stats = {good = 0}", "setup", error)) << error;
+    engine::InstanceId bad, good;
+    ASSERT_TRUE(runtime.CreateInstance(desc, bad, error)) << error;
+    ASSERT_TRUE(runtime.CreateInstance(healthy, good, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(bad, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(good, error)) << error;
+    EXPECT_FALSE(runtime.UpdateInstance(bad, 0.1, error));
+    const std::string original = error;
+    EXPECT_NE(error.find("OnUpdate"), std::string::npos);
+    EXPECT_NE(error.find(engine::ToUtf8(desc.source)), std::string::npos);
+    EXPECT_NE(error.find(engine::ToUtf8(desc.source.filename()) + ":3:"), std::string::npos);
+    EXPECT_NE(error.find(desc.assetId.ToString()), std::string::npos);
+    EXPECT_NE(error.find(desc.entityId), std::string::npos);
+    EXPECT_NE(error.find("stack traceback:"), std::string::npos);
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        EXPECT_FALSE(runtime.StartInstance(bad, error));
+        EXPECT_EQ(error, original);
+        EXPECT_FALSE(runtime.UpdateInstance(bad, 0.1, error));
+        EXPECT_EQ(error, original);
+        EXPECT_TRUE(runtime.UpdateInstance(good, 0.1, error)) << error;
+    }
+    EXPECT_TRUE(runtime.DestroyInstance(bad, error)) << error;
+    EXPECT_TRUE(runtime.DestroyInstance(bad, error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString("assert(stats.good == 3 and stats.badDestroyed == nil)", "check", error)) << error;
+    runtime.Shutdown();
+    ASSERT_EQ(logs.errors.size(), 1u);
+    EXPECT_EQ(logs.errors[0], "[Lua] " + original);
+}
+
+TEST(LuaErrors, CompatibilityFileAndCallbacksUseProtectedCallsAndUtf8ChunkNames) {
+    ScriptFixture fixture;
+    LogCapture logs;
+    const auto file = fixture.root / u8"\u0444\u0430\u0439\u043b.lua";
+    std::string error;
+    ASSERT_TRUE(engine::CreateNewFile(file,
+        "function Legacy() error('legacy failure') end\nfunction Update(dt) error('update failure') end\n", error)) << error;
+    engine::LuaRuntime runtime;
+    ASSERT_TRUE(runtime.Initialize(error)) << error;
+    ASSERT_TRUE(runtime.ExecuteFile(file, error)) << error;
+    EXPECT_FALSE(runtime.CallFunction("Legacy", error));
+    EXPECT_NE(error.find(engine::ToUtf8(file.filename()) + ":1:"), std::string::npos);
+    EXPECT_FALSE(runtime.CallUpdate(0.1, error));
+    EXPECT_NE(error.find(engine::ToUtf8(file.filename()) + ":2:"), std::string::npos);
+    EXPECT_EQ(logs.errors.size(), 2u);
+    const auto syntaxFile = fixture.root / u8"\u043e\u0448\u0438\u0431\u043a\u0430.lua";
+    ASSERT_TRUE(engine::CreateNewFile(syntaxFile, "-- header\nlocal = 1\n", error)) << error;
+    EXPECT_FALSE(runtime.ExecuteFile(syntaxFile, error));
+    EXPECT_NE(error.find(engine::ToUtf8(syntaxFile)), std::string::npos);
+    EXPECT_NE(error.find(engine::ToUtf8(syntaxFile.filename()) + ":2:"), std::string::npos);
+    EXPECT_EQ(logs.errors.size(), 3u);
+}
+
+TEST(LuaInstances, DestroyReleasesTableEnvironmentAndCallbackReferencesBeforeState) {
+    ScriptFixture fixture;
+    const auto desc = fixture.Write(R"(
+        local behavior = {}
+        behavior.OnStart = function(self)
+            selfReference = self -- Environment/table cycle should be collectable after destroy.
+            refs[1], refs[2] = self, _ENV
+        end
+        behavior.OnDestroy = function(self) stats.destroys = stats.destroys + 1 end
+        return behavior
+    )");
+    engine::LuaRuntime runtime;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(error)) << error;
+    ASSERT_TRUE(runtime.ExecuteString("refs = setmetatable({}, {__mode = 'v'}); stats = {destroys = 0}",
+                                     "setup", error)) << error;
+    engine::InstanceId id;
+    ASSERT_TRUE(runtime.CreateInstance(desc, id, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(id, error)) << error;
+    ASSERT_TRUE(runtime.DestroyInstance(id, error)) << error;
+    ASSERT_TRUE(runtime.DestroyInstance(id, error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString(R"(
+        collectgarbage('collect')
+        assert(refs[1] == nil and refs[2] == nil)
+        assert(stats.destroys == 1)
+    )", "released", error)) << error;
+}
+
+TEST(ScriptSubsystem, EndPlayDestroysHealthyInstancesOnceAndRejectsReusedSlotsFromOldSessions) {
+    ScriptFixture fixture;
+    LogCapture logs;
+    const auto desc = fixture.Write("return { OnDestroy = function(self) Log.info('session cleanup marker') end }");
+    engine::ScriptSubsystem subsystem;
+    std::string error;
+    ASSERT_TRUE(subsystem.Initialize());
+    ASSERT_TRUE(subsystem.BeginPlay(fixture.root, error)) << error;
+    engine::InstanceId old;
+    ASSERT_TRUE(subsystem.GetRuntime().CreateInstance(desc, old, error)) << error;
+    ASSERT_TRUE(subsystem.GetRuntime().StartInstance(old, error)) << error;
+    subsystem.EndPlay();
+    subsystem.EndPlay();
+    EXPECT_FALSE(subsystem.GetRuntime().DestroyInstance(old, error));
+    ASSERT_TRUE(subsystem.BeginPlay(fixture.root, error)) << error;
+    engine::InstanceId fresh;
+    // The first local slot is reused, but the session token must differ.
+    ASSERT_TRUE(subsystem.GetRuntime().CreateInstance(desc, fresh, error)) << error;
+    EXPECT_NE(fresh, old);
+    EXPECT_FALSE(subsystem.GetRuntime().StartInstance(old, error));
+    EXPECT_FALSE(subsystem.GetRuntime().UpdateInstance(old, 0.1, error));
+    EXPECT_FALSE(subsystem.GetRuntime().DestroyInstance(old, error));
+    ASSERT_TRUE(subsystem.GetRuntime().StartInstance(fresh, error)) << error;
+    subsystem.Shutdown();
+    subsystem.Shutdown();
+    EXPECT_EQ(std::count(logs.messages.begin(), logs.messages.end(), "[Lua] session cleanup marker"), 2);
+    EXPECT_TRUE(logs.errors.empty());
+}
+
+TEST(LuaModules, ResolvesProjectRootWithUnicodePathsAndDifferentWorkingDirectory) {
+    ScriptFixture fixture;
+    const auto project = fixture.root / u8"\u043f\u0440\u043e\u0435\u043a\u0442";
+    fixture.File(project / "shared/settings.lua", "return {value = 42}");
+    fixture.File(project / "shared/settings/init.lua", "return {value = -1}");
+    fixture.File(project / "shared/folder/init.lua", "return {value = 7}");
+    const auto elsewhere = fixture.root / "elsewhere";
+    fixture.File(elsewhere / "shared/settings.lua", "return {value = -2}");
+    GameRootScope gameRoot(project);
+    CurrentDirectoryScope workingDirectory(elsewhere);
+    engine::ScriptSubsystem subsystem;
+    std::string error;
+    ASSERT_TRUE(subsystem.Initialize());
+    ASSERT_TRUE(subsystem.BeginPlay(engine::AssetPathResolver::GetGameRoot(), error)) << error;
+    EXPECT_TRUE(subsystem.GetRuntime().ExecuteString(R"(
+        assert(require('shared.settings').value == 42)
+        assert(require('shared.folder').value == 7)
+        assert(package == nil and dofile == nil and loadfile == nil)
+    )", "project-root", error)) << error;
+}
+
+TEST(LuaModules, InstancesShareModulesButNotSelfAndStopClearsModuleCache) {
+    ScriptFixture fixture;
+    fixture.File("shared/settings.lua", "stats.loads = stats.loads + 1; return {value = 0}");
+    const auto desc = fixture.Write(R"(
+        local settings = require('shared.settings')
+        return {
+            nested = {value = 0},
+            OnStart = function(self)
+                self.nested.value = self.nested.value + 1
+                settings.value = settings.value + 1
+                table.insert(stats.selves, self)
+                table.insert(stats.modules, settings)
+            end,
+            OnDestroy = function(self)
+                assert(require('shared.settings') == settings)
+            end
+        }
+    )");
+    engine::ScriptSubsystem subsystem;
+    std::string error;
+    ASSERT_TRUE(subsystem.Initialize());
+    ASSERT_TRUE(subsystem.BeginPlay(fixture.root, error)) << error;
+    auto& runtime = subsystem.GetRuntime();
+    ASSERT_TRUE(runtime.ExecuteString("stats = {loads = 0, selves = {}, modules = {}}", "setup", error)) << error;
+    engine::InstanceId first, second;
+    ASSERT_TRUE(runtime.CreateInstance(desc, first, error)) << error;
+    ASSERT_TRUE(runtime.CreateInstance(desc, second, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(first, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(second, error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString(R"(
+        assert(stats.loads == 1)
+        assert(stats.modules[1] == stats.modules[2] and stats.modules[1].value == 2)
+        assert(stats.selves[1] ~= stats.selves[2])
+        assert(stats.selves[1].nested ~= stats.selves[2].nested)
+        assert(stats.selves[1].nested.value == 1 and stats.selves[2].nested.value == 1)
+    )", "shared-module", error)) << error;
+    ASSERT_TRUE(runtime.DestroyInstance(first, error)) << error;
+    ASSERT_TRUE(runtime.DestroyInstance(second, error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString("assert(require('shared.settings') == stats.modules[1])", "cache-lifetime", error)) << error;
+    subsystem.EndPlay();
+    ASSERT_TRUE(subsystem.BeginPlay(fixture.root, error)) << error;
+    ASSERT_TRUE(runtime.ExecuteString("stats = {loads = 0}", "new-session", error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString("assert(require('shared.settings').value == 0 and stats.loads == 1)",
+                                     "fresh-module", error)) << error;
+}
+
+TEST(LuaModules, RejectsInvalidNamesAndDoesNotExposeNativeOrUnrestrictedFileLoading) {
+    ScriptFixture fixture;
+    fixture.File("native_only.dll", "not a Lua source file");
+    engine::LuaRuntime runtime;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(fixture.root, error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString(R"(
+        for _, name in ipairs({
+            '', '../outside', '/absolute', 'C:relative', 'C:/absolute',
+            'a/b', 'a' .. string.char(92) .. 'b', string.rep(string.char(92), 2) .. 'server',
+            '.a', 'a.', 'a..b', '..', 'a-b', 'a' .. string.char(0) .. 'b'
+        }) do
+            local ok, message = pcall(require, name)
+            assert(not ok and string.find(message, 'invalid module name', 1, true))
+        end
+        assert(not pcall(require, {}))
+        assert(not pcall(require, 123))
+        assert(package == nil and loadfile == nil and dofile == nil)
+        assert(not pcall(require, 'native_only'))
+        assert(not pcall(require, 'os'))
+        -- Defining a fake package table cannot reconfigure the C++ loader.
+        package = {path = '../?.lua', cpath = '../?.dll'}
+        assert(not pcall(require, 'missing'))
+    )", "restricted-loader", error)) << error;
+}
+
+TEST(LuaModules, DetectsCyclesAndClearsLoadingMarkersAfterFailures) {
+    ScriptFixture fixture;
+    fixture.File("a.lua", "if not allowCycleRecovery then require('b') end; return {recovered = true}");
+    fixture.File("b.lua", "return require('a')");
+    engine::LuaRuntime runtime;
+    LogCapture logs;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(fixture.root, error)) << error;
+    EXPECT_FALSE(runtime.ExecuteString("require('a')", "cycle", error));
+    EXPECT_NE(error.find("cyclic require: a -> b -> a"), std::string::npos);
+    EXPECT_EQ(logs.errors.size(), 1u);
+    ASSERT_TRUE(runtime.ExecuteString("allowCycleRecovery = true", "repair", error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString("assert(require('a').recovered)", "retry", error)) << error;
+}
+
+TEST(LuaModules, ModuleLoadErrorsAreOrdinaryLuaErrorsAndPreserveSourceLocations) {
+    ScriptFixture fixture;
+    fixture.File("broken.lua", "-- header\nlocal = 1\n");
+    fixture.File("failing.lua", "-- header\nerror('module execution failed')\n");
+    engine::LuaRuntime runtime;
+    LogCapture logs;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(fixture.root, error)) << error;
+    EXPECT_FALSE(runtime.ExecuteString("require('broken')", "syntax-module", error));
+    EXPECT_NE(error.find("broken.lua:2:"), std::string::npos);
+    EXPECT_FALSE(runtime.ExecuteString("require('failing')", "failed-module", error));
+    EXPECT_NE(error.find("failing.lua:2:"), std::string::npos);
+    EXPECT_NE(error.find("module execution failed"), std::string::npos);
+    EXPECT_TRUE(runtime.ExecuteString("assert(not pcall(require, 'missing')); assert(1 + 1 == 2)",
+                                     "recoverable", error)) << error;
+    EXPECT_EQ(logs.errors.size(), 2u);
+}
+
+TEST(LuaModules, CachesFalseAndNilResultsAndKeepsProjectsSeparate) {
+    ScriptFixture firstProject;
+    ScriptFixture secondProject;
+    firstProject.File("settings.lua", "return {project = 1}");
+    secondProject.File("settings.lua", "return {project = 2}");
+    firstProject.File("empty.lua", "stats.empty = stats.empty + 1");
+    firstProject.File("false_module.lua", "stats.falsy = stats.falsy + 1; return false");
+    engine::LuaRuntime first, second;
+    std::string error;
+    ASSERT_TRUE(first.Initialize(firstProject.root, error)) << error;
+    ASSERT_TRUE(second.Initialize(secondProject.root, error)) << error;
+    EXPECT_TRUE(first.ExecuteString(R"(
+        stats = {empty = 0, falsy = 0}
+        assert(require('settings').project == 1)
+        assert(require('empty') == true and require('empty') == true)
+        assert(require('false_module') == false and require('false_module') == false)
+        assert(stats.empty == 1 and stats.falsy == 1)
+    )", "first-project", error)) << error;
+    EXPECT_TRUE(second.ExecuteString("assert(require('settings').project == 2)", "second-project", error)) << error;
+    EXPECT_FALSE(first.Initialize(secondProject.root, error));
+    EXPECT_TRUE(first.ExecuteString("assert(require('settings').project == 1)", "pinned-root", error)) << error;
+}
+
+TEST(LuaModules, RejectsCanonicalSymlinkEscapeButAllowsLinksWithinRoot) {
+    ScriptFixture fixture;
+    const auto root = fixture.root / "content";
+    const auto neighbor = fixture.root / "content-neighbor";
+    fixture.File(neighbor / "secret.lua", "return {outside = true}");
+    fixture.File(root / "inside/settings.lua", "return {value = 42}");
+    std::error_code ec;
+    std::filesystem::create_directory_symlink(neighbor, root / "outside", ec);
+    if (ec) GTEST_SKIP() << "Directory symlinks are unavailable: " << ec.message();
+    std::filesystem::create_directory_symlink(root / "inside", root / "alias", ec);
+    ASSERT_FALSE(ec) << ec.message();
+    engine::LuaRuntime runtime;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(root, error)) << error;
+    EXPECT_FALSE(runtime.ExecuteString("require('outside.secret')", "escape", error));
+    EXPECT_NE(error.find("escapes project content root"), std::string::npos);
+    EXPECT_TRUE(runtime.ExecuteString("assert(require('alias.settings').value == 42)", "internal-link", error)) << error;
+}
+
+#ifdef _WIN32
+TEST(LuaModules, RejectsJunctionEscapeButAllowsJunctionsWithinRoot) {
+    ScriptFixture fixture;
+    const auto root = fixture.root / "content";
+    const auto neighbor = fixture.root / "content-neighbor";
+    fixture.File(neighbor / "secret.lua", "return {outside = true}");
+    fixture.File(root / "inside/settings.lua", "return {value = 42}");
+    const auto outsideError = CreateTestJunction(root / "outside", neighbor);
+    if (outsideError.value() == ERROR_ACCESS_DENIED || outsideError.value() == ERROR_PRIVILEGE_NOT_HELD) {
+        GTEST_SKIP() << "Junction creation is restricted: " << outsideError.message();
+    }
+    ASSERT_FALSE(outsideError) << outsideError.message();
+    const auto insideError = CreateTestJunction(root / "alias", root / "inside");
+    ASSERT_FALSE(insideError) << insideError.message();
+    engine::LuaRuntime runtime;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(root, error)) << error;
+    EXPECT_FALSE(runtime.ExecuteString("require('outside.secret')", "junction-escape", error));
+    EXPECT_NE(error.find("escapes project content root"), std::string::npos);
+    EXPECT_TRUE(runtime.ExecuteString("assert(require('alias.settings').value == 42)", "internal-junction", error)) << error;
+}
+#endif

@@ -12,14 +12,15 @@
 
 namespace engine {
 
-    /// Transient handle: never serialized, and never reused across runtimes or Play sessions.
+    /// Transient handle: a local slot plus a unique runtime-session token. Never serialized.
     class InstanceId final {
     public:
-        [[nodiscard]] bool IsValid() const noexcept { return value_ != 0; }
+        [[nodiscard]] bool IsValid() const noexcept { return value_ != 0 && session_ != 0; }
         [[nodiscard]] bool operator==(const InstanceId&) const noexcept = default;
     private:
         friend class LuaRuntime;
         std::uint64_t value_ = 0;
+        std::uint64_t session_ = 0;
     };
 
     struct ScriptInstanceDesc {
@@ -41,6 +42,9 @@ namespace engine {
         LuaRuntime& operator=(LuaRuntime&&) = delete;
 
         bool Initialize(std::string& error);
+        /// Pins require to this absolute project content root for the session.
+        /// The compatibility overload above leaves filesystem require unconfigured.
+        bool Initialize(const std::filesystem::path& root, std::string& error);
 
         void Shutdown() noexcept;
 
@@ -54,8 +58,9 @@ namespace engine {
         /// Starts once; a repeated successful start does not invoke OnStart again.
         bool StartInstance(InstanceId instance, std::string& error);
         bool UpdateInstance(InstanceId instance, double deltaSeconds, std::string& error);
-        /// Calls OnDestroy for started instances (including faulted ones), then releases the record.
-        /// Invalid/stale IDs fail; cleanup still completes when the callback fails.
+        /// Calls OnDestroy only for successfully started, non-faulted instances, then releases references.
+        /// Repeated destruction in the same session succeeds. Invalid/stale session IDs fail.
+        /// Cleanup still completes when OnDestroy fails; faulted instances skip all Lua callbacks.
         bool DestroyInstance(InstanceId instance, std::string& error);
 
         bool ExecuteFile(
