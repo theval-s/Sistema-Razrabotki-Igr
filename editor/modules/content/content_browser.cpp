@@ -55,6 +55,7 @@
 #include "asset_dialogs.hpp"
 #include "asset_filter_model.hpp"
 #include "asset_icons.hpp"
+#include "scene_placement.hpp"
 
 namespace content {
 
@@ -365,6 +366,8 @@ void ContentBrowser::buildActions() {
     //TODO: extract shortcuts to another class for easier remapping??
     // (so user could remap on their own)
     open_ = add(tr("Open"), {}, [this] { activate(items_->currentIndex()); });
+    add_to_scene_ = add(tr("Add to Scene"), {}, [this] { addSelectionToScene(); });
+    add_to_scene_->setToolTip(tr("Places the selected meshes and models in front of the viewport camera"));
     new_folder_ = add(tr("New Folder"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N),
                       [this] { newFolder(root_, folder_); });
     rename_ = add(tr("Rename"), QKeySequence(Qt::Key_F2), [this] { items_->edit(items_->currentIndex()); });
@@ -602,6 +605,9 @@ void ContentBrowser::updateActions() {
     const QMimeData* clipboard = QGuiApplication::clipboard()->mimeData();
 
     open_->setEnabled(selected.size() == 1);
+    // Engine assets too: its primitives are worth placing.
+    add_to_scene_->setEnabled(std::ranges::any_of(
+        selected, [this](const QString& path) { return placeableMesh(catalog(), path) != nullptr; }));
     new_folder_->setEnabled(writable);
     rename_->setEnabled(writable && selected.size() == 1);
     duplicate_->setEnabled(writable && any);
@@ -630,6 +636,9 @@ void ContentBrowser::showItemMenu(const QPoint& pos) {
     QMenu menu(window());
     if (index.isValid()) {
         menu.addAction(open_);
+        if (add_to_scene_->isEnabled()) {
+            menu.addAction(add_to_scene_);
+        }
         if (instance_from_texture_->isEnabled()) {
             menu.addAction(instance_from_texture_);
         }
@@ -779,6 +788,10 @@ void ContentBrowser::showInExplorer(const QString& path) {
     // explorer.exe wants "/select," and the path as separate arguments.
     QProcess::startDetached(QStringLiteral("explorer.exe"),
                             {QStringLiteral("/select,"), QDir::toNativeSeparators(path)});
+}
+
+void ContentBrowser::addSelectionToScene() {
+    addToScene(context_, selectedPaths());
 }
 
 const engine::AssetCatalog& ContentBrowser::catalog() const {

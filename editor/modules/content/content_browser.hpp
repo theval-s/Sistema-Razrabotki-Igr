@@ -97,6 +97,8 @@ private:
     void copyAssetPaths(const QStringList& paths);
     void copyUuids(const QStringList& paths);
     void showInExplorer(const QString& path);
+    /// Puts the selected meshes and model folders into the open scene.
+    void addSelectionToScene();
 
     // Creating and importing assets, in the shown folder unless one is given.
     [[nodiscard]] const engine::AssetCatalog& catalog() const;
@@ -143,6 +145,7 @@ private:
     //Better to keep them saved so we can remap keybinds easier in the future
     // but maybe TODO: extract to another class?
     QAction* open_ = nullptr;
+    QAction* add_to_scene_ = nullptr;
     QAction* new_folder_ = nullptr;
     QAction* rename_ = nullptr;
     QAction* duplicate_ = nullptr;
