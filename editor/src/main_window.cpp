@@ -47,6 +47,7 @@
 #include <editor/scene_document.hpp>
 #include <editor/viewport_widget.hpp>
 #include <editor/selection.hpp>
+#include <editor/script_creation.hpp>
 
 namespace editor {
 
@@ -356,6 +357,13 @@ void MainWindow::buildMenus() {
     file_menu->addAction(tr("Save Scene &As..."), QKeySequence::SaveAs, this,
                          [this, &document] { document.saveInteractive(this, true); });
     file_menu->addSeparator();
+
+    file_menu->addAction(tr("New &Lua Script..."), this, [this] {
+        (void)createLuaScriptInteractive(this, engine_, project_);
+        });
+
+    file_menu->addSeparator();
+
     file_menu->addAction(tr("E&xit"), this, &QWidget::close);
 
     auto* engine_menu = context_->menu(tr("&Engine"));
