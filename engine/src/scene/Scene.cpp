@@ -5,7 +5,6 @@
 #include <utility>
 
 #include <spdlog/spdlog.h>
-#include <engine/assets/AssetCatalog.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 
 namespace engine {
@@ -23,13 +22,23 @@ Scene::~Scene() { Clear(); }
 // --- Entities -------------------------------------------------------------------
 
 entt::entity Scene::CreateEntity(const std::string_view name, const entt::entity parent) {
-    return CreateEntityWithId(NewUuid(), name, parent);
+    return CreateEntityWithUuid(EntityUuid(NewUuid()), name, parent);
 }
 
 entt::entity Scene::CreateEntityWithId(const std::string_view id, const std::string_view name,
                                        const entt::entity parent) {
-    if (!IsUuid(id) || ids_.contains(std::string(id))) {
-        spdlog::error("Scene::CreateEntityWithId: invalid or duplicate UUID '{}'", id);
+    const auto parsed = EntityUuid::Parse(id);
+    if (!parsed) {
+        spdlog::error("Scene::CreateEntityWithId: invalid UUID '{}'", id);
+        return entt::null;
+    }
+    return CreateEntityWithUuid(*parsed, name, parent);
+}
+
+entt::entity Scene::CreateEntityWithUuid(EntityUuid id, const std::string_view name,
+                                         const entt::entity parent) {
+    if (ids_.contains(id)) {
+        spdlog::error("Scene::CreateEntityWithUuid: duplicate UUID '{}'", id.ToString());
         return entt::null;
     }
     if (parent != entt::null && !CheckEntity(parent, "CreateEntity")) {
@@ -38,7 +47,7 @@ entt::entity Scene::CreateEntityWithId(const std::string_view id, const std::str
 
     // we can also just use plain vectors but entt registry looks good
     const entt::entity entity = registry_.create();
-    registry_.emplace<EntityId>(entity, std::string(id));
+    registry_.emplace<EntityId>(entity, id);
     registry_.emplace<Name>(entity, std::string(name));
     registry_.emplace<Tags>(entity);
     registry_.emplace<Transform>(entity);
@@ -71,8 +80,8 @@ void Scene::DestroyEntity(const entt::entity entity) {
 
     Detach(entity);
     const auto& id = registry_.get<EntityId>(entity).value;
-    if (id == activeCameraId_) activeCameraId_.clear();
-    if (id == directionalLightId_) directionalLightId_.clear();
+    if (activeCameraId_ == id) activeCameraId_.reset();
+    if (directionalLightId_ == id) directionalLightId_.reset();
     ids_.erase(registry_.get<EntityId>(entity).value);
     unsupported_.erase(entity);
     registry_.destroy(entity);
@@ -95,8 +104,8 @@ void Scene::Clear() {
     unsupported_.clear();
     controllers_.clear();
     pendingGameStates_.clear();
-    activeCameraId_.clear();
-    directionalLightId_.clear();
+    activeCameraId_.reset();
+    directionalLightId_.reset();
     ++revision_;
     if (--destructionDepth_ == 0) FlushCommands();
 }
@@ -105,13 +114,18 @@ bool Scene::IsValid(const entt::entity entity) const {
     return registry_.valid(entity) && registry_.all_of<Name, Transform, Hierarchy, EntityId>(entity);
 }
 
-std::string_view Scene::GetId(const entt::entity entity) const {
-    return IsValid(entity) ? registry_.get<EntityId>(entity).value : std::string_view{};
+EntityUuid Scene::GetId(const entt::entity entity) const {
+    return IsValid(entity) ? registry_.get<EntityId>(entity).value : EntityUuid{};
+}
+
+entt::entity Scene::FindByUuid(EntityUuid id) const {
+    const auto it = ids_.find(id);
+    return it == ids_.end() ? entt::null : it->second;
 }
 
 entt::entity Scene::FindById(const std::string_view id) const {
-    const auto it = ids_.find(std::string(id));
-    return it == ids_.end() ? entt::null : it->second;
+    const auto parsed = EntityUuid::Parse(id);
+    return parsed ? FindByUuid(*parsed) : entt::null;
 }
 
 void Scene::Visit(const std::function<void(entt::entity)>& callback) const {
@@ -231,7 +245,7 @@ void Scene::AttachController(entt::entity entity, ControllerDefinition definitio
             inControllerCallback_ = false;
         }
     }
-    if (!error.empty()) spdlog::error("Scene controller on {}: {}", GetId(entity), error);
+    if (!error.empty()) spdlog::error("Scene controller on {}: {}", GetId(entity).ToString(), error);
     ++revision_;
     FlushCommands();
 }
@@ -413,23 +427,23 @@ void Scene::NotifyLifecycle(LifecycleEvent event, entt::entity entity, entt::id_
 
 void Scene::SetActiveCamera(entt::entity entity) {
     if (entity != entt::null && !HasComponent<Camera>(entity)) return;
-    activeCameraId_ = entity == entt::null ? "" : std::string(GetId(entity));
+    activeCameraId_ = entity == entt::null ? std::nullopt : std::optional{GetId(entity)};
     ++revision_;
 }
 
 entt::entity Scene::GetActiveCamera() const {
-    const auto entity = FindById(activeCameraId_);
+    const auto entity = activeCameraId_ ? FindByUuid(*activeCameraId_) : entt::null;
     return HasComponent<Camera>(entity) ? entity : FirstWith<Camera>();
 }
 
 void Scene::SetDirectionalLight(entt::entity entity) {
     if (entity != entt::null && !HasComponent<DirectionalLight>(entity)) return;
-    directionalLightId_ = entity == entt::null ? "" : std::string(GetId(entity));
+    directionalLightId_ = entity == entt::null ? std::nullopt : std::optional{GetId(entity)};
     ++revision_;
 }
 
 entt::entity Scene::GetDirectionalLight() const {
-    const auto entity = FindById(directionalLightId_);
+    const auto entity = directionalLightId_ ? FindByUuid(*directionalLightId_) : entt::null;
     return HasComponent<DirectionalLight>(entity) ? entity : FirstWith<DirectionalLight>();
 }
 

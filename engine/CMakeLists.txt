@@ -11,6 +11,7 @@ find_package(directxtk CONFIG REQUIRED)
 set(ENGINE_PUBLIC_HEADERS
     include/engine/core/HandleMap.hpp
     include/engine/core/ResourceID.hpp
+    include/engine/core/Uuid.hpp
     include/engine/engine.hpp
     include/engine/rendering/FPSCamera.hpp
     include/engine/rendering/GraphicalState.hpp
@@ -40,6 +41,7 @@ set(ENGINE_PUBLIC_HEADERS
 set(ENGINE_SOURCES
     src/core/HandleMap.cpp
     src/core/ResourceID.cpp
+    src/core/Uuid.cpp
     src/engine.cpp
     src/rendering/FPSCamera.cpp
     src/rendering/GraphicalState.cpp

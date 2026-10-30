@@ -9,15 +9,15 @@ struct GameControllerState {
     StateValue data;
 };
 struct GameEntityState {
-    std::string id;
+    EntityUuid id;
     std::optional<Transform> transform;
     std::optional<GameControllerState> controller;
 };
 struct GameDocument {
     AssetReference scene;
     SceneDocument spawned; // authored snapshots, roots normalized (parents listed below)
-    std::unordered_map<std::string, std::string> spawnParents;
-    std::vector<std::string> deleted;
+    std::unordered_map<EntityUuid, EntityUuid, EntityUuidHash> spawnParents;
+    std::vector<EntityUuid> deleted;
     std::vector<GameEntityState> entities;
 };
 [[nodiscard]] ENGINE_API bool ParseGameDocument(std::string_view json, GameDocument& result, std::string& error);

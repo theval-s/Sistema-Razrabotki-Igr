@@ -5,6 +5,7 @@
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <nlohmann/json.hpp>
 #include <engine/assets/AssetSystem.hpp>
@@ -42,7 +43,7 @@ std::array<float, N> Numbers(const Json& j) {
 
 Json Encode(const Vector3& value) { return Json::array({value.x, value.y, value.z}); }
 Json Encode(const Quaternion& value) { return Json::array({value.x, value.y, value.z, value.w}); }
-Json Encode(const std::optional<std::string>& value) { return value ? Json(*value) : Json(nullptr); }
+Json Encode(const std::optional<EntityUuid>& value) { return value ? Json(value->ToString()) : Json(nullptr); }
 
 AssetReference Reference(const Json& j) {
     AssetReference result;
@@ -57,18 +58,21 @@ Json Encode(const AssetReference& reference) {
     return Json::parse(json);
 }
 
-std::optional<std::string> OptionalId(const Json& j) {
+std::optional<EntityUuid> OptionalId(const Json& j) {
     if (j.is_null()) return std::nullopt;
     auto id = j.get<std::string>();
-    if (!IsUuid(id)) throw std::invalid_argument("invalid entity UUID: " + id);
-    return id;
+    auto parsed = EntityUuid::Parse(id);
+    if (!parsed) throw std::invalid_argument("invalid entity UUID: " + id);
+    return parsed;
 }
 
 SceneEntityDefinition DecodeEntity(const Json& j) {
     Fields(j, {"id", "name", "tags", "parent", "components"});
     SceneEntityDefinition entity;
-    entity.id = j.at("id").get<std::string>();
-    if (!IsUuid(entity.id)) throw std::invalid_argument("invalid entity UUID: " + entity.id);
+    const auto id = j.at("id").get<std::string>();
+    const auto parsed = EntityUuid::Parse(id);
+    if (!parsed) throw std::invalid_argument("invalid entity UUID: " + id);
+    entity.id = *parsed;
     entity.name = j.at("name").get<std::string>();
     if (j.contains("tags")) {
         if (!j.at("tags").is_array()) throw std::invalid_argument("tags must be an array");
@@ -149,17 +153,17 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
 }
 
 void Validate(const SceneDocument& document) {
-    std::unordered_map<std::string, std::size_t> ids;
+    std::unordered_map<EntityUuid, std::size_t, EntityUuidHash> ids;
     for (std::size_t i = 0; i < document.entities.size(); ++i)
         if (!ids.emplace(document.entities[i].id, i).second)
-            throw std::invalid_argument("duplicate entity UUID: " + document.entities[i].id);
+            throw std::invalid_argument("duplicate entity UUID: " + document.entities[i].id.ToString());
     for (const auto& entity : document.entities) {
-        std::set<std::string> ancestors;
+        std::unordered_set<EntityUuid, EntityUuidHash> ancestors;
         const SceneEntityDefinition* current = &entity;
         while (current->parent) {
-            if (!ancestors.insert(current->id).second) throw std::invalid_argument("hierarchy cycle at " + entity.id);
+            if (!ancestors.insert(current->id).second) throw std::invalid_argument("hierarchy cycle at " + entity.id.ToString());
             const auto it = ids.find(*current->parent);
-            if (it == ids.end()) throw std::invalid_argument("unknown parent UUID: " + *current->parent);
+            if (it == ids.end()) throw std::invalid_argument("unknown parent UUID: " + current->parent->ToString());
             current = &document.entities[it->second];
         }
     }
@@ -216,7 +220,7 @@ Json Encode(const SceneDocument& document) {
         if (entity.persistence)
             components["GamePersistence"] = {{"transform", entity.persistence->transform},
                                               {"controllerState", entity.persistence->controllerState}};
-        root["entities"].push_back({{"id", entity.id}, {"name", entity.name}, {"tags", entity.tags},
+        root["entities"].push_back({{"id", entity.id.ToString()}, {"name", entity.name}, {"tags", entity.tags},
                                      {"parent", Encode(entity.parent)},
                                      {"components", std::move(components)}});
     }
@@ -287,7 +291,7 @@ bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDo
                 auto material = authored(renderer->materialReference, CatalogAssetKind::MaterialInstance);
                 if (!material) material = assets.ReferenceFor(renderer->materialInstance);
                 if (!mesh || !material)
-                    throw std::invalid_argument("renderer has no file-backed mesh or material instance on " + definition.id);
+                    throw std::invalid_argument("renderer has no file-backed mesh or material instance on " + definition.id.ToString());
                 definition.renderer = SceneEntityDefinition::Mesh{*mesh, *material};
             }
             if (const auto* component = scene.TryGetComponent<Camera>(entity)) definition.camera = *component;
@@ -306,11 +310,11 @@ bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDo
 
 void PopulateScene(const SceneDocument& document, AssetSystem& assets, Scene& destination) {
     for (const auto& definition : document.entities)
-        destination.CreateEntityWithId(definition.id, definition.name);
+        destination.CreateEntityWithUuid(definition.id, definition.name);
     for (const auto& definition : document.entities) {
-        const auto entity = destination.FindById(definition.id);
+        const auto entity = destination.FindByUuid(definition.id);
         for (const auto& tag : definition.tags) destination.AddTag(entity, tag);
-        if (definition.parent) destination.SetParent(entity, destination.FindById(*definition.parent));
+        if (definition.parent) destination.SetParent(entity, destination.FindByUuid(*definition.parent));
         destination.GetTransform(entity) = definition.transform;
         if (definition.renderer) destination.AddComponent<MeshRenderer>(entity,
             assets.RequestMesh(definition.renderer->mesh),
@@ -322,7 +326,7 @@ void PopulateScene(const SceneDocument& document, AssetSystem& assets, Scene& de
         if (definition.persistence) destination.AddComponent<GamePersistence>(entity, *definition.persistence);
         if (definition.controller) destination.AttachController(entity, *definition.controller);
     }
-    if (document.activeCamera) destination.SetActiveCamera(destination.FindById(*document.activeCamera));
-    if (document.directionalLight) destination.SetDirectionalLight(destination.FindById(*document.directionalLight));
+    if (document.activeCamera) destination.SetActiveCamera(destination.FindByUuid(*document.activeCamera));
+    if (document.directionalLight) destination.SetDirectionalLight(destination.FindByUuid(*document.directionalLight));
 }
 } // namespace engine

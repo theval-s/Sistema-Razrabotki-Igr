@@ -20,10 +20,10 @@ class AssetSystem;
 // Authored, asset-free scene representation. All references survive a parse
 // without requesting GPU resources; switching scenes can be committed afterwards.
 struct SceneEntityDefinition {
-    std::string id;
+    EntityUuid id;
     std::string name;
     std::vector<std::string> tags;
-    std::optional<std::string> parent;
+    std::optional<EntityUuid> parent;
     Transform transform;
     struct Mesh {
         AssetReference mesh;
@@ -39,8 +39,8 @@ struct SceneEntityDefinition {
 
 struct SceneDocument {
     std::vector<SceneEntityDefinition> entities;
-    std::optional<std::string> activeCamera;
-    std::optional<std::string> directionalLight;
+    std::optional<EntityUuid> activeCamera;
+    std::optional<EntityUuid> directionalLight;
 };
 
 // Structural validation includes UUID syntax, unique entity IDs, hierarchy
