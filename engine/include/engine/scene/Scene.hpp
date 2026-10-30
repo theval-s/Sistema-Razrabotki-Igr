@@ -54,6 +54,8 @@ public:
     /// Used when loading saved entities. A duplicate or malformed UUID is rejected.
     entt::entity CreateEntityWithId(std::string_view id, std::string_view name = "Entity",
                                     entt::entity parent = entt::null);
+    entt::entity CreateEntityWithUuid(EntityUuid id, std::string_view name = "Entity",
+                                      entt::entity parent = entt::null);
     /// Destroys the entity and all of its descendants.
     /// Destruction, Clear, controller attachment/removal and activation requested
     /// from a controller callback run FIFO after the outermost callback/teardown.
@@ -62,7 +64,10 @@ public:
     void Clear();
 
     [[nodiscard]] bool IsValid(entt::entity entity) const;
-    [[nodiscard]] std::string_view GetId(entt::entity entity) const;
+    /// Returns the default (zero) UUID for an invalid entity; check IsValid(entity)
+    /// when distinguishing it from a scene entity whose ID is the zero UUID.
+    [[nodiscard]] EntityUuid GetId(entt::entity entity) const;
+    [[nodiscard]] entt::entity FindByUuid(EntityUuid id) const;
     [[nodiscard]] entt::entity FindById(std::string_view id) const;
     [[nodiscard]] entt::entity FindFirstByName(std::string_view name) const;
     [[nodiscard]] std::vector<entt::entity> FindAllByName(std::string_view name) const;
@@ -211,7 +216,7 @@ private:
     };
 
     entt::registry registry_;
-    std::unordered_map<std::string, entt::entity> ids_;
+    std::unordered_map<EntityUuid, entt::entity, EntityUuidHash> ids_;
     std::unordered_map<entt::entity, std::unordered_set<entt::id_type>> unsupported_;
     std::unordered_map<std::string, ControllerRegistration> controllerTypes_;
     std::unordered_map<entt::entity, ControllerSlot> controllers_;
@@ -225,8 +230,8 @@ private:
     bool controllersActive_ = false;
     bool inControllerCallback_ = false;
     std::size_t destructionDepth_ = 0;
-    std::string activeCameraId_;
-    std::string directionalLightId_;
+    std::optional<EntityUuid> activeCameraId_;
+    std::optional<EntityUuid> directionalLightId_;
     std::vector<entt::entity> roots_;
     std::uint64_t revision_ = 0;
 };

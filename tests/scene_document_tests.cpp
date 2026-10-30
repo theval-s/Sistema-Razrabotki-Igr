@@ -205,9 +205,9 @@ TEST(SceneDocument, RoundTripAndStructuralValidation) {
     engine::SceneDocument parsed;
     ASSERT_TRUE(engine::ParseSceneDocument(json, parsed, error)) << error;
     ASSERT_EQ(parsed.entities.size(), 2u);
-    EXPECT_EQ(parsed.entities[1].parent, cameraId);
+    EXPECT_EQ(parsed.entities[1].parent, engine::EntityUuid(cameraId));
     EXPECT_EQ(parsed.entities[1].renderer->mesh.path, "engine/primitives/cube/model.obj");
-    EXPECT_EQ(parsed.activeCamera, cameraId);
+    EXPECT_EQ(parsed.activeCamera, engine::EntityUuid(cameraId));
 
     parsed.entities[0].parent = meshId;
     EXPECT_FALSE(engine::SerializeSceneDocument(parsed, json, error));
@@ -269,7 +269,7 @@ TEST(SceneDocument, SceneOwnsIdentifiersHierarchyAndRequiredComponents) {
     const auto child = scene.CreateEntity("Child", parent);
     ASSERT_TRUE(parent != entt::null);
     ASSERT_TRUE(child != entt::null);
-    const std::string childId(scene.GetId(child));
+    const auto childId = scene.GetId(child);
     EXPECT_EQ(scene.FindById(parentId), parent);
     EXPECT_EQ(scene.GetParent(child), parent);
     EXPECT_TRUE(scene.CreateEntityWithId(parentId) == entt::null);
@@ -285,7 +285,34 @@ TEST(SceneDocument, SceneOwnsIdentifiersHierarchyAndRequiredComponents) {
     EXPECT_FALSE(scene.HasUnsupportedComponents());
     scene.DestroyEntity(parent);
     EXPECT_TRUE(scene.FindById(parentId) == entt::null);
-    EXPECT_TRUE(scene.FindById(childId) == entt::null);
+    EXPECT_TRUE(scene.FindByUuid(childId) == entt::null);
+}
+
+TEST(SceneDocument, CompactTypedIdsPreserveCanonicalJsonAndZeroEntityId) {
+    static_assert(sizeof(engine::EntityUuid) == 16);
+    static_assert(!std::is_same_v<engine::EntityUuid, engine::AssetUuid>);
+    constexpr auto zero = "00000000-0000-0000-0000-000000000000";
+    const auto id = engine::EntityUuid::Parse(zero);
+    ASSERT_TRUE(id);
+    EXPECT_FALSE(id->IsValid()); // Zero remains a valid *entity* ID in existing scene files.
+    EXPECT_FALSE(engine::AssetUuid(zero).IsValid());
+    engine::Scene scene;
+    const auto camera = scene.CreateEntityWithId(zero, "Zero camera");
+    ASSERT_TRUE(camera != entt::null);
+    scene.AddComponent<engine::Camera>(camera);
+    scene.SetActiveCamera(camera);
+    EXPECT_EQ(scene.FindByUuid(*id), camera);
+    EXPECT_EQ(scene.FindById(zero), camera);
+    engine::SceneDocument document;
+    document.entities.push_back({.id = *id, .name = "Zero camera", .camera = engine::Camera{}});
+    document.activeCamera = *id;
+    std::string json, error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(document, json, error)) << error;
+    EXPECT_NE(json.find(zero), std::string::npos);
+    engine::SceneDocument parsed;
+    ASSERT_TRUE(engine::ParseSceneDocument(json, parsed, error)) << error;
+    EXPECT_EQ(parsed.entities[0].id, *id);
+    EXPECT_EQ(parsed.activeCamera, id);
 }
 
 TEST(SceneDocument, CodeOnlySaveLoadAndMalformedFilePreservesScene) {
@@ -387,21 +414,21 @@ TEST(GameDocument, SavesOnlyOptedInStateWithSpawnsAndTombstones) {
     EXPECT_EQ(groundHits.front().entity, ground);
     ASSERT_TRUE(host.GetScene().TryGetComponent<engine::GamePersistence>(host.GetScene().FindFirstByName("Sign")));
     auto& scene = host.GetScene();
-    const auto signId = std::string(scene.GetId(scene.FindFirstByName("Sign")));
-    const auto tableId = std::string(scene.GetId(scene.FindFirstByName("Table")));
-    scene.GetTransform(scene.FindById(signId)).position = {7, 8, 9};
-    scene.GetTransform(scene.FindById(tableId)).position = {100, 100, 100}; // not persisted
+    const auto signId = scene.GetId(scene.FindFirstByName("Sign"));
+    const auto tableId = scene.GetId(scene.FindFirstByName("Table"));
+    scene.GetTransform(scene.FindByUuid(signId)).position = {7, 8, 9};
+    scene.GetTransform(scene.FindByUuid(tableId)).position = {100, 100, 100}; // not persisted
     struct TransientCache { int value; };
-    ASSERT_NE(scene.AddComponent<TransientCache>(scene.FindById(tableId), 123), nullptr);
+    ASSERT_NE(scene.AddComponent<TransientCache>(scene.FindByUuid(tableId), 123), nullptr);
     std::string detail;
-    ASSERT_TRUE(scene.RestoreControllerGameState(scene.FindById(signId),
+    ASSERT_TRUE(scene.RestoreControllerGameState(scene.FindByUuid(signId),
         engine::StateValue::Object{{"goal", "trade"}}, detail));
-    const auto spawned = scene.CreateEntity("Spawned NPC", scene.FindById(tableId));
-    const auto spawnedId = std::string(scene.GetId(spawned));
+    const auto spawned = scene.CreateEntity("Spawned NPC", scene.FindByUuid(tableId));
+    const auto spawnedId = scene.GetId(spawned);
     ASSERT_NE(scene.AddComponent<engine::GamePersistence>(spawned, engine::GamePersistence{true, false}), nullptr);
     scene.GetTransform(spawned).position = {3, 4, 5};
     const auto child = scene.CreateEntity("Spawned child", spawned);
-    const auto childId = std::string(scene.GetId(child));
+    const auto childId = scene.GetId(child);
     ASSERT_NE(scene.AddComponent<engine::GamePersistence>(child, engine::GamePersistence{true, false}), nullptr);
     scene.DestroyEntity(scene.FindFirstByName("Hammer"));
     const auto file = std::filesystem::temp_directory_path() / ("sri-game-" + engine::NewUuid() + ".save.json");
@@ -419,25 +446,25 @@ TEST(GameDocument, SavesOnlyOptedInStateWithSpawnsAndTombstones) {
     EXPECT_EQ(document.entities.size(), 3u); // sign + two spawns, not table/terrain
     ASSERT_TRUE(host.LoadGame(file, error)) << error;
     EXPECT_TRUE(scene.FindFirstByName("Hammer") == entt::null);
-    EXPECT_EQ(scene.GetTransform(scene.FindById(signId)).position,
+    EXPECT_EQ(scene.GetTransform(scene.FindByUuid(signId)).position,
               (DirectX::SimpleMath::Vector3{7, 8, 9}));
-    EXPECT_EQ(scene.GetTransform(scene.FindById(tableId)).position,
+    EXPECT_EQ(scene.GetTransform(scene.FindByUuid(tableId)).position,
               (DirectX::SimpleMath::Vector3{-2.5f, 0.55f, 0}));
-    EXPECT_TRUE(scene.FindById(spawnedId) != entt::null);
-    EXPECT_EQ(scene.GetParent(scene.FindById(spawnedId)), scene.FindById(tableId));
-    EXPECT_EQ(scene.GetParent(scene.FindById(childId)), scene.FindById(spawnedId));
-    const auto retained = scene.CaptureControllerGameState(scene.FindById(signId), detail);
+    EXPECT_TRUE(scene.FindByUuid(spawnedId) != entt::null);
+    EXPECT_EQ(scene.GetParent(scene.FindByUuid(spawnedId)), scene.FindByUuid(tableId));
+    EXPECT_EQ(scene.GetParent(scene.FindByUuid(childId)), scene.FindByUuid(spawnedId));
+    const auto retained = scene.CaptureControllerGameState(scene.FindByUuid(signId), detail);
     ASSERT_TRUE(retained);
     EXPECT_EQ(retained->At("goal").String(), "trade");
     ASSERT_TRUE(host.SaveGame(file, error)) << error;
     ASSERT_TRUE(host.LoadGame(file, error)) << error;
-    EXPECT_TRUE(scene.FindById(spawnedId) != entt::null);
+    EXPECT_TRUE(scene.FindByUuid(spawnedId) != entt::null);
     document.scene.id = engine::NewUuid();
     std::string invalid;
     ASSERT_TRUE(engine::SerializeGameDocument(document, invalid, error)) << error;
     std::ofstream(file, std::ios::trunc) << invalid;
     EXPECT_FALSE(host.LoadGame(file, error));
-    EXPECT_TRUE(scene.FindById(spawnedId) != entt::null);
+    EXPECT_TRUE(scene.FindByUuid(spawnedId) != entt::null);
     host.Shutdown();
     std::filesystem::remove(file);
 }

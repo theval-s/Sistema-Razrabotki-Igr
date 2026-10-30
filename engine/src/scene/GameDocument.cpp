@@ -1,6 +1,7 @@
 #include <engine/scene/GameDocument.hpp>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <unordered_set>
 #include <cmath>
 
 namespace engine {
@@ -63,29 +64,31 @@ GameDocument Decode(const Json& j) {
     if (!ParseSceneDocument(j.at("spawned").dump(), doc.spawned, error)) throw std::invalid_argument("spawned: " + error);
     if (!j.at("spawnParents").is_object() || !j.at("deleted").is_array() || !j.at("entities").is_array())
         throw std::invalid_argument("invalid save-game collections");
-    std::set<std::string> spawnedIds, deletedIds, stateIds;
+    std::unordered_set<EntityUuid, EntityUuidHash> spawnedIds, deletedIds, stateIds;
     for (const auto& e : doc.spawned.entities) {
         if (e.parent) throw std::invalid_argument("spawned snapshot parents must be normalized");
         spawnedIds.insert(e.id);
     }
     for (auto it = j.at("spawnParents").begin(); it != j.at("spawnParents").end(); ++it) {
-        const auto id = it.value().get<std::string>();
-        if (!spawnedIds.contains(it.key()) || !IsUuid(id) || it.key() == id)
+        const auto key = EntityUuid::Parse(it.key());
+        const auto id = EntityUuid::Parse(it.value().get<std::string>());
+        if (!key || !id || !spawnedIds.contains(*key) || *key == *id)
             throw std::invalid_argument("invalid spawn parent");
-        doc.spawnParents.emplace(it.key(), id);
+        doc.spawnParents.emplace(*key, *id);
     }
     for (const auto& item : j.at("deleted")) {
-        const auto id = item.get<std::string>();
-        if (!IsUuid(id) || !deletedIds.insert(id).second || spawnedIds.contains(id))
+        const auto id = EntityUuid::Parse(item.get<std::string>());
+        if (!id || !deletedIds.insert(*id).second || spawnedIds.contains(*id))
             throw std::invalid_argument("invalid or duplicate deleted entity UUID");
-        doc.deleted.push_back(id);
+        doc.deleted.push_back(*id);
     }
     for (const auto& item : j.at("entities")) {
         Fields(item, {"id", "transform", "controller"});
         GameEntityState state;
-        state.id = item.at("id").get<std::string>();
-        if (!IsUuid(state.id) || !stateIds.insert(state.id).second || deletedIds.contains(state.id))
+        const auto id = EntityUuid::Parse(item.at("id").get<std::string>());
+        if (!id || !stateIds.insert(*id).second || deletedIds.contains(*id))
             throw std::invalid_argument("invalid or duplicate save-game entity UUID");
+        state.id = *id;
         if (item.contains("transform")) state.transform = DecodeTransform(item.at("transform"));
         if (item.contains("controller")) {
             const auto& c = item.at("controller");
@@ -104,9 +107,11 @@ Json Encode(const GameDocument& doc) {
     if (!SerializeSceneDocument(doc.spawned, spawnedText, error)) throw std::invalid_argument(error);
     if (!SerializeAssetReference(doc.scene, sceneText, error)) throw std::invalid_argument(error);
     Json j = {{"version", 1}, {"scene", Json::parse(sceneText)}, {"spawned", Json::parse(spawnedText)},
-              {"spawnParents", doc.spawnParents}, {"deleted", doc.deleted}, {"entities", Json::array()}};
+              {"spawnParents", Json::object()}, {"deleted", Json::array()}, {"entities", Json::array()}};
+    for (const auto& [id, parent] : doc.spawnParents) j["spawnParents"][id.ToString()] = parent.ToString();
+    for (const auto& id : doc.deleted) j["deleted"].push_back(id.ToString());
     for (const auto& state : doc.entities) {
-        Json entry = {{"id", state.id}};
+        Json entry = {{"id", state.id.ToString()}};
         if (state.transform) entry["transform"] = EncodeTransform(*state.transform);
         if (state.controller) entry["controller"] = {{"type", state.controller->type},
             {"version", state.controller->version}, {"data", JsonState(state.controller->data)}};

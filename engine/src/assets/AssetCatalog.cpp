@@ -2,15 +2,11 @@
 
 #include <algorithm>
 #include <array>
-#include <cstddef>
-#include <functional>
-#include <random>
 #include <set>
 #include <stdexcept>
 #include <unordered_set>
 
 #include <nlohmann/json.hpp>
-#include <stduuid/uuid.h>
 
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/ResourceID.hpp>
@@ -121,50 +117,6 @@ std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& 
     if (ext == ".fbx" || ext == ".gltf" || ext == ".glb" || ext == ".obj" ||
         ext == ".dae" || ext == ".blend" || ext == ".ply") return CatalogAssetKind::Mesh;
     return std::nullopt;
-}
-
-bool IsUuid(std::string_view text) noexcept {
-    if (text.size() != 36) return false;
-    for (std::size_t i = 0; i < text.size(); ++i) {
-        if (i == 8 || i == 13 || i == 18 || i == 23) {
-            if (text[i] != '-') return false;
-        } else if (!((text[i] >= '0' && text[i] <= '9') || (text[i] >= 'a' && text[i] <= 'f'))) return false;
-    }
-    return true;
-}
-
-AssetUuid::AssetUuid(std::string_view text) noexcept {
-    if (!IsUuid(text)) return;
-    if (const auto parsed = uuids::uuid::from_string(text)) {
-        std::ranges::transform(parsed->as_bytes(), bytes_.begin(),
-                               [](std::byte byte) { return std::to_integer<std::uint8_t>(byte); });
-    }
-}
-
-std::optional<AssetUuid> AssetUuid::Parse(std::string_view text) noexcept {
-    if (!IsUuid(text)) return std::nullopt;
-    return AssetUuid(text);
-}
-
-bool AssetUuid::IsValid() const noexcept {
-    return std::any_of(bytes_.begin(), bytes_.end(), [](auto byte) { return byte != 0; });
-}
-
-std::string AssetUuid::ToString() const {
-    return uuids::to_string(uuids::uuid(bytes_.begin(), bytes_.end()));
-}
-
-std::string NewUuid() {
-    //mt for faster gen
-    thread_local std::mt19937 engine = [] {
-        std::random_device device;
-        std::array<std::uint32_t, std::mt19937::state_size> seed{};
-        std::ranges::generate(seed, std::ref(device));
-        std::seed_seq sequence(seed.begin(), seed.end());
-        return std::mt19937(sequence);
-    }();
-    thread_local uuids::uuid_random_generator generator{engine};
-    return uuids::to_string(generator());
 }
 
 bool ParseAssetMetadata(std::string_view json, AssetMetadata& value, std::string& error) {

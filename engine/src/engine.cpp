@@ -2,9 +2,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
-#include <set>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <TaskScheduler.h>
@@ -335,7 +335,7 @@ bool Engine::LoadScene(const std::filesystem::path& file, std::string& error) {
     for (const auto& entity : document.entities) if (entity.controller) {
         std::string detail;
         if (!impl_->scene.ValidateController(*entity.controller, detail))
-            diagnostics += entity.name + " (" + entity.id + "): " + detail + "\n";
+            diagnostics += entity.name + " (" + entity.id.ToString() + "): " + detail + "\n";
     }
 
     if (auto* rendering = GetSubsystem<RenderingSubsystem>()) rendering->GetWorld().sceneItems.clear();
@@ -380,16 +380,17 @@ bool Engine::SaveGame(const std::filesystem::path& file, std::string& error) {
     if (!CaptureSceneDocument(impl_->scene, *impl_->sceneAssets, current, error, true)) return false;
     GameDocument game;
     game.scene = impl_->sceneReference;
-    std::set<std::string> original, present;
+    std::unordered_set<EntityUuid, EntityUuidHash> original, present;
     for (const auto& item : impl_->sceneBaseline.entities) original.insert(item.id);
     for (const auto& item : current.entities) present.insert(item.id);
     for (const auto& id : original) if (!present.contains(id)) game.deleted.push_back(id);
+    std::sort(game.deleted.begin(), game.deleted.end());
     for (auto item : current.entities) {
-        const auto entity = impl_->scene.FindById(item.id);
+        const auto entity = impl_->scene.FindByUuid(item.id);
         if (!item.persistence) continue;
         if (!original.contains(item.id)) {
             if (impl_->scene.HasUnsupportedComponents(entity)) {
-                error = "persistent spawned entity has unsupported components: " + item.id;
+                error = "persistent spawned entity has unsupported components: " + item.id.ToString();
                 return false;
             }
             if (item.parent) game.spawnParents[item.id] = *item.parent;
@@ -402,16 +403,16 @@ bool Engine::SaveGame(const std::filesystem::path& file, std::string& error) {
         if (item.persistence->controllerState && item.controller) {
             std::string detail;
             auto data = impl_->scene.CaptureControllerGameState(entity, detail);
-            if (!detail.empty()) { error = item.id + ": " + detail; return false; }
+            if (!detail.empty()) { error = item.id.ToString() + ": " + detail; return false; }
             if (data) state.controller = GameControllerState{item.controller->type, item.controller->version, *data};
         }
         if (state.transform || state.controller) game.entities.push_back(std::move(state));
     }
-    std::set<std::string> spawnedIds;
+    std::unordered_set<EntityUuid, EntityUuidHash> spawnedIds;
     for (const auto& item : game.spawned.entities) spawnedIds.insert(item.id);
     for (const auto& [id, parent] : game.spawnParents)
         if (!original.contains(parent) && !spawnedIds.contains(parent)) {
-            error = "persistent spawn " + id + " has a non-persistent spawned parent: " + parent;
+            error = "persistent spawn " + id.ToString() + " has a non-persistent spawned parent: " + parent.ToString();
             return false;
         }
     std::string text;
@@ -432,36 +433,37 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
     if (!ReadTextFile(entry->source, sceneText, error)) return false;
     SceneDocument base;
     if (!ParseSceneDocument(sceneText, base, error)) return false;
-    std::set<std::string> authored, spawned, deleted(game.deleted.begin(), game.deleted.end());
+    std::unordered_set<EntityUuid, EntityUuidHash> authored, spawned, deleted(game.deleted.begin(), game.deleted.end());
     for (const auto& item : base.entities) authored.insert(item.id);
     for (const auto& item : game.spawned.entities) {
-        if (authored.contains(item.id)) { error = "spawned entity collides with scene UUID: " + item.id; return false; }
-        if (!item.persistence) { error = "spawned entity has no persistence policy: " + item.id; return false; }
+        if (authored.contains(item.id)) { error = "spawned entity collides with scene UUID: " + item.id.ToString(); return false; }
+        if (!item.persistence) { error = "spawned entity has no persistence policy: " + item.id.ToString(); return false; }
         spawned.insert(item.id);
     }
     for (const auto& id : game.deleted) if (!authored.contains(id)) {
-        error = "deleted entity is not in the scene: " + id; return false;
+        error = "deleted entity is not in the scene: " + id.ToString(); return false;
     }
-    auto removed = [&](std::string id) {
-        std::set<std::string> visited;
-        while (!id.empty() && visited.insert(id).second) {
+    auto removed = [&](EntityUuid id) {
+        std::unordered_set<EntityUuid, EntityUuidHash> visited;
+        while (visited.insert(id).second) {
             if (deleted.contains(id)) return true;
             if (const auto it = game.spawnParents.find(id); it != game.spawnParents.end()) {
                 id = it->second;
             } else {
                 const auto found = std::find_if(base.entities.begin(), base.entities.end(), [&](const auto& e) { return e.id == id; });
-                id = found != base.entities.end() && found->parent ? *found->parent : "";
+                if (found == base.entities.end() || !found->parent) break;
+                id = *found->parent;
             }
         }
         return false;
     };
     for (const auto& [id, parent] : game.spawnParents)
         if ((!authored.contains(parent) && !spawned.contains(parent)) || removed(parent)) {
-            error = "missing spawned parent for " + id; return false;
+            error = "missing spawned parent for " + id.ToString(); return false;
         }
     for (const auto& state : game.entities) {
         if ((!authored.contains(state.id) && !spawned.contains(state.id)) || removed(state.id)) {
-            error = "unknown saved entity: " + state.id; return false;
+            error = "unknown saved entity: " + state.id.ToString(); return false;
         }
         const auto* definition = [&]() -> const SceneEntityDefinition* {
             for (const auto& item : game.spawned.entities) if (item.id == state.id) return &item;
@@ -470,18 +472,18 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
         }();
         if (!definition->persistence || (state.transform && !definition->persistence->transform) ||
             (state.controller && !definition->persistence->controllerState)) {
-            error = "save-game state is not enabled for " + state.id; return false;
+            error = "save-game state is not enabled for " + state.id.ToString(); return false;
         }
         if (state.controller && (!definition->controller ||
             definition->controller->type != state.controller->type ||
             definition->controller->version != state.controller->version)) {
-            error = "saved controller type/version mismatch for " + state.id; return false;
+            error = "saved controller type/version mismatch for " + state.id.ToString(); return false;
         }
     }
     // Check parent cycles before touching the live scene.
     for (const auto& [id, parent] : game.spawnParents) {
-        std::set<std::string> seen{id};
-        std::string cursor = parent;
+        std::unordered_set<EntityUuid, EntityUuidHash> seen{id};
+        EntityUuid cursor = parent;
         while (spawned.contains(cursor) && game.spawnParents.contains(cursor)) {
             if (!seen.insert(cursor).second) { error = "spawn hierarchy cycle"; return false; }
             cursor = game.spawnParents.at(cursor);
@@ -494,20 +496,20 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
     if (!loaded) return false;
     std::string diagnostics = std::move(error);
     for (const auto& id : game.deleted) {
-        if (const auto entity = impl_->scene.FindById(id); entity != entt::null) impl_->scene.DestroyEntity(entity);
+        if (const auto entity = impl_->scene.FindByUuid(id); entity != entt::null) impl_->scene.DestroyEntity(entity);
     }
     PopulateScene(game.spawned, *impl_->sceneAssets, impl_->scene);
     for (const auto& [id, parent] : game.spawnParents)
-        if (!impl_->scene.SetParent(impl_->scene.FindById(id), impl_->scene.FindById(parent)))
-            diagnostics += "cannot restore parent for " + id + "\n";
+        if (!impl_->scene.SetParent(impl_->scene.FindByUuid(id), impl_->scene.FindByUuid(parent)))
+            diagnostics += "cannot restore parent for " + id.ToString() + "\n";
     for (const auto& state : game.entities) {
-        const auto entity = impl_->scene.FindById(state.id);
-        if (entity == entt::null) { diagnostics += "missing saved entity " + state.id + "\n"; continue; }
+        const auto entity = impl_->scene.FindByUuid(state.id);
+        if (entity == entt::null) { diagnostics += "missing saved entity " + state.id.ToString() + "\n"; continue; }
         if (state.transform) impl_->scene.GetTransform(entity) = *state.transform;
         if (state.controller) {
             std::string detail;
             if (!impl_->scene.RestoreControllerGameState(entity, state.controller->data, detail) || !detail.empty())
-                diagnostics += state.id + ": " + detail + "\n";
+                diagnostics += state.id.ToString() + ": " + detail + "\n";
         }
     }
     impl_->scene.SetControllersActive(true);
