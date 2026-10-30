@@ -52,6 +52,7 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/rendering/UglyUtils.hpp
     include/engine/window.hpp
     include/engine/scripting/LuaRuntime.hpp
+    include/engine/scripting/AutoloadDefinition.hpp
     include/engine/scripting/ScriptSubsystem.hpp
 )
 
@@ -83,6 +84,7 @@ set(ENGINE_SOURCES
     src/rendering/UglyUtils.cpp
     src/window.cpp
     src/scripting/LuaRuntime.cpp
+    src/scripting/AutoloadDefinition.cpp
     src/scripting/ScriptSubsystem.cpp
 )
 

@@ -1,5 +1,30 @@
 # Scripting sessions and instances
 
+## Editor logging and autoload settings
+
+`Log.info("Hello world")`, `Log.warning(...)`, and `Log.error(...)` are registered
+by LuaRuntime's RegisterLog during state initialization. They write to the shared
+spdlog default logger. MainWindow::buildLogDock installs a callback sink, copies
+the message onto Qt's GUI thread, and appendLog displays it in the existing Log
+panel. The editor and Engine continue linking the same shared spdlog; the engine
+does not depend on Qt. If a message is missing, check subsystem registration,
+session/OnStart execution, the logger level, and the sink connection.
+
+Project → Autoload edits an ordered list of `{name, script: {id, path}, enabled}`
+entries in the `.sriproject` file. Names are ASCII identifiers, and names and
+script UUIDs must be unique, including disabled entries. Missing script files do
+not prevent opening a project. Files added through the dialog must be catalogued
+`.lua` assets inside the project's content directory; declaration `.d.lua` files
+and files without valid metadata are rejected. Script paths are logical hints;
+UUID remains the identity.
+
+The dialog edits a copy; Save writes the project atomically before replacing the
+in-memory settings, and Cancel discards edits. It is unavailable during an active
+scripting session. This implements settings only: registering ScriptSubsystem in
+the editor and starting the saved autoloads belong to the following milestone.
+
+## Runtime lifecycle
+
 `ScriptSubsystem::Initialize()` prepares the subsystem without creating a Lua state.
 After initialization, `BeginPlay(contentRoot, error)` starts a fresh Lua runtime;
 the root must be an existing directory. Calling BeginPlay during Play fails and

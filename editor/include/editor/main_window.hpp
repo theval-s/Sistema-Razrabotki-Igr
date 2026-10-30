@@ -50,6 +50,7 @@ private slots:
 private:
     void buildMenus();
     void buildLogDock();
+    void editAutoloads();
     /// Opens the project's startup scene, or builds an untitled one if it has none.
     void openStartupScene();
     void setupDefaultScene();

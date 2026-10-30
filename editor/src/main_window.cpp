@@ -7,6 +7,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenuBar>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QProcess>
@@ -37,6 +38,7 @@
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/rendering/RenderExtractionSubsystem.hpp>
 #include <engine/scene/SceneQueries.hpp>
+#include <engine/scripting/ScriptSubsystem.hpp>
 
 #include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
@@ -48,6 +50,7 @@
 #include <editor/viewport_widget.hpp>
 #include <editor/selection.hpp>
 #include <editor/script_creation.hpp>
+#include <editor/autoload_dialog.hpp>
 
 namespace editor {
 
@@ -366,6 +369,13 @@ void MainWindow::buildMenus() {
 
     file_menu->addAction(tr("E&xit"), this, &QWidget::close);
 
+    auto* project_menu = context_->menu(tr("&Project"));
+    auto* autoload_action = project_menu->addAction(tr("&Autoload..."), this, &MainWindow::editAutoloads);
+    connect(project_menu, &QMenu::aboutToShow, this, [this, autoload_action] {
+        const auto* scripts = engine_.GetSubsystem<engine::ScriptSubsystem>();
+        autoload_action->setEnabled(engine_.IsInitialized() && (!scripts || !scripts->IsPlaying()));
+    });
+
     auto* engine_menu = context_->menu(tr("&Engine"));
     auto* pause_action = engine_menu->addAction(tr("&Pause simulation"));
     pause_action->setCheckable(true);
@@ -373,6 +383,26 @@ void MainWindow::buildMenus() {
 
     // Filled by EditorContext::addPanel().
     context_->menu(tr("&View"));
+}
+
+void MainWindow::editAutoloads() {
+    const auto* scripts = engine_.GetSubsystem<engine::ScriptSubsystem>();
+    if (!engine_.IsInitialized() || (scripts && scripts->IsPlaying())) return;
+    AutoloadDialog dialog(engine_, project_, this);
+    while (dialog.exec() == QDialog::Accepted) {
+        scripts = engine_.GetSubsystem<engine::ScriptSubsystem>();
+        if (scripts && scripts->IsPlaying()) return;
+        // Work from the current project: a scene operation may have adopted a startup scene.
+        engine::Project updated = project_;
+        updated.autoloads = dialog.definitions();
+        std::string error;
+        if (!updated.Save(error)) {
+            QMessageBox::warning(this, tr("Autoload"), toQString(std::string_view(error)));
+            continue;
+        }
+        project_ = std::move(updated);
+        return;
+    }
 }
 
 void MainWindow::buildLogDock() {

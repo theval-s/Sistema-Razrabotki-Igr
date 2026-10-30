@@ -1,6 +1,7 @@
 #include <engine/project/Project.hpp>
 
 #include <string_view>
+#include <exception>
 #include <system_error>
 #include <utility>
 
@@ -36,6 +37,10 @@ std::optional<Project> Project::Load(const std::filesystem::path& file, std::str
     }
     try {
         const nlohmann::json data = nlohmann::json::parse(text);
+        if (!data.is_object()) {
+            error = ToUtf8(file) + " is not a valid project file: expected an object";
+            return std::nullopt;
+        }
         if (const int version = data.value("version", 0); version > FormatVersion) {
             error = ToUtf8(file) + " was made by a newer editor (format version " + std::to_string(version) + ")";
             return std::nullopt;
@@ -44,20 +49,56 @@ std::optional<Project> Project::Load(const std::filesystem::path& file, std::str
         project.file = std::filesystem::absolute(file).lexically_normal();
         project.name = data.value("name", ToUtf8(file.stem()));
         project.startupScene = data.value("startupScene", std::string{});
+        if (const auto entries = data.find("autoloads"); entries != data.end()) {
+            if (!entries->is_array()) {
+                error = "Project autoloads must be an array";
+                return std::nullopt;
+            }
+            for (const auto& entry : *entries) {
+                if (!entry.is_object()) {
+                    error = "Each autoload must be an object with name, script and enabled";
+                    return std::nullopt;
+                }
+                AutoloadDefinition definition;
+                definition.name = entry.at("name").get<std::string>();
+                definition.enabled = entry.at("enabled").get<bool>();
+                if (!ParseAssetReference(entry.at("script").dump(), definition.script, error)) {
+                    error = "Autoload '" + definition.name + "': " + error;
+                    return std::nullopt;
+                }
+                project.autoloads.push_back(std::move(definition));
+            }
+        }
+        if (!ValidateAutoloadDefinitions(project.autoloads, error)) return std::nullopt;
+        error.clear();
         return project;
-    } catch (const nlohmann::json::exception& e) {
+    } catch (const std::exception& e) {
         error = ToUtf8(file) + " is not a valid project file: " + e.what();
         return std::nullopt;
     }
 }
 
 bool Project::Save(std::string& error) const {
-    const nlohmann::json data = {
-        {"version", FormatVersion},
-        {"name", name},
-        {"startupScene", startupScene},
-    };
-    return WriteFileAtomic(file, data.dump(2) + '\n', error);
+    if (!ValidateAutoloadDefinitions(autoloads, error)) return false;
+    try {
+        auto entries = nlohmann::json::array();
+        for (const auto& definition : autoloads) {
+            std::string reference;
+            if (!SerializeAssetReference(definition.script, reference, error)) return false;
+            entries.push_back({{"name", definition.name}, {"script", nlohmann::json::parse(reference)},
+                               {"enabled", definition.enabled}});
+        }
+        const nlohmann::json data = {
+            {"version", FormatVersion},
+            {"name", name},
+            {"startupScene", startupScene},
+            {"autoloads", std::move(entries)},
+        };
+        return WriteFileAtomic(file, data.dump(2) + '\n', error);
+    } catch (const std::exception& e) {
+        error = ToUtf8(file) + ": " + e.what();
+        return false;
+    }
 }
 
 std::optional<Project> Project::Create(const std::filesystem::path& directory, std::string name, std::string& error) {
