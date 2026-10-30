@@ -6,15 +6,65 @@
 #include <spdlog/spdlog.h>
 
 #include <fstream>
+#include <atomic>
+#include <cmath>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
+#include <vector>
+
+#include <engine/core/FileSystem.hpp>
+#include <engine/core/PathUtils.hpp>
 
 namespace engine {
 
     struct LuaRuntime::Impl {
+        struct Instance {
+            ScriptInstanceDesc desc;
+            sol::environment environment;
+            sol::table table;
+            std::optional<sol::protected_function> start, update, destroy;
+            bool started = false;
+            bool faulted = false;
+            bool destroying = false;
+
+            std::string Context() const {
+                return ToGenericUtf8(desc.source) + " [script=" + desc.assetId.ToString() +
+                    ", entity=" + desc.entityId + "]";
+            }
+            bool Fail(std::string& error, const std::string& message) {
+                error = Context() + ": " + message;
+                spdlog::error("[Lua] {}", error);
+                return false;
+            }
+            bool Invoke(const std::optional<sol::protected_function>& callback,
+                        std::string_view name, std::string& error, std::optional<double> delta = {}) {
+                if (!callback) {
+                    error.clear();
+                    return true;
+                }
+                try {
+                    sol::protected_function_result result = delta
+                        ? (*callback)(table, *delta) : (*callback)(table);
+                    if (!result.valid()) {
+                        sol::error failure = result;
+                        faulted = true;
+                        return Fail(error, std::string(name) + ": " + failure.what());
+                    }
+                } catch (const std::exception& exception) {
+                    faulted = true;
+                    return Fail(error, std::string(name) + ": " + exception.what());
+                }
+                error.clear();
+                return true;
+            }
+        };
         std::unique_ptr<sol::state> state;
+        // Declared after state so all Lua references are released first, including at destruction.
+        std::unordered_map<std::uint64_t, std::unique_ptr<Instance>> instances;
     };
 
     namespace {
@@ -105,6 +155,19 @@ namespace engine {
     }
 
     void LuaRuntime::Shutdown() noexcept {
+        if (!impl_->state) return;
+        // Destroy callbacks run while the state and the instance's table are still alive.
+        while (!impl_->instances.empty()) {
+            InstanceId id;
+            id.value_ = impl_->instances.begin()->first;
+            try {
+                std::string error;
+                (void)DestroyInstance(id, error);
+            } catch (...) {
+                // Shutdown must release every Lua reference even if diagnostics fail.
+                impl_->instances.erase(id.value_);
+            }
+        }
         impl_->state.reset();
 
         spdlog::info("Lua Runtime shutdown");
@@ -112,6 +175,133 @@ namespace engine {
 
     bool LuaRuntime::IsInitialized() const noexcept {
         return impl_ && static_cast<bool>(impl_->state);
+    }
+
+    bool LuaRuntime::CreateInstance(const ScriptInstanceDesc& desc, InstanceId& instance, std::string& error) {
+        if (!IsInitialized()) {
+            SetError(error, "Lua Runtime is not initialized");
+            return false;
+        }
+        auto record = std::make_unique<Impl::Instance>();
+        record->desc = desc;
+        if (!desc.assetId.IsValid() || !desc.source.is_absolute()) {
+            return record->Fail(error, "expected a script UUID and an absolute resolved source path");
+        }
+        try {
+            std::string source;
+            if (!ReadTextFile(desc.source, source, error)) {
+                const std::string message = error;
+                return record->Fail(error, message);
+            }
+            record->environment = sol::environment(*impl_->state, sol::create, impl_->state->globals());
+            record->environment["_G"] = record->environment;
+            sol::load_result loaded = impl_->state->load(source, "@" + ToGenericUtf8(desc.source));
+            if (!loaded.valid()) {
+                sol::error failure = loaded;
+                return record->Fail(error, failure.what());
+            }
+            sol::protected_function chunk = loaded;
+            sol::set_environment(record->environment, chunk);
+            sol::protected_function_result result = chunk();
+            if (!result.valid()) {
+                sol::error failure = result;
+                return record->Fail(error, failure.what());
+            }
+            if (result.return_count() != 1 || result.get_type() != sol::type::table) {
+                return record->Fail(error, "script must return one instance table");
+            }
+            record->table = result.get<sol::table>();
+            for (const auto& [name, callback] : {
+                std::pair{"Start", &record->start}, std::pair{"Update", &record->update},
+                std::pair{"Destroy", &record->destroy}}) {
+                sol::object value = record->table.get<sol::object>(name);
+                if (value.get_type() == sol::type::nil) continue;
+                if (value.get_type() != sol::type::function) {
+                    return record->Fail(error, std::string(name) + " must be a function or nil");
+                }
+                *callback = value.as<sol::protected_function>();
+            }
+            // Process-wide allocation prevents stale IDs from aliasing another runtime/session.
+            static std::atomic<std::uint64_t> next{1};
+            InstanceId id;
+            id.value_ = next.fetch_add(1, std::memory_order_relaxed);
+            if (id.value_ == 0) return record->Fail(error, "instance ID space exhausted");
+            auto [entry, inserted] = impl_->instances.try_emplace(id.value_);
+            if (!inserted) return record->Fail(error, "instance ID space exhausted");
+            entry->second = std::move(record);
+            instance = id;
+            error.clear();
+            return true;
+        } catch (const std::exception& exception) {
+            return record->Fail(error, exception.what());
+        }
+    }
+
+    bool LuaRuntime::StartInstance(InstanceId instance, std::string& error) {
+        const auto found = impl_->instances.find(instance.value_);
+        if (found == impl_->instances.end()) {
+            SetError(error, "Invalid or stale script instance");
+            return false;
+        }
+        auto& record = *found->second;
+        if (record.destroying || record.faulted) return record.Fail(error, "cannot start a destroying/faulted instance");
+        if (record.started) {
+            error.clear();
+            return true;
+        }
+        record.started = true;
+        return record.Invoke(record.start, "Start", error);
+    }
+
+    bool LuaRuntime::UpdateInstance(InstanceId instance, double deltaSeconds, std::string& error) {
+        const auto found = impl_->instances.find(instance.value_);
+        if (found == impl_->instances.end()) {
+            SetError(error, "Invalid or stale script instance");
+            return false;
+        }
+        auto& record = *found->second;
+        if (!record.started || record.faulted || record.destroying) {
+            return record.Fail(error, "cannot update an unstarted/faulted/destroying instance");
+        }
+        if (!std::isfinite(deltaSeconds) || deltaSeconds < 0.0) {
+            return record.Fail(error, "invalid script time step");
+        }
+        return record.Invoke(record.update, "Update", error, deltaSeconds);
+    }
+
+    bool LuaRuntime::DestroyInstance(InstanceId instance, std::string& error) {
+        const auto found = impl_->instances.find(instance.value_);
+        if (found == impl_->instances.end()) {
+            SetError(error, "Invalid or stale script instance");
+            return false;
+        }
+        auto& record = *found->second;
+        if (record.destroying) {
+            error.clear();
+            return true;
+        }
+        record.destroying = true;
+        const bool clean = !record.started || record.Invoke(record.destroy, "Destroy", error);
+        impl_->instances.erase(found);
+        if (clean) error.clear();
+        return clean;
+    }
+
+    bool LuaRuntime::UpdateInstances(double deltaSeconds, std::string& error) {
+        std::vector<InstanceId> ids;
+        for (const auto& [value, record] : impl_->instances) {
+            if (!record->started || record->faulted || record->destroying) continue;
+            InstanceId id;
+            id.value_ = value;
+            ids.push_back(id);
+        }
+        std::string firstError;
+        for (const auto id : ids) {
+            std::string failure;
+            if (!UpdateInstance(id, deltaSeconds, failure) && firstError.empty()) firstError = std::move(failure);
+        }
+        error = std::move(firstError);
+        return error.empty();
     }
 
     bool LuaRuntime::ExecuteString(
