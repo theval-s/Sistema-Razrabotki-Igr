@@ -32,6 +32,8 @@ Style styleOf(const engine::CatalogAssetKind kind) {
         return {"INST", QColor(0x3a, 0xa3, 0xc9)};
     case engine::CatalogAssetKind::Scene:
         return {"SCN", QColor(0xc4, 0x44, 0x3c)};
+    case engine::CatalogAssetKind::Script:
+        return { "LUA", QColor(0x35, 0x58, 0xa8) };
     }
     return {"?", Qt::gray};
 }
@@ -103,6 +105,8 @@ QString assetKindName(const engine::CatalogAssetKind kind) {
         return QObject::tr("Material Instances");
     case engine::CatalogAssetKind::Scene:
         return QObject::tr("Scenes");
+    case engine::CatalogAssetKind::Script:
+        return QObject::tr("Scripts");
     }
     return {};
 }
