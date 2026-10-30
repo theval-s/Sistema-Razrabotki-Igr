@@ -193,6 +193,8 @@ namespace engine {
                 const std::string message = error;
                 return record->Fail(error, message);
             }
+            // Execute a fresh chunk for every object: table literals (including nested
+            // defaults) and closures belong to this instance, never a shared prototype.
             record->environment = sol::environment(*impl_->state, sol::create, impl_->state->globals());
             record->environment["_G"] = record->environment;
             sol::load_result loaded = impl_->state->load(source, "@" + ToGenericUtf8(desc.source));
@@ -212,8 +214,8 @@ namespace engine {
             }
             record->table = result.get<sol::table>();
             for (const auto& [name, callback] : {
-                std::pair{"Start", &record->start}, std::pair{"Update", &record->update},
-                std::pair{"Destroy", &record->destroy}}) {
+                std::pair{"OnStart", &record->start}, std::pair{"OnUpdate", &record->update},
+                std::pair{"OnDestroy", &record->destroy}}) {
                 sol::object value = record->table.get<sol::object>(name);
                 if (value.get_type() == sol::type::nil) continue;
                 if (value.get_type() != sol::type::function) {
@@ -250,7 +252,7 @@ namespace engine {
             return true;
         }
         record.started = true;
-        return record.Invoke(record.start, "Start", error);
+        return record.Invoke(record.start, "OnStart", error);
     }
 
     bool LuaRuntime::UpdateInstance(InstanceId instance, double deltaSeconds, std::string& error) {
@@ -266,7 +268,7 @@ namespace engine {
         if (!std::isfinite(deltaSeconds) || deltaSeconds < 0.0) {
             return record.Fail(error, "invalid script time step");
         }
-        return record.Invoke(record.update, "Update", error, deltaSeconds);
+        return record.Invoke(record.update, "OnUpdate", error, deltaSeconds);
     }
 
     bool LuaRuntime::DestroyInstance(InstanceId instance, std::string& error) {
@@ -281,7 +283,7 @@ namespace engine {
             return true;
         }
         record.destroying = true;
-        const bool clean = !record.started || record.Invoke(record.destroy, "Destroy", error);
+        const bool clean = !record.started || record.Invoke(record.destroy, "OnDestroy", error);
         impl_->instances.erase(found);
         if (clean) error.clear();
         return clean;

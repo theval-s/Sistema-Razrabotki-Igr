@@ -88,8 +88,8 @@ TEST(ScriptSubsystem, PausePreservesInstancesAndOnlyPlayUpdatesThem) {
     ScriptFixture fixture;
     const auto desc = fixture.Write(R"(
         return {
-            Start = function(self) self.ticks = 0 end,
-            Update = function(self, dt)
+            OnStart = function(self) self.ticks = 0 end,
+            OnUpdate = function(self, dt)
                 assert(dt == 0.25)
                 self.ticks = self.ticks + 1
                 assert(self.ticks == 1)
@@ -131,12 +131,12 @@ TEST(LuaInstances, SameFileCreatesIndependentTablesAndEnvironments) {
         privateValue = (privateValue or 0) + 1
         assert(privateValue == 1)
         return {
-            Start = function(self) self.ticks = 0; stats.starts = stats.starts + 1 end,
-            Update = function(self, dt)
+            OnStart = function(self) self.ticks = 0; stats.starts = stats.starts + 1 end,
+            OnUpdate = function(self, dt)
                 self.ticks = self.ticks + 1
                 assert(self.ticks == 1 and dt == 0.5)
             end,
-            Destroy = function(self) stats.destroys = stats.destroys + 1 end
+            OnDestroy = function(self) stats.destroys = stats.destroys + 1 end
         }
     )");
     engine::LuaRuntime runtime;
@@ -173,7 +173,7 @@ TEST(LuaInstances, RejectsInvalidScriptsAndPreservesOutputOnFailure) {
     for (const auto& bad : {
             fixture.Write("return 42", "number.lua"),
             fixture.Write("this is not lua!", "syntax.lua"),
-            fixture.Write("return { Update = 42 }", "callback.lua"),
+            fixture.Write("return { OnUpdate = 42 }", "callback.lua"),
             fixture.Write("error('load failed')", "load-error.lua")}) {
         EXPECT_FALSE(runtime.CreateInstance(bad, id, error));
         EXPECT_EQ(id, original);
@@ -191,8 +191,8 @@ TEST(LuaInstances, FaultedInstancesStopUpdatingButCanBeDestroyed) {
     ScriptFixture fixture;
     const auto desc = fixture.Write(R"(
         return {
-            Update = function(self, dt) error('update failed') end,
-            Destroy = function(self) stats.destroyed = true end
+            OnUpdate = function(self, dt) error('update failed') end,
+            OnDestroy = function(self) stats.destroyed = true end
         }
     )");
     engine::LuaRuntime runtime;
@@ -213,7 +213,7 @@ TEST(LuaInstances, FaultedInstancesStopUpdatingButCanBeDestroyed) {
 
 TEST(LuaInstances, DestroyFailureStillReleasesInstanceAndShutdownIsSafe) {
     ScriptFixture fixture;
-    const auto desc = fixture.Write("return { Destroy = function(self) error('destroy failed') end }");
+    const auto desc = fixture.Write("return { OnDestroy = function(self) error('destroy failed') end }");
     engine::LuaRuntime runtime;
     std::string error;
     ASSERT_TRUE(runtime.Initialize(error)) << error;
@@ -235,13 +235,13 @@ TEST(LuaInstances, DestroyFailureStillReleasesInstanceAndShutdownIsSafe) {
 TEST(ScriptSubsystem, UpdatesInstancesAndSkipsFaultedOnesWithoutCallingGlobalUpdate) {
     ScriptFixture fixture;
     const auto failing = fixture.Write(R"(
-        return { Update = function(self, dt)
+        return { OnUpdate = function(self, dt)
             stats.bad = stats.bad + 1
             error('one instance failed')
         end }
     )", "failing.lua");
     const auto healthy = fixture.Write(R"(
-        return { Update = function(self, dt)
+        return { OnUpdate = function(self, dt)
             assert(dt == 0.25)
             stats.good = stats.good + 1
         end }
@@ -274,21 +274,153 @@ TEST(LuaInstances, FailedStartFaultsInstanceAndUnstartedDestructionDoesNotCallCa
     ScriptFixture fixture;
     const auto desc = fixture.Write(R"(
         return {
-            Start = function(self) error('start failed') end,
-            Destroy = function(self) stats.destroys = stats.destroys + 1 end
+            OnStart = function(self)
+                stats.starts = stats.starts + 1
+                error('start failed')
+            end,
+            OnDestroy = function(self) stats.destroys = stats.destroys + 1 end
         }
     )");
     engine::LuaRuntime runtime;
     std::string error;
     ASSERT_TRUE(runtime.Initialize(error)) << error;
-    ASSERT_TRUE(runtime.ExecuteString("stats = {destroys = 0}", "setup", error)) << error;
+    ASSERT_TRUE(runtime.ExecuteString("stats = {starts = 0, destroys = 0}", "setup", error)) << error;
     engine::InstanceId unstarted, failed;
     ASSERT_TRUE(runtime.CreateInstance(desc, unstarted, error)) << error;
     ASSERT_TRUE(runtime.DestroyInstance(unstarted, error)) << error;
     ASSERT_TRUE(runtime.CreateInstance(desc, failed, error)) << error;
     EXPECT_FALSE(runtime.StartInstance(failed, error));
     EXPECT_NE(error.find("start failed"), std::string::npos);
+    EXPECT_FALSE(runtime.StartInstance(failed, error));
     EXPECT_FALSE(runtime.UpdateInstance(failed, 0.1, error));
     EXPECT_TRUE(runtime.DestroyInstance(failed, error)) << error;
-    EXPECT_TRUE(runtime.ExecuteString("assert(stats.destroys == 1)", "check", error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString("assert(stats.starts == 1 and stats.destroys == 1)", "check", error)) << error;
+}
+
+TEST(LuaInstances, ReexecutesChunkAndKeepsNestedDefaultsIndependentForEachObject) {
+    ScriptFixture fixture;
+    const auto desc = fixture.Write(R"(
+        assert(type(Log.info) == 'function') -- Shared engine API remains available.
+        privateLoads = (privateLoads or 0) + 1
+        assert(privateLoads == 1)
+        stats.loads = stats.loads + 1
+        local index = stats.loads
+        return {
+            defaults = {nested = {ticks = 0}, items = {'seed'}},
+            OnStart = function(self, ...)
+                assert(select('#', ...) == 0)
+                assert(self.defaults.nested.ticks == 0 and #self.defaults.items == 1)
+                stats.tables[index] = self
+            end,
+            OnUpdate = function(self, dt, ...)
+                assert(select('#', ...) == 0)
+                assert(self == stats.tables[index])
+                assert(dt == 0.25 or dt == 0.5)
+                self.defaults.nested.ticks = self.defaults.nested.ticks + 1
+                table.insert(self.defaults.items, dt)
+            end,
+            OnDestroy = function(self, ...)
+                assert(select('#', ...) == 0)
+                assert(self == stats.tables[index])
+                stats.destroyed[index] = true
+            end
+        }
+    )");
+    auto secondObject = desc;
+    secondObject.entityId = engine::NewUuid();
+    engine::LuaRuntime runtime;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(error)) << error;
+    ASSERT_TRUE(runtime.ExecuteString("stats = {loads = 0, tables = {}, destroyed = {}}", "setup", error)) << error;
+    engine::InstanceId first, second;
+    ASSERT_TRUE(runtime.CreateInstance(desc, first, error)) << error;
+    ASSERT_TRUE(runtime.CreateInstance(secondObject, second, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(first, error)) << error;
+    ASSERT_TRUE(runtime.UpdateInstance(first, 0.25, error)) << error;
+    // The second object's initial nested fields must survive mutations of the first.
+    ASSERT_TRUE(runtime.StartInstance(second, error)) << error;
+    ASSERT_TRUE(runtime.UpdateInstance(second, 0.25, error)) << error;
+    ASSERT_TRUE(runtime.UpdateInstance(first, 0.5, error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString(R"(
+        assert(stats.loads == 2)
+        local a, b = stats.tables[1], stats.tables[2]
+        assert(not rawequal(a, b))
+        assert(not rawequal(a.defaults, b.defaults))
+        assert(not rawequal(a.defaults.nested, b.defaults.nested))
+        assert(not rawequal(a.defaults.items, b.defaults.items))
+        assert(a.defaults.nested.ticks == 2 and b.defaults.nested.ticks == 1)
+        assert(#a.defaults.items == 3 and #b.defaults.items == 2)
+        assert(privateLoads == nil)
+    )", "check", error)) << error;
+    ASSERT_TRUE(runtime.DestroyInstance(first, error)) << error;
+    ASSERT_TRUE(runtime.UpdateInstance(second, 0.5, error)) << error;
+    ASSERT_TRUE(runtime.DestroyInstance(second, error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString("assert(stats.destroyed[1] and stats.destroyed[2])", "destroyed", error)) << error;
+}
+
+TEST(LuaInstances, RejectsWrongTypeForEveryOnCallbackWithUsefulDiagnostics) {
+    ScriptFixture fixture;
+    engine::LuaRuntime runtime;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(error)) << error;
+    for (const std::string name : {"OnStart", "OnUpdate", "OnDestroy"}) {
+        const std::string filename = name + ".lua";
+        const auto desc = fixture.Write("return { " + name + " = false }", filename.c_str());
+        engine::InstanceId id;
+        EXPECT_FALSE(runtime.CreateInstance(desc, id, error));
+        EXPECT_FALSE(id.IsValid());
+        EXPECT_NE(error.find(name + " must be a function or nil"), std::string::npos);
+        EXPECT_NE(error.find(desc.assetId.ToString()), std::string::npos);
+        EXPECT_NE(error.find(desc.entityId), std::string::npos);
+    }
+}
+
+TEST(LuaInstances, MissingOnCallbacksAreAllowedAndDoNotUseGlobalsOrOldFieldNames) {
+    ScriptFixture fixture;
+    const auto desc = fixture.Write(R"(
+        local function unexpected() error('not an instance callback') end
+        return { Start = unexpected, Update = unexpected, Destroy = unexpected }
+    )");
+    engine::LuaRuntime runtime;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(error)) << error;
+    ASSERT_TRUE(runtime.ExecuteString(R"(
+        function OnStart() error('global OnStart') end
+        function OnUpdate() error('global OnUpdate') end
+        function OnDestroy() error('global OnDestroy') end
+    )", "globals", error)) << error;
+    engine::InstanceId id;
+    ASSERT_TRUE(runtime.CreateInstance(desc, id, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(id, error)) << error;
+    EXPECT_TRUE(runtime.StartInstance(id, error)) << error;
+    EXPECT_TRUE(runtime.UpdateInstance(id, 0.25, error)) << error;
+    EXPECT_TRUE(runtime.DestroyInstance(id, error)) << error;
+    EXPECT_TRUE(error.empty());
+}
+
+TEST(LuaInstances, CapturesProtectedCallbacksAtCreation) {
+    ScriptFixture fixture;
+    const auto desc = fixture.Write(R"(
+        return {
+            OnStart = function(self)
+                stats.starts = stats.starts + 1
+                self.OnUpdate = function() error('replacement update') end
+                self.OnDestroy = function() error('replacement destroy') end
+            end,
+            OnUpdate = function(self, dt) stats.updates = stats.updates + 1 end,
+            OnDestroy = function(self) stats.destroys = stats.destroys + 1 end
+        }
+    )");
+    engine::LuaRuntime runtime;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(error)) << error;
+    ASSERT_TRUE(runtime.ExecuteString("stats = {starts = 0, updates = 0, destroys = 0}", "setup", error)) << error;
+    engine::InstanceId id;
+    ASSERT_TRUE(runtime.CreateInstance(desc, id, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(id, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(id, error)) << error;
+    EXPECT_TRUE(runtime.UpdateInstance(id, 0.25, error)) << error;
+    EXPECT_TRUE(runtime.DestroyInstance(id, error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString("assert(stats.starts == 1 and stats.updates == 1 and stats.destroys == 1)",
+                                     "check", error)) << error;
 }

@@ -46,14 +46,15 @@ namespace engine {
 
         [[nodiscard]] bool IsInitialized() const noexcept;
 
-        /// Executes the file in a per-instance environment; it must return a table.
-        /// Optional callbacks: Start(self), Update(self, dt), Destroy(self).
+        /// Executes the file anew in a per-instance environment; it must return a table.
+        /// Table literals, including nested defaults, are created separately for every instance.
+        /// Optional callbacks: OnStart(self), OnUpdate(self, deltaSeconds), OnDestroy(self).
         /// Output is unchanged on failure. Does not start the instance.
         bool CreateInstance(const ScriptInstanceDesc& desc, InstanceId& instance, std::string& error);
-        /// Starts once; a repeated start succeeds without invoking Start again.
+        /// Starts once; a repeated successful start does not invoke OnStart again.
         bool StartInstance(InstanceId instance, std::string& error);
         bool UpdateInstance(InstanceId instance, double deltaSeconds, std::string& error);
-        /// Calls Destroy for started instances (including faulted ones), then releases the record.
+        /// Calls OnDestroy for started instances (including faulted ones), then releases the record.
         /// Invalid/stale IDs fail; cleanup still completes when the callback fails.
         bool DestroyInstance(InstanceId instance, std::string& error);
 

@@ -362,7 +362,7 @@ void MainWindow::buildMenus() {
         (void)createLuaScriptInteractive(this, engine_, project_);
         });
 
-    file_menu->addSeparator();
+    file_menu->addSeparator();  
 
     file_menu->addAction(tr("E&xit"), this, &QWidget::close);
 
