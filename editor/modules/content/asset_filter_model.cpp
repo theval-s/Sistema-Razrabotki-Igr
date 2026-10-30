@@ -5,9 +5,9 @@
 #include <QMimeData>
 #include <QUrl>
 
+#include <editor/asset_icons.hpp>
 #include <editor/paths.hpp>
 
-#include "asset_icons.hpp"
 #include "asset_operations.hpp"
 
 namespace content {
@@ -72,7 +72,7 @@ QStringList AssetFilterModel::droppedPaths(const QMimeData* data) {
 QVariant AssetFilterModel::data(const QModelIndex& index, const int role) const {
     if (role == Qt::DecorationRole && index.column() == 0) {
         if (const auto kind = kindOf(files_, mapToSource(index))) {
-            return assetIcon(*kind);
+            return editor::assetIcon(*kind);
         }
     }
     if (role == Qt::ToolTipRole && index.column() == 0) {

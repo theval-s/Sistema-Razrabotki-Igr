@@ -1,14 +1,19 @@
 # ---------------------------------------------------------------------------
 # editor_core -- shared library between the editor executable and its modules:
 # EditorContext (what a module may touch), the shared Selection, SceneDocument
-# and editor camera, and the IEditorModule interface.
+# and editor camera, the IEditorModule interface, and widgets several modules
+# use (asset icons and picker).
 # ---------------------------------------------------------------------------
 
 add_library(editor_core SHARED
+    src/asset_icons.cpp
+    src/asset_picker.cpp
     src/editor_camera.cpp
     src/editor_context.cpp
     src/scene_document.cpp
     src/selection.cpp
+    include/editor/asset_icons.hpp
+    include/editor/asset_picker.hpp
     include/editor/editor_camera.hpp
     include/editor/editor_context.hpp
     include/editor/editor_module.hpp

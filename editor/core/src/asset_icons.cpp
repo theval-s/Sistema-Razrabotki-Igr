@@ -1,4 +1,4 @@
-#include "asset_icons.hpp"
+#include <editor/asset_icons.hpp>
 
 #include <QColor>
 #include <QFont>
@@ -8,7 +8,7 @@
 #include <QPainterPath>
 #include <QPixmap>
 
-namespace content {
+namespace editor {
 
 namespace {
 
@@ -107,4 +107,4 @@ QString assetKindName(const engine::CatalogAssetKind kind) {
     return {};
 }
 
-}  // namespace content
+}  // namespace editor

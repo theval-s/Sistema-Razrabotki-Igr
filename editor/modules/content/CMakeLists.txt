@@ -4,14 +4,10 @@ sri_add_editor_module(editor_module_content
     content_browser.hpp
     asset_filter_model.cpp
     asset_filter_model.hpp
-    asset_icons.cpp
-    asset_icons.hpp
     asset_operations.cpp
     asset_operations.hpp
     asset_dialogs.cpp
     asset_dialogs.hpp
-    asset_picker.cpp
-    asset_picker.hpp
     scene_placement.cpp
     scene_placement.hpp
 )

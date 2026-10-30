@@ -1,13 +1,16 @@
 #include "component_inspectors.hpp"
 
+#include <QAbstractItemView>
 #include <QLineEdit>
 #include <QObject>
 #include <QSignalBlocker>
 #include <QStringList>
 
 #include <algorithm>
+#include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <entt/core/type_info.hpp>
@@ -17,7 +20,9 @@
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/Scene.hpp>
 
+#include <editor/asset_picker.hpp>
 #include <editor/editor_context.hpp>
+#include <editor/scene_document.hpp>
 
 #include "property_form.hpp"
 
@@ -100,38 +105,80 @@ void buildTags(PropertyForm& form, editor::EditorContext& context, const entt::e
     });
 }
 
+/// The asset a MeshRenderer slot uses: the authored one, which a save writes, or else the loaded one.
 template <class Asset>
-QString assetText(const engine::AssetSystem& assets, const engine::AssetReference& authored,
-                  const engine::AssetHandle<Asset> handle, const engine::CatalogAssetKind kind) {
+std::optional<engine::AssetReference> usedAsset(const engine::AssetSystem& assets,
+                                                const engine::AssetReference& authored,
+                                                const engine::AssetHandle<Asset> handle) {
     if (authored.id.IsValid()) {
-        if (const engine::CatalogEntry* entry = assets.GetCatalog().Find(authored.id, kind)) {
-            return QString::fromStdString(entry->path);
+        return authored;
+    }
+    return assets.ReferenceFor(handle);
+}
+
+/// A picker for one asset slot of the MeshRenderer: `reference` and `handle` are its members,
+/// `request` what loads a chosen asset into the scene's registry.
+template <class Asset>
+void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt::entity entity, const QString& label,
+                  const engine::CatalogAssetKind kind, engine::AssetReference engine::MeshRenderer::*reference,
+                  engine::AssetHandle<Asset> engine::MeshRenderer::*handle,
+                  engine::AssetHandle<Asset> (engine::AssetSystem::*request)(const engine::AssetReference&)) {
+    engine::Scene& scene = context.scene();
+    engine::Engine& engine = context.engine();
+    auto* picker = new editor::AssetPicker(engine.GetSceneAssets().GetCatalog(), kind);
+    picker->setMinimumContentsLength(12);  // the dock is narrow; the popup shows whole paths
+
+    // Only the user's choices get here: refresh picks quietly.
+    QObject::connect(picker, &QComboBox::currentIndexChanged, picker,
+                     [&context, &scene, &engine, entity, picker, reference, handle, request] {
+                         auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity);
+                         const std::optional<engine::AssetReference> chosen = picker->reference();
+                         if (renderer == nullptr || !chosen || chosen->id == (renderer->*reference).id) {
+                             return;
+                         }
+                         // Asynchronous, like adding the component: the entity isn't drawn until it's loaded.
+                         renderer->*handle = (engine.GetSceneAssets().*request)(*chosen);
+                         renderer->*reference = *chosen;
+                         context.sceneDocument().markDirty();
+                     });
+
+    // What the picker last showed, so it's only touched when the slot changes elsewhere.
+    auto shown = std::make_shared<std::string>();
+    form.addRow(label, picker, [&scene, &engine, entity, picker, reference, handle, shown] {
+        const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity);
+        if (renderer == nullptr || picker->hasFocus() || picker->lineEdit()->hasFocus() || picker->view()->isVisible()) {
+            return;
         }
-        const std::string hint = authored.path.empty() ? authored.id.ToString() : authored.path;
-        return QObject::tr("%1 (missing)").arg(QString::fromStdString(hint));
-    }
-    if (const std::optional<engine::AssetReference> loaded = assets.ReferenceFor(handle)) {
-        return QString::fromStdString(loaded->path);
-    }
-    return QObject::tr("None");
+        const std::optional<engine::AssetReference> used =
+            usedAsset(engine.GetSceneAssets(), renderer->*reference, renderer->*handle);
+        std::string key = used ? used->id.ToString() + '\n' + used->path : std::string("none");
+        if (key == *shown) {
+            return;
+        }
+        *shown = std::move(key);
+        const QSignalBlocker blocker(picker);
+        if (used) {
+            if (picker->selectId(used->id)) {
+                return;
+            }
+            picker->reload();  // it may have been imported since the list was read
+            if (picker->selectId(used->id)) {
+                return;
+            }
+        }
+        picker->setCurrentIndex(-1);
+        picker->lineEdit()->setPlaceholderText(
+            used ? QObject::tr("%1 (missing)").arg(QString::fromStdString(used->path.empty() ? used->id.ToString() : used->path))
+                 : QObject::tr("None"));
+    });
 }
 
 void buildMeshRenderer(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
-    engine::Scene& scene = context.scene();
-    engine::Engine& engine = context.engine();
-    form.addText(QObject::tr("Mesh"), [&scene, &engine, entity] {
-        const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity);
-        return renderer != nullptr ? assetText(engine.GetSceneAssets(), renderer->meshReference, renderer->mesh,
-                                               engine::CatalogAssetKind::Mesh)
-                                   : QString();
-    });
-    form.addText(QObject::tr("Material"), [&scene, &engine, entity] {
-        const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity);
-        return renderer != nullptr
-                   ? assetText(engine.GetSceneAssets(), renderer->materialReference, renderer->materialInstance,
-                               engine::CatalogAssetKind::MaterialInstance)
-                   : QString();
-    });
+    addAssetSlot(form, context, entity, QObject::tr("Mesh"), engine::CatalogAssetKind::Mesh,
+                 &engine::MeshRenderer::meshReference, &engine::MeshRenderer::mesh, &engine::AssetSystem::RequestMesh);
+    addAssetSlot(form, context, entity, QObject::tr("Material"), engine::CatalogAssetKind::MaterialInstance,
+                 &engine::MeshRenderer::materialReference, &engine::MeshRenderer::materialInstance,
+                 &engine::AssetSystem::RequestMaterialInstance);
 }
 
 void buildCamera(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
