@@ -168,10 +168,10 @@ namespace engine {
             return false;
         }
 
-        std::string source(
+        std::string source{
             std::istreambuf_iterator<char>(file),
             std::istreambuf_iterator<char>()
-        );
+        };
 
         if (file.bad()) {
             SetError(

@@ -4,6 +4,16 @@ add_executable(input_tests input_tests.cpp)
 target_link_libraries(input_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(input_tests)
 set_target_properties(input_tests PROPERTIES FOLDER tests)
+add_executable(lua_runtime_tests lua_runtime_tests.cpp)
+target_link_libraries(lua_runtime_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
+set_project_warnings(lua_runtime_tests)
+set_target_properties(lua_runtime_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET lua_runtime_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:lua_runtime_tests> $<TARGET_FILE_DIR:lua_runtime_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME lua_runtime_tests COMMAND lua_runtime_tests)
 
 add_executable(asset_catalog_tests asset_catalog_tests.cpp)
 target_link_libraries(asset_catalog_tests PRIVATE Engine::EngineStatic GTest::gtest_main)

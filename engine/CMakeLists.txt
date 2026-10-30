@@ -51,6 +51,7 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/rendering/resources/VertexLayoutCache.hpp
     include/engine/rendering/UglyUtils.hpp
     include/engine/window.hpp
+    include/engine/scripting/LuaRuntime.hpp
 )
 
 set(ENGINE_SOURCES
@@ -80,6 +81,7 @@ set(ENGINE_SOURCES
     src/rendering/resources/VertexLayoutCache.cpp
     src/rendering/UglyUtils.cpp
     src/window.cpp
+    src/scripting/LuaRuntime.cpp
 )
 
 set(ENGINE_SHADERS
