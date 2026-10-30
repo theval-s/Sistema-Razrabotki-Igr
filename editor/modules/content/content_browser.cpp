@@ -48,13 +48,13 @@
 #include <engine/engine.hpp>
 #include <engine/project/Project.hpp>
 
+#include <editor/asset_icons.hpp>
 #include <editor/editor_context.hpp>
 #include <editor/paths.hpp>
 #include <editor/scene_document.hpp>
 
 #include "asset_dialogs.hpp"
 #include "asset_filter_model.hpp"
-#include "asset_icons.hpp"
 #include "scene_placement.hpp"
 
 namespace content {
@@ -301,7 +301,7 @@ QWidget* ContentBrowser::buildTopBar() {
     kind_ = new QComboBox;
     kind_->addItem(tr("All types"), -1);
     for (const engine::CatalogAssetKind kind : FilterKinds) {
-        kind_->addItem(assetIcon(kind), assetKindName(kind), static_cast<int>(kind));
+        kind_->addItem(editor::assetIcon(kind), editor::assetKindName(kind), static_cast<int>(kind));
     }
     connect(kind_, &QComboBox::currentIndexChanged, this, &ContentBrowser::applyFilters);
     layout->addWidget(kind_);
@@ -400,11 +400,11 @@ void ContentBrowser::buildActions() {
     new_menu_->addAction(style()->standardIcon(QStyle::SP_DirIcon), tr("Folder"), this,
                          [this] { newFolder(root_, folder_); });
     new_menu_->addSeparator();
-    new_menu_->addAction(assetIcon(engine::CatalogAssetKind::Material), tr("Material..."), this,
+    new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::Material), tr("Material..."), this,
                          &ContentBrowser::newMaterial);
-    new_menu_->addAction(assetIcon(engine::CatalogAssetKind::MaterialInstance), tr("Material Instance..."), this,
+    new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::MaterialInstance), tr("Material Instance..."), this,
                          [this] { newMaterialInstance(); });
-    new_menu_->addAction(assetIcon(engine::CatalogAssetKind::Scene), tr("Scene..."), this,
+    new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::Scene), tr("Scene..."), this,
                          &ContentBrowser::newScene);
     new_button_->setMenu(new_menu_.get());
 }

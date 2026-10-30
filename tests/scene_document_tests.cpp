@@ -5,6 +5,7 @@
 #include <engine/assets/AssetCatalog.hpp>
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -313,6 +314,31 @@ TEST(SceneDocument, CompactTypedIdsPreserveCanonicalJsonAndZeroEntityId) {
     ASSERT_TRUE(engine::ParseSceneDocument(json, parsed, error)) << error;
     EXPECT_EQ(parsed.entities[0].id, *id);
     EXPECT_EQ(parsed.activeCamera, id);
+}
+
+TEST(SceneDocument, ListsComponentTypesOfAnEntity) {
+    engine::Scene scene;
+    const auto entity = scene.CreateEntity("Light");
+    const auto other = scene.CreateEntity("Camera");
+    ASSERT_NE(scene.AddComponent<engine::PointLight>(entity), nullptr);
+    ASSERT_NE(scene.AddComponent<engine::Camera>(other), nullptr);
+    auto has = [&](entt::entity e, entt::id_type id) {
+        const auto types = scene.GetComponentTypes(e);
+        return std::any_of(types.begin(), types.end(), [id](const auto& type) { return type.id == id; });
+    };
+    for (const entt::id_type required : {entt::type_hash<engine::Name>::value(), entt::type_hash<engine::Tags>::value(),
+                                         entt::type_hash<engine::Transform>::value(),
+                                         entt::type_hash<engine::Hierarchy>::value(),
+                                         entt::type_hash<engine::EntityId>::value()}) {
+        EXPECT_TRUE(has(entity, required));
+    }
+    EXPECT_TRUE(has(entity, entt::type_hash<engine::PointLight>::value()));
+    EXPECT_FALSE(has(entity, entt::type_hash<engine::Camera>::value()));
+    EXPECT_EQ(scene.GetComponentTypes(entity).size(), 6u);
+    EXPECT_TRUE(scene.RemoveComponent<engine::PointLight>(entity));
+    EXPECT_FALSE(has(entity, entt::type_hash<engine::PointLight>::value()));
+    scene.DestroyEntity(entity);
+    EXPECT_TRUE(scene.GetComponentTypes(entity).empty());
 }
 
 TEST(SceneDocument, CodeOnlySaveLoadAndMalformedFilePreservesScene) {

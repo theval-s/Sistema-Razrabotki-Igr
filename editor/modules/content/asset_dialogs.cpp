@@ -26,9 +26,9 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/core/FileSystem.hpp>
 
+#include <editor/asset_picker.hpp>
 #include <editor/paths.hpp>
 
-#include "asset_picker.hpp"
 
 namespace content {
 
@@ -248,7 +248,7 @@ ImportModelDialog::ImportModelDialog(const engine::AssetCatalog& catalog, const 
     instance_->setChecked(true);
     instance_->setToolTip(tr("For mesh renderers: the base material with the texture as its albedo"));
     connect(instance_, &QGroupBox::toggled, this, &ImportModelDialog::validate);
-    material_ = new AssetPicker(catalog, engine::CatalogAssetKind::Material);
+    material_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Material);
     material_->selectPath(DefaultMaterial);
     auto* instance_form = new QFormLayout(instance_);
     instance_form->addRow(tr("Material"), material_);
@@ -288,10 +288,10 @@ MaterialInstanceDialog::MaterialInstanceDialog(const engine::AssetCatalog& catal
                                                const QString& name, QWidget* parent)
     : NewAssetDialog(tr("New Material Instance"), folder, QStringLiteral(".material-instance.json"), name, parent),
       catalog_(catalog) {
-    material_ = new AssetPicker(catalog, engine::CatalogAssetKind::Material);
+    material_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Material);
     material_->selectPath(DefaultMaterial);
     form()->addRow(tr("Material"), material_);
-    albedo_ = new AssetPicker(catalog, engine::CatalogAssetKind::Texture, tr("(the material's)"));
+    albedo_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Texture, tr("(the material's)"));
     form()->addRow(tr("Albedo texture"), albedo_);
 
     // Unchecked parameters come from the material, and show its values.
@@ -369,7 +369,7 @@ void MaterialInstanceDialog::showInherited() {
 MaterialDialog::MaterialDialog(const engine::AssetCatalog& catalog, const QString& folder, const QString& name,
                                QWidget* parent)
     : NewAssetDialog(tr("New Material"), folder, QStringLiteral(".material.json"), name, parent) {
-    shader_ = new AssetPicker(catalog, engine::CatalogAssetKind::Shader, tr("(standard shading)"));
+    shader_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Shader, tr("(standard shading)"));
     form()->addRow(tr("Shader"), shader_);
     // The functions a shader defines to patch the standard passes (MaterialDesc).
     gbuffer_vs_ = new QCheckBox(QStringLiteral("GBufferVS"));
@@ -386,7 +386,7 @@ MaterialDialog::MaterialDialog(const engine::AssetCatalog& catalog, const QStrin
     hooks->addStretch();
     form()->addRow(tr("Hooks"), hooks);
 
-    albedo_ = new AssetPicker(catalog, engine::CatalogAssetKind::Texture, tr("(none)"));
+    albedo_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Texture, tr("(none)"));
     albedo_->selectPath(WhiteTexture);
     form()->addRow(tr("Albedo texture"), albedo_);
     const engine::MaterialPBRParameters defaults;

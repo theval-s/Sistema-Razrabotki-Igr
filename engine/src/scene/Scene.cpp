@@ -449,6 +449,17 @@ entt::entity Scene::GetDirectionalLight() const {
     return HasComponent<DirectionalLight>(entity) ? entity : FirstWith<DirectionalLight>();
 }
 
+std::vector<Scene::ComponentType> Scene::GetComponentTypes(const entt::entity entity) const {
+    // is only called from editor (at least now) so this should be fine
+    // but maybe there is a more optimized way
+    std::vector<ComponentType> types;
+    if (!IsValid(entity)) return types;
+    for (const auto [id, storage] : registry_.storage()) {
+        if (storage.contains(entity)) types.push_back({id, storage.info().name()});
+    }
+    return types;
+}
+
 const std::string& Scene::GetName(const entt::entity entity) const {
     if (!CheckEntity(entity, "GetName")) {
         static const std::string empty;

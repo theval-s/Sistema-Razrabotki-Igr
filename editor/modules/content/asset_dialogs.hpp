@@ -17,9 +17,12 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 
+namespace editor {
+class AssetPicker;
+}
+
 namespace content {
 
-class AssetPicker;
 class ColorButton;
 
 /// File dialog filter for images that import as textures.
@@ -76,7 +79,7 @@ private:
     QCheckBox* center_ = nullptr;
     QLineEdit* texture_ = nullptr;
     QGroupBox* instance_ = nullptr;
-    AssetPicker* material_ = nullptr;
+    editor::AssetPicker* material_ = nullptr;
 };
 
 /// A material instance: a base material and the parameters it overrides.
@@ -99,8 +102,8 @@ private:
     void showInherited();
 
     const engine::AssetCatalog& catalog_;
-    AssetPicker* material_ = nullptr;
-    AssetPicker* albedo_ = nullptr;
+    editor::AssetPicker* material_ = nullptr;
+    editor::AssetPicker* albedo_ = nullptr;
     QCheckBox* override_specular_ = nullptr;
     ColorButton* specular_ = nullptr;
     QCheckBox* override_shininess_ = nullptr;
@@ -121,11 +124,11 @@ protected:
     [[nodiscard]] QString problem() const override;
 
 private:
-    AssetPicker* shader_ = nullptr;
+    editor::AssetPicker* shader_ = nullptr;
     QCheckBox* gbuffer_vs_ = nullptr;
     QCheckBox* gbuffer_ps_ = nullptr;
     QCheckBox* shadow_vs_ = nullptr;
-    AssetPicker* albedo_ = nullptr;
+    editor::AssetPicker* albedo_ = nullptr;
     ColorButton* specular_ = nullptr;
     QDoubleSpinBox* shininess_ = nullptr;
 };

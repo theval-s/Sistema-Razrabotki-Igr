@@ -1,22 +1,17 @@
-#include "asset_picker.hpp"
+#include <editor/asset_picker.hpp>
 
 #include <QCompleter>
 #include <QLineEdit>
+#include <QSignalBlocker>
 
-#include "asset_icons.hpp"
+#include <editor/asset_icons.hpp>
 
-namespace content {
+namespace editor {
 
 AssetPicker::AssetPicker(const engine::AssetCatalog& catalog, const engine::CatalogAssetKind kind,
                          const QString& none, QWidget* parent)
-    : QComboBox(parent) {
-    if (!none.isEmpty()) {
-        addItem(none);
-    }
-    const QIcon icon = assetIcon(kind);
-    for (const engine::CatalogEntry* entry : catalog.List(kind)) {
-        addItem(icon, QString::fromStdString(entry->path), QString::fromStdString(entry->metadata.id.ToString()));
-    }
+    : QComboBox(parent), catalog_(catalog), kind_(kind), none_(none) {
+    populate();
 
     // Every path starts with game/ or engine/, so plain type-ahead wouldn't get far: match anywhere.
     setEditable(true);
@@ -53,4 +48,41 @@ bool AssetPicker::selectPath(const QString& path) {
     return true;
 }
 
-}  // namespace content
+bool AssetPicker::selectId(const engine::AssetUuid& id) {
+    const int index = findData(QString::fromStdString(id.ToString()));
+    if (index < 0) {
+        return false;
+    }
+    setCurrentIndex(index);
+    return true;
+}
+
+void AssetPicker::reload() {
+    const int previous = currentIndex();
+    const QString chosen = currentData().toString();
+    const QSignalBlocker blocker(this);
+    clear();
+    populate();
+    if (!chosen.isEmpty()) {
+        setCurrentIndex(findData(chosen));  // -1 if it's gone
+    } else {
+        setCurrentIndex(previous < count() ? previous : -1);  // the "none" entry, or nothing
+    }
+}
+
+void AssetPicker::showPopup() {
+    reload();
+    QComboBox::showPopup();
+}
+
+void AssetPicker::populate() {
+    if (!none_.isEmpty()) {
+        addItem(none_);
+    }
+    const QIcon icon = assetIcon(kind_);
+    for (const engine::CatalogEntry* entry : catalog_.List(kind_)) {
+        addItem(icon, QString::fromStdString(entry->path), QString::fromStdString(entry->metadata.id.ToString()));
+    }
+}
+
+}  // namespace editor
