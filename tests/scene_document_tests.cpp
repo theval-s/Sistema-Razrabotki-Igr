@@ -218,6 +218,39 @@ TEST(SceneDocument, RoundTripAndStructuralValidation) {
     EXPECT_NE(error.find("duplicate"), std::string::npos);
 }
 
+TEST(SceneDocument, LocalLightsRoundTripAndValidateSpotAngles) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    const auto point = scene.CreateEntity("Point");
+    const auto spot = scene.CreateEntity("Spot");
+    scene.GetTransform(spot).position = {1, 2, 3};
+    ASSERT_NE(scene.AddComponent<engine::PointLight>(point,
+        engine::PointLight{{0.2f, 0.4f, 0.6f}, 3.0f, 4.0f}), nullptr);
+    ASSERT_NE(scene.AddComponent<engine::SpotLight>(spot,
+        engine::SpotLight{{0.8f, 0.1f, 0.3f}, 7.0f, 9.0f, 0.2f, 0.5f}), nullptr);
+    engine::SceneDocument captured;
+    std::string json, error;
+    ASSERT_TRUE(engine::CaptureSceneDocument(scene, host.GetSceneAssets(), captured, error)) << error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(captured, json, error)) << error;
+    engine::SceneDocument decoded;
+    ASSERT_TRUE(engine::ParseSceneDocument(json, decoded, error)) << error;
+    engine::Scene restored;
+    engine::PopulateScene(decoded, host.GetSceneAssets(), restored);
+    const auto* restoredPoint = restored.TryGetComponent<engine::PointLight>(restored.FindById(scene.GetId(point)));
+    const auto* restoredSpot = restored.TryGetComponent<engine::SpotLight>(restored.FindById(scene.GetId(spot)));
+    ASSERT_NE(restoredPoint, nullptr);
+    ASSERT_NE(restoredSpot, nullptr);
+    EXPECT_FLOAT_EQ(restoredPoint->range, 4.0f);
+    EXPECT_FLOAT_EQ(restoredPoint->color.y, 0.4f);
+    EXPECT_FLOAT_EQ(restoredSpot->innerHalfAngle, 0.2f);
+    EXPECT_FLOAT_EQ(restoredSpot->outerHalfAngle, 0.5f);
+    EXPECT_FLOAT_EQ(restored.GetTransform(restored.FindById(scene.GetId(spot))).position.y, 2.0f);
+
+    decoded.entities[1].spotLight->innerHalfAngle = 0.5f;
+    EXPECT_FALSE(engine::SerializeSceneDocument(decoded, json, error));
+    EXPECT_NE(error.find("half angles"), std::string::npos);
+}
+
 TEST(SceneDocument, RejectsUnknownComponentsAndPreservesOutputOnFailure) {
     engine::SceneDocument scene;
     const std::string invalid = R"({"version":1,"entities":[{"id":"invalid","name":"x","components":{}}]})";
@@ -315,6 +348,19 @@ TEST(SceneDocument, ExampleGameSceneResolvesAllAssetReferences) {
     engine::SceneDocument document;
     std::string error;
     ASSERT_TRUE(engine::ParseSceneDocument(text, document, error)) << error;
+    std::size_t pointLights = 0, spotLights = 0, animatedLights = 0;
+    for (const auto& entity : document.entities) {
+        pointLights += entity.pointLight.has_value();
+        spotLights += entity.spotLight.has_value();
+        if (entity.pointLight || entity.spotLight) {
+            ASSERT_TRUE(entity.controller.has_value()) << entity.name;
+            EXPECT_EQ(entity.controller->type, "example/light-motion");
+            ++animatedLights;
+        }
+    }
+    EXPECT_EQ(pointLights, 2u);
+    EXPECT_EQ(spotLights, 2u);
+    EXPECT_EQ(animatedLights, 4u);
     engine::AssetCatalog catalog;
     ASSERT_TRUE(catalog.Scan(root / "example_game", root / "engine", error)) << error;
     for (const auto& entity : document.entities) {

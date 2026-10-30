@@ -5,10 +5,16 @@
 #include <QMenuBar>
 #include <QToolBar>
 
+#include <algorithm>
+
+#include <DockAreaWidget.h>
 #include <DockManager.h>
 #include <DockWidget.h>
 
 #include <engine/engine.hpp>
+
+#include <editor/editor_camera.hpp>
+#include <editor/scene_document.hpp>
 
 namespace editor {
 
@@ -33,7 +39,8 @@ ads::DockWidgetArea toAdsArea(const Qt::DockWidgetArea area) {
 /// Context to pass to Modules instead of passing the whole editor to them
 EditorContext::EditorContext(engine::Engine& engine, const engine::Project& project, QMainWindow& window,
                              ads::CDockManager& dock_manager)
-    : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager), selection_(engine.GetScene()) {}
+    : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager), selection_(engine.GetScene()),
+      scene_document_(std::make_unique<SceneDocument>(engine, project, selection_)) {}
 
 EditorContext::~EditorContext() {
     // Panels would otherwise die with the dock manager, after the engine they show.
@@ -62,6 +69,15 @@ Selection& EditorContext::selection() noexcept {
     return selection_;
 }
 
+SceneDocument& EditorContext::sceneDocument() noexcept {
+    return *scene_document_;
+}
+
+EditorCameraSubsystem* EditorContext::camera() noexcept {
+    // MainWindow registers it when it starts the engine.
+    return engine_.GetSubsystem<EditorCameraSubsystem>();
+}
+
 QMenu* EditorContext::menu(const QString& title) {
     const auto plain = [](QString text) { return text.remove(QLatin1Char('&')); };
     for (QAction* action : window_.menuBar()->actions()) {
@@ -86,16 +102,25 @@ void EditorContext::addPanel(const QString& id, const QString& title, QWidget* w
     dock->setObjectName(id);
     // Panels manage their own scrolling (lists, text views).
     dock->setWidget(widget, ads::CDockWidget::ForceNoScrollArea);
-    dock_manager_.addDockWidget(toAdsArea(area), dock);
+    dock_manager_.addDockWidgetTab(toAdsArea(area), dock);
     menu(QObject::tr("&View"))->addAction(dock->toggleViewAction());
     panels_.push_back({dock, area});
 }
 
 void EditorContext::placeNewPanels() {
+    const auto placed = [](const Panel& panel) { return panel.dock != nullptr && panel.dock->dockAreaWidget() != nullptr; };
     for (const Panel& panel : panels_) {
-        // Panels in the saved layout have an area even when closed; the unknown ones have none.
-        if (panel.dock != nullptr && panel.dock->dockAreaWidget() == nullptr) {
-            dock_manager_.addDockWidget(toAdsArea(panel.area), panel.dock);
+        if (panel.dock == nullptr || placed(panel)) {
+            continue;
+        }
+        // The restored layout doesn't tell ADS which areas count as bottom, left...
+        const auto sibling = std::ranges::find_if(panels_, [&](const Panel& other) {
+            return other.area == panel.area && placed(other);
+        });
+        if (sibling != panels_.end()) {
+            dock_manager_.addDockWidgetTabToArea(panel.dock, sibling->dock->dockAreaWidget());
+        } else {
+            dock_manager_.addDockWidgetTab(toAdsArea(panel.area), panel.dock);
         }
     }
 }

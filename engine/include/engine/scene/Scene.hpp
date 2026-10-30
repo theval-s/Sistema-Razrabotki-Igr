@@ -184,7 +184,8 @@ private:
                                                  std::is_same_v<T, Tags>;
     template <class T>
     static constexpr bool IsSerializableComponent = std::is_same_v<T, MeshRenderer> ||
-        std::is_same_v<T, Camera> || std::is_same_v<T, DirectionalLight> || std::is_same_v<T, Bounds> ||
+        std::is_same_v<T, Camera> || std::is_same_v<T, DirectionalLight> ||
+        std::is_same_v<T, PointLight> || std::is_same_v<T, SpotLight> || std::is_same_v<T, Bounds> ||
         std::is_same_v<T, GamePersistence>;
     /// Logs and returns false for an invalid entity. `caller` names the public function.
     [[nodiscard]] bool CheckEntity(entt::entity entity, std::string_view caller) const;

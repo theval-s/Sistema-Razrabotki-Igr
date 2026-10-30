@@ -20,13 +20,11 @@ qt_standard_project_setup()
 add_subdirectory(core)
 
 qt_add_executable(editor
-    src/editor_camera.cpp
     src/main.cpp
     src/main_window.cpp
     src/module_loader.cpp
     src/project_dialog.cpp
     src/viewport_widget.cpp
-    include/editor/editor_camera.hpp
     include/editor/main_window.hpp
     include/editor/module_loader.hpp
     include/editor/project_dialog.hpp
@@ -127,6 +125,7 @@ function(sri_add_editor_module name)
 endfunction()
 
 add_subdirectory(modules/scene)
+add_subdirectory(modules/content)
 
 # --- Install / deploy ------------------------------------------------------
 
@@ -152,6 +151,7 @@ set(QT_DEPLOY_LIB_DIR .)
 qt_deploy_runtime_dependencies(
     EXECUTABLE \"$<TARGET_FILE:editor>\"
     GENERATE_QT_CONF
+    DEPLOY_TOOL_OPTIONS --no-opengl-sw
 )
 ")
 install(SCRIPT ${deploy_script} COMPONENT editor)

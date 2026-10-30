@@ -22,6 +22,7 @@ class sink;
 
 namespace editor {
 
+class EditorCameraSubsystem;
 class EditorContext;
 class ModuleLoader;
 class ViewportWidget;
@@ -45,7 +46,13 @@ private slots:
 private:
     void buildMenus();
     void buildLogDock();
+    /// Opens the project's startup scene, or builds an untitled one if it has none.
+    void openStartupScene();
     void setupDefaultScene();
+    /// Scene name and unsaved-changes mark.
+    void refreshTitle();
+    /// Remembers a saved scene as the project's startup scene if it has none yet.
+    void adoptStartupScene();
     void restoreLayout();
     void refreshStatus();
     void appendLog(const QString& level, const QString& text);
@@ -62,6 +69,7 @@ private:
 
     ads::CDockManager* dock_manager_ = nullptr;
     ViewportWidget* viewport_ = nullptr;
+    EditorCameraSubsystem* camera_ = nullptr;
     QPlainTextEdit* log_view_ = nullptr;
     QLabel* status_label_ = nullptr;
     QTimer* tick_timer_ = nullptr;

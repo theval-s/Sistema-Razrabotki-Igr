@@ -17,8 +17,82 @@
       "name": "Ground",
       "parent": null,
       "components": {
-        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-        "Bounds": { "min": [-15, -0.01, -15], "max": [15, 0.01, 15] }
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [30, 1, 30] },
+        "MeshRenderer": {
+          "mesh": { "id": "96002d7a-ba76-4a0b-a5b9-60dc10b86cd2", "path": "engine/primitives/plane/model.obj" },
+          "materialInstance": { "id": "966cd1ab-72b2-46dc-84dc-8e81b984a0ac", "path": "game/materials/ground.material-instance.json" }
+        },
+        "Bounds": { "min": [-0.5, -0.01, -0.5], "max": [0.5, 0.01, 0.5] }
+      }
+    },
+    {
+      "id": "e862521f-5ad3-4942-bbd6-aa8dbddae52e",
+      "name": "Enchanted cube",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 3.8, 0], "rotation": [0, 0, 0, 1], "scale": [1.6, 1.6, 1.6] },
+        "MeshRenderer": {
+          "mesh": { "id": "a1051591-1cee-4520-a41d-0b282d7103b4", "path": "engine/primitives/cube/model.obj" },
+          "materialInstance": { "id": "b9e1fbd1-dfa0-416b-857e-8823b736da81", "path": "game/materials/enchanted.material-instance.json" }
+        }
+      }
+    },
+    {
+      "id": "3b93eafd-a888-4720-be22-77c5ea028bca",
+      "name": "Orange light marker",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [4, 2.2, 0], "rotation": [0, 0, 0, 1], "scale": [0.15, 0.15, 0.15] },
+        "MeshRenderer": {
+          "mesh": { "id": "827c0a87-e35b-4b10-9387-ad36433de1ce", "path": "game/models/LightMarker/model.obj" },
+          "materialInstance": { "id": "68b68b7c-3d3f-474e-90b4-30b61e11993f", "path": "game/materials/marker-orange.material-instance.json" }
+        },
+        "PointLight": { "color": [1, 0.25, 0.08], "intensity": 5, "range": 5.5 },
+        "Controller": { "type": "example/light-motion", "version": 1, "enabled": true, "data": "orange" }
+      }
+    },
+    {
+      "id": "16f57ae5-08c2-4f75-a8c7-4f8e2f4199f3",
+      "name": "Blue light marker",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [-3, 1.4, 0], "rotation": [0, 0, 0, 1], "scale": [0.15, 0.15, 0.15] },
+        "MeshRenderer": {
+          "mesh": { "id": "827c0a87-e35b-4b10-9387-ad36433de1ce", "path": "game/models/LightMarker/model.obj" },
+          "materialInstance": { "id": "42087f87-43ce-4655-bf85-299f2c522166", "path": "game/materials/marker-blue.material-instance.json" }
+        },
+        "PointLight": { "color": [0.08, 0.35, 1], "intensity": 4, "range": 4.5 },
+        "Controller": { "type": "example/light-motion", "version": 1, "enabled": true, "data": "blue" }
+      }
+    },
+    {
+      "id": "19296f46-7d6f-4258-af35-b41c0373017e",
+      "name": "Green light marker",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 6, 0], "rotation": [0, 0.9013032, 0.4331887, 0], "scale": [0.15, 0.15, 0.15] },
+        "MeshRenderer": {
+          "mesh": { "id": "827c0a87-e35b-4b10-9387-ad36433de1ce", "path": "game/models/LightMarker/model.obj" },
+          "materialInstance": { "id": "f6f25002-423b-4a27-bb38-578c648e0680", "path": "game/materials/marker-green.material-instance.json" }
+        },
+        "SpotLight": { "color": [0.2, 1, 0.35], "intensity": 7, "range": 10,
+                       "innerHalfAngle": 0.2617993877991494, "outerHalfAngle": 0.4487989505128276 },
+        "Controller": { "type": "example/light-motion", "version": 1, "enabled": true, "data": "green" }
+      }
+    },
+    {
+      "id": "cafddd9c-1fe2-4492-8367-637f90ea291f",
+      "name": "Magenta light marker",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [5, 4.5, 0], "rotation": [-0.2533307, 0.6601693, 0.2533307, 0.6601693], "scale": [0.15, 0.15, 0.15] },
+        "MeshRenderer": {
+          "mesh": { "id": "827c0a87-e35b-4b10-9387-ad36433de1ce", "path": "game/models/LightMarker/model.obj" },
+          "materialInstance": { "id": "ddfddec7-9b8a-4ed1-b500-f6beb1bf53ac", "path": "game/materials/marker-magenta.material-instance.json" }
+        },
+        "SpotLight": { "color": [0.85, 0.15, 1], "intensity": 6, "range": 8,
+                       "innerHalfAngle": 0.3141592653589793, "outerHalfAngle": 0.5235987755982988 },
+        "Controller": { "type": "example/light-motion", "version": 1, "enabled": true, "data": "magenta" }
       }
     },
     {

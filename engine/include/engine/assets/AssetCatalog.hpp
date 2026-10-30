@@ -93,6 +93,8 @@ public:
     [[nodiscard]] const CatalogEntry* Find(const AssetUuid& uuid, CatalogAssetKind kind) const;
     [[nodiscard]] const CatalogEntry* Find(const AssetUuid& uuid) const;
     [[nodiscard]] const CatalogEntry* FindPath(std::string_view logicalPath) const;
+    /// Every entry of `kind`, sorted by path. The pointers stay valid until the next Scan().
+    [[nodiscard]] std::vector<const CatalogEntry*> List(CatalogAssetKind kind) const;
     [[nodiscard]] std::size_t Size() const noexcept { return entries_.size(); }
 
 private:

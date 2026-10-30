@@ -22,14 +22,9 @@ struct LightInfo {
 
     enum LightType : uint32_t { Directional = 0, Point = 1, Spot = 2 } type;
 
-    union {
-        struct {
-            float innerAngle;
-            float outerAngle;
-            float range;
-            MeshHandle boundingBox;
-        } spotLight;
-    } lightParameters;
+    // Cosines of the authored spot half angles; only used for spot lights.
+    float spotInnerAngle = 0.0f;
+    float spotOuterAngle = 0.0f;
 };
 
 struct RenderItem {
@@ -44,6 +39,7 @@ struct RenderWorld {
     // Scene extraction replaces only this list. Host-owned procedural draw
     // items may coexist without being claimed by the active scene asset scope.
     std::vector<RenderItem> sceneItems;
+    // Rebuilt from scene light components by RenderExtractionSubsystem.
     std::vector<LightInfo> lights;
     LightInfo directionalLight; //as for now only one dir light allowed
 

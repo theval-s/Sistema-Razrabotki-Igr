@@ -4,7 +4,8 @@
 #pragma pack_matrix(row_major)
 
 struct EngineFrameData {
-    float4 unusedForNow; //todo
+    float simulationTimeSeconds;
+    float3 padding;
 };
 
 cbuffer EngineFrame : register(b0) {

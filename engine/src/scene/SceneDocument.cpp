@@ -82,7 +82,7 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
     }
     if (j.contains("parent")) entity.parent = OptionalId(j.at("parent"));
     const auto& components = j.at("components");
-    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "Controller", "Bounds", "GamePersistence"});
+    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence"});
     if (components.contains("GamePersistence")) {
         const auto& persist = components.at("GamePersistence");
         Fields(persist, {"transform", "controllerState"});
@@ -145,6 +145,29 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
             throw std::invalid_argument("negative light color or intensity");
         entity.directionalLight = DirectionalLight{{color[0], color[1], color[2]}, intensity};
     }
+    if (components.contains("PointLight")) {
+        const auto& light = components.at("PointLight");
+        Fields(light, {"color", "intensity", "range"});
+        const auto color = Numbers<3>(light.at("color"));
+        const float intensity = Number(light.at("intensity"));
+        const float range = Number(light.at("range"));
+        if (intensity < 0 || range <= 0 || color[0] < 0 || color[1] < 0 || color[2] < 0)
+            throw std::invalid_argument("invalid point light color, intensity or range");
+        entity.pointLight = PointLight{{color[0], color[1], color[2]}, intensity, range};
+    }
+    if (components.contains("SpotLight")) {
+        const auto& light = components.at("SpotLight");
+        Fields(light, {"color", "intensity", "range", "innerHalfAngle", "outerHalfAngle"});
+        const auto color = Numbers<3>(light.at("color"));
+        const float intensity = Number(light.at("intensity"));
+        const float range = Number(light.at("range"));
+        const float inner = Number(light.at("innerHalfAngle"));
+        const float outer = Number(light.at("outerHalfAngle"));
+        if (intensity < 0 || range <= 0 || color[0] < 0 || color[1] < 0 || color[2] < 0 ||
+            inner < 0 || inner >= outer || outer >= 1.57079632679f)
+            throw std::invalid_argument("invalid spot light color, intensity, range or half angles");
+        entity.spotLight = SpotLight{{color[0], color[1], color[2]}, intensity, range, inner, outer};
+    }
     return entity;
 }
 
@@ -203,6 +226,14 @@ Json Encode(const SceneDocument& document) {
         if (entity.directionalLight)
             components["DirectionalLight"] = {{"color", Encode(entity.directionalLight->color)},
                                                 {"intensity", entity.directionalLight->intensity}};
+        if (entity.pointLight)
+            components["PointLight"] = {{"color", Encode(entity.pointLight->color)},
+                                         {"intensity", entity.pointLight->intensity}, {"range", entity.pointLight->range}};
+        if (entity.spotLight)
+            components["SpotLight"] = {{"color", Encode(entity.spotLight->color)},
+                                        {"intensity", entity.spotLight->intensity}, {"range", entity.spotLight->range},
+                                        {"innerHalfAngle", entity.spotLight->innerHalfAngle},
+                                        {"outerHalfAngle", entity.spotLight->outerHalfAngle}};
         if (entity.controller)
             components["Controller"] = {{"type", entity.controller->type}, {"version", entity.controller->version},
                                          {"enabled", entity.controller->enabled}, {"data", [&] {
@@ -292,6 +323,8 @@ bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDo
             }
             if (const auto* component = scene.TryGetComponent<Camera>(entity)) definition.camera = *component;
             if (const auto* component = scene.TryGetComponent<DirectionalLight>(entity)) definition.directionalLight = *component;
+            if (const auto* component = scene.TryGetComponent<PointLight>(entity)) definition.pointLight = *component;
+            if (const auto* component = scene.TryGetComponent<SpotLight>(entity)) definition.spotLight = *component;
             captured.entities.push_back(std::move(definition));
             for (const auto child : scene.GetChildren(entity)) self(self, child);
         };
@@ -318,6 +351,8 @@ void PopulateScene(const SceneDocument& document, AssetSystem& assets, Scene& de
             definition.renderer->mesh, definition.renderer->materialInstance);
         if (definition.camera) destination.AddComponent<Camera>(entity, *definition.camera);
         if (definition.directionalLight) destination.AddComponent<DirectionalLight>(entity, *definition.directionalLight);
+        if (definition.pointLight) destination.AddComponent<PointLight>(entity, *definition.pointLight);
+        if (definition.spotLight) destination.AddComponent<SpotLight>(entity, *definition.spotLight);
         if (definition.bounds) destination.AddComponent<Bounds>(entity, *definition.bounds);
         if (definition.persistence) destination.AddComponent<GamePersistence>(entity, *definition.persistence);
         if (definition.controller) destination.AttachController(entity, *definition.controller);

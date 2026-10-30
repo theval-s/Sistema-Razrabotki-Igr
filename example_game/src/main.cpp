@@ -1,10 +1,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <span>
+#include <memory>
+#include <string>
 #include <string_view>
-#include <utility>
-#include <vector>
 
 #include <windows.h>
 #include <spdlog/spdlog.h>
@@ -12,7 +11,6 @@
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/rendering/RenderExtractionSubsystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
-#include <engine/rendering/UglyUtils.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/core/FrameContext.hpp>
 #include <engine/engine.hpp>
@@ -26,77 +24,9 @@ constexpr uint32_t ScreenHeight = 720;
 constexpr float Pi = 3.14159265358979323846f;
 
 using DirectX::SimpleMath::Matrix;
-using DirectX::SimpleMath::Vector2;
 using DirectX::SimpleMath::Vector3;
-using DirectX::SimpleMath::Vector4;
 
-struct SceneObject {
-    Matrix transform;
-    engine::MeshHandle mesh;
-    engine::MaterialInstanceHandle materialInstance;
-};
-
-struct alignas(16) EnchantmentBufferData {
-    float time;
-    float padding[3]{};
-};
-
-engine::MeshHandle MakeGroundMesh(engine::RenderingResourceManager& resourceManager) {
-    constexpr float extent = 15.0f;
-    constexpr float repetitions = 12.0f;
-    const Vector3 normal = Vector3::Up;
-    engine::ugly_utils::RawMesh mesh{
-        .vertexes = {
-            {Vector4{-extent, 0.0f, extent, 1.0f}, normal, Vector2{0.0f, 0.0f}},
-            {Vector4{extent, 0.0f, extent, 1.0f}, normal, Vector2{repetitions, 0.0f}},
-            {Vector4{extent, 0.0f, -extent, 1.0f}, normal, Vector2{repetitions, repetitions}},
-            {Vector4{-extent, 0.0f, -extent, 1.0f}, normal, Vector2{0.0f, repetitions}}
-        },
-        // Match CreateCube's clockwise front-face convention (viewed from above).
-        .indicies = {0, 2, 1, 2, 0, 3}
-    };
-    return engine::ugly_utils::FromRawMesh(resourceManager, mesh);
-}
-
-engine::TextureHandle MakeCheckerTexture(engine::RenderingResourceManager& resourceManager) {
-    constexpr uint32_t size = 128;
-    constexpr uint32_t cellSize = 16;
-    std::vector<uint32_t> pixels(size * size);
-    for (uint32_t y = 0; y < size; ++y) {
-        for (uint32_t x = 0; x < size; ++x) {
-            const bool bright = ((x / cellSize) + (y / cellSize)) % 2 == 0;
-            pixels[y * size + x] = bright ? 0xff70766fu : 0xff343a36u;
-        }
-    }
-
-    const D3D11_SUBRESOURCE_DATA data{
-        .pSysMem = pixels.data(),
-        .SysMemPitch = size * static_cast<uint32_t>(sizeof(uint32_t)),
-        .SysMemSlicePitch = 0
-    };
-    const engine::TextureDesc description{
-        .width = size,
-        .height = size,
-        .format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
-        .usage = engine::TextureUsage::ShaderResource
-    };
-    return resourceManager.CreateTexture(description, std::span<const D3D11_SUBRESOURCE_DATA>{&data, 1});
-}
-
-engine::TextureHandle MakeSolidTexture(engine::RenderingResourceManager& resourceManager, uint32_t color) {
-    const D3D11_SUBRESOURCE_DATA data{
-        .pSysMem = &color,
-        .SysMemPitch = sizeof(color),
-        .SysMemSlicePitch = 0
-    };
-    const engine::TextureDesc description{
-        .width = 1,
-        .height = 1,
-        .format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
-        .usage = engine::TextureUsage::ShaderResource
-    };
-    return resourceManager.CreateTexture(description, std::span<const D3D11_SUBRESOURCE_DATA>{&data, 1});
-}
+constexpr std::string_view CubeId = "e862521f-5ad3-4942-bbd6-aa8dbddae52e";
 
 bool IsKeyDown(int key) {
     return (GetAsyncKeyState(key) & 0x8000) != 0;
@@ -150,46 +80,63 @@ void UpdateCamera(engine::FPSCamera& camera, HWND window, float deltaTime) {
     }
 }
 
-void FillRenderWorld(engine::RenderWorld& world, const std::vector<SceneObject>& objects) {
-    world.renderItems.clear();
-    world.renderItems.reserve(objects.size());
-    for (const SceneObject& object : objects) {
-        world.renderItems.push_back({
-            .worldMatrix = object.transform,
-            .mesh = object.mesh,
-            .materialInstance = object.materialInstance
-        });
-    }
-}
-
-void UpdateLights(engine::RenderWorld& world, float time) {
-    world.lights[0].position = Vector3{
-        std::cos(time * 0.8f) * 4.0f,
-        2.2f + std::sin(time * 1.7f) * 0.4f,
-        std::sin(time * 0.8f) * 4.0f
-    };
-    world.lights[1].position = Vector3{
-        std::cos(-time * 0.55f) * 3.0f,
-        1.4f,
-        std::sin(-time * 0.55f) * 3.0f
-    };
-    world.lights[1].intensity = 4.0f + std::sin(time * 2.2f) * 1.5f;
-
-    Vector3 sweepingDirection{std::sin(time * 0.7f) * 0.8f, -1.0f, std::cos(time * 0.7f) * 0.8f};
-    sweepingDirection.Normalize();
-    world.lights[2].direction = sweepingDirection;
-
-    world.lights[3].position = Vector3{
-        std::cos(time * 0.45f) * 5.0f,
-        4.5f,
-        std::sin(time * 0.45f) * 5.0f
-    };
-    Vector3 trackingDirection = Vector3::Zero - world.lights[3].position;
-    trackingDirection.Normalize();
-    world.lights[3].direction = trackingDirection;
+void AimLight(engine::Transform& transform, const Vector3& direction) {
+    const float yaw = std::atan2(-direction.x, -direction.z);
+    const float pitch = std::asin((std::clamp)(direction.y, -1.0f, 1.0f));
+    transform.rotation = DirectX::SimpleMath::Quaternion::CreateFromYawPitchRoll(yaw, pitch, 0.0f);
 }
 
 } // namespace
+
+/// Example-only animation; authored mode selects a motion pattern. No game state
+/// is saved for these decorative lights.
+class ExampleLightController final : public engine::Controller {
+public:
+    void LoadAuthored(const engine::StateValue& data) override { mode_ = data.String(); }
+    void Update(double deltaSeconds) override {
+        time_ += static_cast<float>(deltaSeconds);
+        auto& scene = GetScene();
+        auto& transform = scene.GetTransform(GetEntity());
+        if (mode_ == "orange") {
+            transform.position = {
+                std::cos(time_ * 0.8f) * 4.0f,
+                2.2f + std::sin(time_ * 1.7f) * 0.4f,
+                std::sin(time_ * 0.8f) * 4.0f
+            };
+        } else if (mode_ == "blue") {
+            transform.position = {
+                std::cos(-time_ * 0.55f) * 3.0f, 1.4f, std::sin(-time_ * 0.55f) * 3.0f
+            };
+            if (auto* light = scene.TryGetComponent<engine::PointLight>(GetEntity()))
+                light->intensity = 4.0f + std::sin(time_ * 2.2f) * 1.5f;
+        } else if (mode_ == "green") {
+            Vector3 direction{std::sin(time_ * 0.7f) * 0.8f, -1.0f, std::cos(time_ * 0.7f) * 0.8f};
+            direction.Normalize();
+            AimLight(transform, direction);
+        } else if (mode_ == "magenta") {
+            transform.position = {
+                std::cos(time_ * 0.45f) * 5.0f, 4.5f, std::sin(time_ * 0.45f) * 5.0f
+            };
+            Vector3 direction = -transform.position;
+            direction.Normalize();
+            AimLight(transform, direction);
+        }
+    }
+private:
+    std::string mode_;
+    float time_ = 0.0f;
+};
+
+engine::ControllerRegistration LightRegistration() {
+    return {1,
+        [](const engine::StateValue& data, std::string& error) {
+            const auto mode = data.String();
+            if (mode == "orange" || mode == "blue" || mode == "green" || mode == "magenta") return true;
+            error = "unknown light motion mode";
+            return false;
+        },
+        []() -> std::unique_ptr<engine::Controller> { return std::make_unique<ExampleLightController>(); }};
+}
 
 class ExampleMotionController final : public engine::Controller {
 public:
@@ -227,8 +174,8 @@ engine::ControllerRegistration MotionRegistration(bool hammer) {
         }};
 }
 
-/// Host-owned procedural effects, input and animated point/spot lights. File-backed
-/// meshes and materials come from demo.scene.json through RenderExtractionSubsystem.
+/// Input and camera control. Scene controllers animate lights; the renderer
+/// extracts all scene meshes, materials and lights after controller updates.
 class ExampleGameLogic final : public engine::Subsystem {
 public:
     explicit ExampleGameLogic(HWND window) : window_(window) {
@@ -243,7 +190,6 @@ public:
         if (rendering_ == nullptr) {
             return false;
         }
-        auto& resources = rendering_->GetResourceManager();
         auto& world = rendering_->GetWorld();
 
         world.camera = {
@@ -255,111 +201,9 @@ public:
             .pitch = -0.15f,
             .position = Vector3{0.0f, 3.0f, 7.0f}
         };
-        world.directionalLight = {
-            .position = Vector3::Zero,
-            .direction = Vector3{-0.45f, -1.0f, -0.3f},
-            .color = Vector3{1.0f, 0.95f, 0.85f},
-            .intensity = 1.25f,
-            .range = 0.0f,
-            .type = engine::LightInfo::Directional
-        };
-        constexpr float firstSpotOuterHalfAngle = Pi / 7.0f;
-        constexpr float secondSpotOuterHalfAngle = Pi / 6.0f;
-        const engine::MeshHandle firstSpotBoundingBox = engine::ugly_utils::FromRawMesh(
-            resources, engine::ugly_utils::CreateSpotLightBoundingBox(10.0f, firstSpotOuterHalfAngle * 2.0f));
-        const engine::MeshHandle secondSpotBoundingBox = engine::ugly_utils::FromRawMesh(
-            resources, engine::ugly_utils::CreateSpotLightBoundingBox(8.0f, secondSpotOuterHalfAngle * 2.0f));
-        world.lights = {
-            {
-                .position = Vector3{4.0f, 2.2f, 0.0f},
-                .direction = Vector3::Zero,
-                .color = Vector3{1.0f, 0.25f, 0.08f},
-                .intensity = 5.0f,
-                .range = 5.5f,
-                .type = engine::LightInfo::Point
-            },
-            {
-                .position = Vector3{-3.0f, 1.4f, 0.0f},
-                .direction = Vector3::Zero,
-                .color = Vector3{0.08f, 0.35f, 1.0f},
-                .intensity = 4.0f,
-                .range = 4.5f,
-                .type = engine::LightInfo::Point
-            },
-            {
-                .position = Vector3{0.0f, 6.0f, 0.0f},
-                .direction = Vector3{0.0f, -1.0f, 0.0f},
-                .color = Vector3{0.2f, 1.0f, 0.35f},
-                .intensity = 7.0f,
-                .range = 10.0f,
-                .type = engine::LightInfo::Spot,
-                .lightParameters = {
-                    .spotLight = {
-                        .innerAngle = std::cos(Pi / 12.0f),
-                        .outerAngle = std::cos(firstSpotOuterHalfAngle),
-                        .range = 10.0f,
-                        .boundingBox = firstSpotBoundingBox
-                    }
-                }
-            },
-            {
-                .position = Vector3{5.0f, 4.5f, 0.0f},
-                .direction = Vector3{-1.0f, -1.0f, 0.0f},
-                .color = Vector3{0.85f, 0.15f, 1.0f},
-                .intensity = 6.0f,
-                .range = 8.0f,
-                .type = engine::LightInfo::Spot,
-                .lightParameters = {
-                    .spotLight = {
-                        .innerAngle = std::cos(Pi / 10.0f),
-                        .outerAngle = std::cos(secondSpotOuterHalfAngle),
-                        .range = 8.0f,
-                        .boundingBox = secondSpotBoundingBox
-                    }
-                }
-            }
-        };
-
-        groundTexture_ = MakeCheckerTexture(resources);
-        enchantmentBuffer_ = resources.CreateConstantBuffer<EnchantmentBufferData>();
-        lightMarkerMesh_ = engine::ugly_utils::FromRawMesh(
-            resources, engine::ugly_utils::CreateSphere(0.15f));
-        lightMarkerTextures_ = {
-            MakeSolidTexture(resources, 0xff1440ffu),
-            MakeSolidTexture(resources, 0xffff5914u),
-            MakeSolidTexture(resources, 0xff59ff33u),
-            MakeSolidTexture(resources, 0xffff26d9u)
-        };
-        objects_.push_back({
-            .transform = Matrix::Identity,
-            .mesh = MakeGroundMesh(resources),
-            .materialInstance = {}
-        });
-        cubeIndex_ = objects_.size();
-        objects_.push_back({
-            .transform = Matrix::CreateTranslation(0.0f, 3.8f, 0.0f),
-            .mesh = engine::ugly_utils::FromRawMesh(resources, engine::ugly_utils::CreateCube(1.6f, 1.6f, 1.6f)),
-            .materialInstance = {}
-        });
-
-        firstLightMarker_ = objects_.size();
-        for (size_t i = 0; i < lightMarkerTextures_.size(); ++i) {
-            objects_.push_back({
-                .transform = Matrix::Identity,
-                .mesh = lightMarkerMesh_,
-                .materialInstance = {}
-            });
-        }
 
         CaptureMouse(window_);
         return true;
-    }
-
-    void Shutdown() override {
-        auto& resources = rendering_->GetResourceManager();
-        rendering_->GetWorld().renderItems.clear();
-        ReleaseSceneInstances();
-        if (enchantmentBuffer_) resources.DestroyBuffer(enchantmentBuffer_);
     }
 
     void Update(const engine::FrameContext& frame) override {
@@ -389,15 +233,10 @@ public:
             else spdlog::info("Saved game/example.save.json");
         }
         if (GetAsyncKeyState(VK_F9) & 1) {
-            ReleaseSceneInstances();
             std::string error;
             if (!GetEngine().LoadGame("game/example.save.json", error)) spdlog::error("Load game: {}", error);
             else if (!error.empty()) spdlog::warn("Load game: {}", error);
-            RequestSceneMaterials();
         }
-        // LoadScene unloads the scene asset scope. Request procedural materials
-        // only after that initial load (and again after a save-game reload).
-        if (!sceneMaterialsRequested_) RequestSceneMaterials();
         if (GetAsyncKeyState('R') & 1) {
             const Matrix rotation = Matrix::CreateFromYawPitchRoll(world.camera.yaw, world.camera.pitch, 0);
             const Vector3 direction = Vector3::TransformNormal(Vector3::Forward, rotation);
@@ -406,80 +245,17 @@ public:
             if (!hits.empty()) spdlog::info("Ray hit {} at {}", GetEngine().GetScene().GetName(hits[0].entity), hits[0].distance);
         }
         const float time = static_cast<float>(frame.simulationTimeSeconds);
-        if (!objects_[0].materialInstance) objects_[0].materialInstance = MakeInstance(groundInstance_, groundTexture_);
-        if (!objects_[cubeIndex_].materialInstance)
-            objects_[cubeIndex_].materialInstance = MakeInstance(enchantedInstance_, {}, enchantmentBuffer_);
-        for (size_t i = 0; i < lightMarkerTextures_.size(); ++i)
-            if (!objects_[firstLightMarker_ + i].materialInstance)
-                objects_[firstLightMarker_ + i].materialInstance = MakeInstance(markerInstance_, lightMarkerTextures_[i]);
-        rendering_->GetContext().UpdateCBuffer(enchantmentBuffer_, EnchantmentBufferData{time});
-        objects_[cubeIndex_].transform = Matrix::CreateRotationY(time * 0.35f) *
-            Matrix::CreateTranslation(0.0f, 3.8f + 0.16f * std::sin(time * 1.7f), 0.0f);
-
-        UpdateLights(world, time);
-        for (size_t i = 0; i < lightMarkerTextures_.size(); ++i) {
-            objects_[firstLightMarker_ + i].transform =
-                Matrix::CreateTranslation(world.lights[i].position);
+        auto& scene = GetEngine().GetScene();
+        if (const auto cube = scene.FindById(CubeId); cube != entt::null) {
+            auto& transform = scene.GetTransform(cube);
+            transform.rotation = DirectX::SimpleMath::Quaternion::CreateFromYawPitchRoll(time * 0.35f, 0, 0);
+            transform.position.y = 3.8f + 0.16f * std::sin(time * 1.7f);
         }
-        FillRenderWorld(world, objects_);
     }
 
 private:
-    void RequestSceneMaterials() {
-        auto& assets = GetEngine().GetSceneAssets();
-        groundInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"966cd1ab-72b2-46dc-84dc-8e81b984a0ac",
-            "game/materials/ground.material-instance.json"});
-        enchantedInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"b9e1fbd1-dfa0-416b-857e-8823b736da81",
-            "game/materials/enchanted.material-instance.json"});
-        markerInstance_ = assets.RequestMaterialInstance(engine::AssetReference{"70da8a2f-d0b1-40fd-bd45-7ad5e610e855",
-            "game/materials/glossy.material-instance.json"});
-        sceneMaterialsRequested_ = true;
-    }
-
-    void ReleaseSceneInstances() {
-        rendering_->GetWorld().renderItems.clear();
-        auto& resources = rendering_->GetResourceManager();
-        for (const auto instance : instances_) resources.DestroyMaterialInstance(instance);
-        instances_.clear();
-        for (auto& object : objects_) object.materialInstance = {};
-    }
-
-    engine::MaterialInstanceHandle MakeInstance(engine::AssetHandle<engine::MaterialInstanceAsset> asset,
-                                                 engine::TextureHandle texture, engine::BufferHandle customBuffer = {}) {
-        const auto ready = GetEngine().GetSceneAssets().Peek(asset);
-        if (!ready) return {};
-        auto& resources = rendering_->GetResourceManager();
-        const auto* base = resources.TryGetMaterialInstance(ready->instance);
-        if (!base) return {};
-        const auto instance = resources.CreateMaterialInstance(base->material);
-        if (!instance) return {};
-        engine::MaterialParameters params = base->parameters;
-        if (texture) params.albedoTexture = texture;
-        params.customBuffer = customBuffer;
-        if (!resources.SetMaterialInstanceParameters(instance, params)) {
-            resources.DestroyMaterialInstance(instance);
-            return {};
-        }
-        instances_.push_back(instance);
-        return instance;
-    }
-
     HWND window_ = nullptr;
     engine::RenderingSubsystem* rendering_ = nullptr;
-
-    engine::TextureHandle groundTexture_;
-    engine::AssetHandle<engine::MaterialInstanceAsset> groundInstance_;
-    engine::AssetHandle<engine::MaterialInstanceAsset> enchantedInstance_;
-    engine::AssetHandle<engine::MaterialInstanceAsset> markerInstance_;
-    bool sceneMaterialsRequested_ = false;
-    engine::BufferHandle enchantmentBuffer_;
-    size_t cubeIndex_ = 0;
-    std::vector<engine::MaterialInstanceHandle> instances_;
-    engine::MeshHandle lightMarkerMesh_;
-    std::vector<engine::TextureHandle> lightMarkerTextures_;
-
-    std::vector<SceneObject> objects_;
-    size_t firstLightMarker_ = 0;
 };
 
 
@@ -504,7 +280,8 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
     engine.AddSubsystem<ExampleGameLogic>(window);
     engine.AddSubsystem<engine::RenderExtractionSubsystem>();
     if (!engine.GetScene().RegisterController("example/sign", MotionRegistration(false)) ||
-        !engine.GetScene().RegisterController("example/hammer", MotionRegistration(true))) return 1;
+        !engine.GetScene().RegisterController("example/hammer", MotionRegistration(true)) ||
+        !engine.GetScene().RegisterController("example/light-motion", LightRegistration())) return 1;
     enginePtr = &engine;
     if (!engine.Initialize()) return 1;
     std::string error;

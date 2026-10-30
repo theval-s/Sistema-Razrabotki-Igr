@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "material": { "id": "7c777892-9e2b-4c1d-bf91-efe9b5b31ac0", "path": "game/materials/default.material.json" },
+  "parameters": {
+    "albedoTexture": { "id": "5f791c4a-ec0d-47af-acfd-97082951da69", "path": "game/materials/marker-green.png" },
+    "shininess": 96
+  }
+}

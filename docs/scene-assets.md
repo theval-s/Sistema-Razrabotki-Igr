@@ -109,13 +109,13 @@ own requests and tracks dependencies; `LoadScene` evicts only the scene instance
 
 `RenderWorld::sceneItems` are replaced by extraction every frame, while
 `RenderWorld::renderItems` remain available for host-owned procedural draws.
-ExampleGame loads `game/scenes/demo.scene.json` at startup for its file-backed
-meshes, materials and sun; its procedural ground, enchanted cube and animated
-point/spot lights remain host-owned. Their materials and shader dependencies are
-requested from disk; the host supplies procedural geometry, textures and the
-cube's custom constant buffer. Sign and hammer motion use registered native
-scene controllers. CMake copies the scene, sidecars and source assets under the
-executable's `game/` directory.
+ExampleGame loads `game/scenes/demo.scene.json` for its file-backed meshes,
+materials, textures and sun, including the ground, enchanted cube and visible
+light markers. The cube's shader reads engine simulation time from the frame
+buffer. The host still animates point/spot lights in `RenderWorld::lights` and
+updates matching scene entity transforms for the visible markers. Sign and
+hammer motion use registered native scene controllers. CMake copies the scene,
+sidecars and source assets under the executable's `game/` directory.
 
 ## Names, tags, controllers, and queries
 

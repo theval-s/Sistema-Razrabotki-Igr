@@ -17,8 +17,8 @@ void UpdateLight(RenderingContext& context, RenderingResources& resources,
         data.direction = light.direction;
         data.range = light.range;
         if (light.type == LightInfo::Spot) {
-            data.spotInnerAngle = light.lightParameters.spotLight.innerAngle;
-            data.spotOuterAngle = light.lightParameters.spotLight.outerAngle;
+            data.spotInnerAngle = light.spotInnerAngle;
+            data.spotOuterAngle = light.spotOuterAngle;
         }
     });
 }
@@ -32,6 +32,8 @@ void LightPass::Initialize(RenderingResourceManager& resourceManager, RenderingC
     pixelShader_ = resourceManager.CompileShader(L"engine/LightPass.hlsl", ShaderType::Pixel, pixelOptions);
     dirLightVertexShader_ = resourceManager.CompileShader(L"engine/DirectionalLightVS.hlsl", ShaderType::Vertex);
     lightSphere_ = ugly_utils::FromRawMesh(resourceManager, ugly_utils::CreateSphere(1.0f));
+    // One shared bounding box; each spot light scales it to its cone bounds.
+    spotLightBB_ = ugly_utils::FromRawMesh(resourceManager, ugly_utils::CreateCube(1.0f, 1.0f, 1.0f));
 }
 
 void LightPass::Destroy(RenderingResourceManager& resourceManager, RenderingContext& context,
@@ -40,6 +42,7 @@ void LightPass::Destroy(RenderingResourceManager& resourceManager, RenderingCont
     resourceManager.DestroyShader(pixelShader_);
     resourceManager.DestroyShader(dirLightVertexShader_);
     resourceManager.DestroyMesh(lightSphere_);
+    resourceManager.DestroyMesh(spotLightBB_);
 }
 
 void LightPass::Render(RenderWorld& world, RenderingContext& context, RenderingResources& resources) {
@@ -72,7 +75,9 @@ void LightPass::Render(RenderWorld& world, RenderingContext& context, RenderingR
                                    ? Vector3::Right
                                    : Vector3::Up;
             const Vector3 boxCenter = light.position + direction * (light.range * 0.5f);
-            lightWorldMatrix = Matrix::CreateWorld(boxCenter, direction, up);
+            const float diameter = 2.0f * light.range * std::tan(std::acos(light.spotOuterAngle));
+            lightWorldMatrix = Matrix::CreateScale(diameter, diameter, light.range) *
+                Matrix::CreateWorld(boxCenter, direction, up);
         } else {
             lightWorldMatrix = Matrix::CreateScale(light.range) * Matrix::CreateTranslation(light.position);
         }
@@ -84,8 +89,7 @@ void LightPass::Render(RenderWorld& world, RenderingContext& context, RenderingR
         if (light.type == LightInfo::Point) {
             context.DrawMesh(lightSphere_);
         } else if (light.type == LightInfo::Spot) {
-            const auto bb = light.lightParameters.spotLight.boundingBox;
-            context.DrawMesh(bb);
+            context.DrawMesh(spotLightBB_);
         }
     }
     // The directional light covers the entire screen; its shader reads scene depth

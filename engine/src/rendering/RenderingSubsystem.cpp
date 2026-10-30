@@ -34,7 +34,7 @@ void RenderingSubsystem::OnSurfaceChanged(const SurfaceChangedEvent& event) {
     resizePending_ = true;
 }
 
-void RenderingSubsystem::Render(const FrameContext&) {
+void RenderingSubsystem::Render(const FrameContext& frame) {
     // A minimized window has no drawable area. Keep the pending resize for restoration.
     if (!surface_.IsValid()) {
         return;
@@ -45,7 +45,7 @@ void RenderingSubsystem::Render(const FrameContext&) {
         }
         resizePending_ = false;
     }
-    renderer_.RenderFrame();
+    renderer_.RenderFrame(frame);
 }
 
 RenderingSystem& RenderingSubsystem::GetRendering() noexcept {

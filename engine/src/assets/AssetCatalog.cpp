@@ -290,6 +290,15 @@ const CatalogEntry* AssetCatalog::FindPath(std::string_view path) const {
     return it == paths_.end() ? nullptr : Find(it->second);
 }
 
+std::vector<const CatalogEntry*> AssetCatalog::List(CatalogAssetKind kind) const {
+    std::vector<const CatalogEntry*> result;
+    for (const auto& [id, entry] : entries_) {
+        if (entry.metadata.kind == kind) result.push_back(&entry);
+    }
+    std::ranges::sort(result, {}, &CatalogEntry::path);
+    return result;
+}
+
 bool GenerateMissingAssetMetadata(const std::filesystem::path& root, std::size_t& generated, std::string& error) {
     std::size_t count = 0;
     try {
