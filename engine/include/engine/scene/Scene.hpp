@@ -98,6 +98,14 @@ public:
     [[nodiscard]] bool HasUnsupportedComponents() const noexcept { return !unsupported_.empty(); }
     [[nodiscard]] bool HasUnsupportedComponents(entt::entity entity) const noexcept { return unsupported_.contains(entity); }
 
+    /// A component type an entity has, for editor inspector
+    struct ComponentType {
+        entt::id_type id;       // entt::type_hash<T>::value()
+        std::string_view name;  // EnTT's type name, for display only
+    };
+    /// All components for given entity
+    [[nodiscard]] std::vector<ComponentType> GetComponentTypes(entt::entity entity) const;
+
     template <class T, class... Args>
     T* AddComponent(entt::entity entity, Args&&... args) {
         static_assert(!IsRequiredComponent<T>, "required components are managed by Scene");
