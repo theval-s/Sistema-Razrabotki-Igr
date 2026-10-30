@@ -47,6 +47,18 @@ void EditorCameraSubsystem::ResetToSceneCamera() {
     reset_pending_ = true;
 }
 
+Vector3 EditorCameraSubsystem::GetPosition() const noexcept {
+    return position_;
+}
+
+Vector3 EditorCameraSubsystem::GetForward() const noexcept {
+    return Vector3::Transform(Vector3::Forward, Quaternion::CreateFromYawPitchRoll(yaw_, pitch_, 0.0f));
+}
+
+Vector3 EditorCameraSubsystem::GetRight() const noexcept {
+    return Vector3::Transform(Vector3::Right, Quaternion::CreateFromYawPitchRoll(yaw_, 0.0f, 0.0f));
+}
+
 void EditorCameraSubsystem::TakeSceneCamera() {
     const engine::Scene& scene = GetEngine().GetScene();
     const entt::entity camera = scene.GetActiveCamera();

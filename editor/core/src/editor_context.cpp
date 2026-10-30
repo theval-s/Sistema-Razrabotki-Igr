@@ -13,6 +13,7 @@
 
 #include <engine/engine.hpp>
 
+#include <editor/editor_camera.hpp>
 #include <editor/scene_document.hpp>
 
 namespace editor {
@@ -70,6 +71,11 @@ Selection& EditorContext::selection() noexcept {
 
 SceneDocument& EditorContext::sceneDocument() noexcept {
     return *scene_document_;
+}
+
+EditorCameraSubsystem* EditorContext::camera() noexcept {
+    // MainWindow registers it when it starts the engine.
+    return engine_.GetSubsystem<EditorCameraSubsystem>();
 }
 
 QMenu* EditorContext::menu(const QString& title) {

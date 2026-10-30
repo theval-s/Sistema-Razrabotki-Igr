@@ -7,6 +7,8 @@
 #include <engine/core/Subsystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 
+#include <editor/editor_core_export.hpp>
+
 namespace engine {
 class InputSubsystem;
 class RenderingSubsystem;
@@ -20,7 +22,7 @@ namespace editor {
 /// Uses real time, so it keeps working while the simulation is paused.
 /// Register after InputSubsystem and after RenderExtractionSubsystem: its LateUpdate
 /// replaces the camera that extraction copied from the scene.
-class EditorCameraSubsystem final : public engine::Subsystem {
+class EDITOR_CORE_API EditorCameraSubsystem final : public engine::Subsystem {
 public:
     [[nodiscard]] std::string_view GetName() const override;
     [[nodiscard]] bool Initialize() override;
@@ -30,6 +32,13 @@ public:
     /// On the next frame, starts from the scene's active camera, or from the default
     /// viewpoint when the scene has none. Call after a scene was opened.
     void ResetToSceneCamera();
+
+    /// The viewpoint, in world space.
+    [[nodiscard]] DirectX::SimpleMath::Vector3 GetPosition() const noexcept;
+    /// Unit vector the view looks along.
+    [[nodiscard]] DirectX::SimpleMath::Vector3 GetForward() const noexcept;
+    /// Unit vector to the view's right, kept horizontal.
+    [[nodiscard]] DirectX::SimpleMath::Vector3 GetRight() const noexcept;
 
 private:
     void TakeSceneCamera();

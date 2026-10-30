@@ -28,6 +28,7 @@ struct Project;
 
 namespace editor {
 
+class EditorCameraSubsystem;
 class SceneDocument;
 
 /// What the editor hands to its modules: the engine, the project, the scene being edited, the
@@ -51,6 +52,8 @@ public:
     [[nodiscard]] Selection& selection() noexcept;
     /// The scene file being edited: open, create and save scenes through it.
     [[nodiscard]] SceneDocument& sceneDocument() noexcept;
+    /// The viewport's POV
+    [[nodiscard]] EditorCameraSubsystem* camera() noexcept;
 
     /// Finds the menu-bar menu with this title (ignoring '&' mnemonics) or appends a new one.
     QMenu* menu(const QString& title);
