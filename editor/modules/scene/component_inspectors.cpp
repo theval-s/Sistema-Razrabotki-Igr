@@ -51,6 +51,9 @@ Getter<M> transformField(engine::Scene& scene, const entt::entity entity, M engi
     };
 }
 
+/// The cube's mesh file, as the catalog lists it: BuiltinAssets::CubeMesh names its folder.
+constexpr const char* BuiltinCubeFile = "engine/primitives/cube/model.obj";
+
 constexpr PropertyForm::NumberFormat Intensity{.step = 0.1, .decimals = 2, .minimum = 0.0, .maximum = 1.0e4};
 constexpr PropertyForm::NumberFormat Range{.step = 0.5, .decimals = 2, .minimum = 0.01, .maximum = 1.0e4};
 /// Spot half angles, in degrees: under 90 or the cone isn't one.
@@ -232,6 +235,50 @@ void buildGamePersistence(PropertyForm& form, editor::EditorContext& context, co
                  field(scene, entity, &engine::GamePersistence::controllerState));
 }
 
+/// Default-constructed, through Scene: it counts as a structural change, so the scene is dirty.
+template <class T>
+void addComponent(editor::EditorContext& context, const entt::entity entity) {
+    context.scene().AddComponent<T>(entity);
+}
+
+template <class T>
+void removeComponent(editor::EditorContext& context, const entt::entity entity) {
+    context.scene().RemoveComponent<T>(entity);
+}
+
+/// A built-in cube with the default material, as Add Cube makes, but with authored references so
+/// it saves.
+void addMeshRenderer(editor::EditorContext& context, const entt::entity entity) {
+    engine::AssetSystem& assets = context.engine().GetSceneAssets();
+    const engine::AssetCatalog& catalog = assets.GetCatalog();
+    engine::MeshRenderer renderer;
+    if (const engine::CatalogEntry* mesh = catalog.FindPath(BuiltinCubeFile)) {
+        renderer.meshReference = {mesh->metadata.id, mesh->path};
+        renderer.mesh = assets.RequestMesh(renderer.meshReference);
+    } else {
+        renderer.mesh = assets.RequestMesh(engine::BuiltinAssets::CubeMesh);
+    }
+    if (const engine::CatalogEntry* material = catalog.FindPath(engine::BuiltinAssets::DefaultMaterialInstance)) {
+        renderer.materialReference = {material->metadata.id, material->path};
+        renderer.materialInstance = assets.RequestMaterialInstance(renderer.materialReference);
+    } else {
+        renderer.materialInstance = assets.RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance);
+    }
+    context.scene().AddComponent<engine::MeshRenderer>(entity, std::move(renderer));
+}
+
+/// The mesh's own bounds if it has one loaded, a unit cube around the origin otherwise.
+void addBounds(editor::EditorContext& context, const entt::entity entity) {
+    engine::Scene& scene = context.scene();
+    engine::Bounds bounds{{Vector3{-0.5f, -0.5f, -0.5f}, Vector3{0.5f, 0.5f, 0.5f}}};
+    if (const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity)) {
+        if (const auto mesh = context.engine().GetSceneAssets().Peek(renderer->mesh)) {
+            bounds.local = mesh->bounds;
+        }
+    }
+    scene.AddComponent<engine::Bounds>(entity, bounds);
+}
+
 }  // namespace
 
 std::span<const ComponentInspector> componentInspectors() {
@@ -239,13 +286,20 @@ std::span<const ComponentInspector> componentInspectors() {
     static const std::vector<ComponentInspector> inspectors{
         {entt::type_hash<engine::Transform>::value(), QObject::tr("Transform"), buildTransform},
         {entt::type_hash<engine::Tags>::value(), QObject::tr("Tags"), buildTags},
-        {entt::type_hash<engine::MeshRenderer>::value(), QObject::tr("Mesh Renderer"), buildMeshRenderer},
-        {entt::type_hash<engine::Camera>::value(), QObject::tr("Camera"), buildCamera},
-        {entt::type_hash<engine::DirectionalLight>::value(), QObject::tr("Directional Light"), buildDirectionalLight},
-        {entt::type_hash<engine::PointLight>::value(), QObject::tr("Point Light"), buildPointLight},
-        {entt::type_hash<engine::SpotLight>::value(), QObject::tr("Spot Light"), buildSpotLight},
-        {entt::type_hash<engine::Bounds>::value(), QObject::tr("Bounds"), buildBounds},
-        {entt::type_hash<engine::GamePersistence>::value(), QObject::tr("Game Persistence"), buildGamePersistence},
+        {entt::type_hash<engine::MeshRenderer>::value(), QObject::tr("Mesh Renderer"), buildMeshRenderer,
+         addMeshRenderer, removeComponent<engine::MeshRenderer>},
+        {entt::type_hash<engine::Camera>::value(), QObject::tr("Camera"), buildCamera, addComponent<engine::Camera>,
+         removeComponent<engine::Camera>},
+        {entt::type_hash<engine::DirectionalLight>::value(), QObject::tr("Directional Light"), buildDirectionalLight,
+         addComponent<engine::DirectionalLight>, removeComponent<engine::DirectionalLight>},
+        {entt::type_hash<engine::PointLight>::value(), QObject::tr("Point Light"), buildPointLight,
+         addComponent<engine::PointLight>, removeComponent<engine::PointLight>},
+        {entt::type_hash<engine::SpotLight>::value(), QObject::tr("Spot Light"), buildSpotLight,
+         addComponent<engine::SpotLight>, removeComponent<engine::SpotLight>},
+        {entt::type_hash<engine::Bounds>::value(), QObject::tr("Bounds"), buildBounds, addBounds,
+         removeComponent<engine::Bounds>},
+        {entt::type_hash<engine::GamePersistence>::value(), QObject::tr("Game Persistence"), buildGamePersistence,
+         addComponent<engine::GamePersistence>, removeComponent<engine::GamePersistence>},
     };
     return inspectors;
 }

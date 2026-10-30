@@ -13,6 +13,8 @@
 class PropertyForm;
 class QLabel;
 class QLineEdit;
+class QMenu;
+class QPushButton;
 class QVBoxLayout;
 
 namespace editor {
@@ -38,6 +40,8 @@ private:
     /// Replaces the sections with ones for `types`, from listedComponents().
     void rebuildSections(const ComponentList& types);
     void addSection(const engine::Scene::ComponentType& type);
+    /// Lists the components the entity can still get.
+    void fillAddMenu();
 
     editor::EditorContext& context_;
     entt::entity entity_ = entt::null;
@@ -47,6 +51,8 @@ private:
     QLabel* id_ = nullptr;
     QWidget* sections_ = nullptr;
     QVBoxLayout* sections_layout_ = nullptr;
+    QPushButton* add_ = nullptr;
+    QMenu* add_menu_ = nullptr;
     /// The components the sections show, from listedComponents().
     std::vector<entt::id_type> shown_types_;
     /// Of the sections that have one. Owned by the sections.

@@ -1,11 +1,16 @@
 #include "inspector_panel.hpp"
 
+#include <QAction>
 #include <QFormLayout>
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QStyle>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -60,9 +65,16 @@ InspectorPanel::InspectorPanel(editor::EditorContext& context, QWidget* parent) 
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidget(sections_);
 
+    // Below the scroll area, so it's there however many components there are.
+    add_ = new QPushButton(tr("Add Component"), this);
+    add_menu_ = new QMenu(add_);
+    add_->setMenu(add_menu_);
+    connect(add_menu_, &QMenu::aboutToShow, this, &InspectorPanel::fillAddMenu);
+
     auto* layout = new QVBoxLayout(this);
     layout->addWidget(header_);
     layout->addWidget(scroll, 1);
+    layout->addWidget(add_);
 
     connect(name_, &QLineEdit::editingFinished, this, &InspectorPanel::applyName);
 
@@ -94,6 +106,7 @@ void InspectorPanel::refresh() {
         entity_ = entt::null;  // destroyed meanwhile
     }
     header_->setEnabled(entity_ != entt::null);
+    add_->setEnabled(entity_ != entt::null);
     if (entity_ == entt::null) {
         const QSignalBlocker blocker(name_);
         name_->clear();
@@ -181,7 +194,23 @@ void InspectorPanel::addSection(const engine::Scene::ComponentType& type) {
     QFont font = title->font();
     font.setBold(true);
     title->setFont(font);
-    layout->addWidget(title);
+    auto* title_row = new QHBoxLayout;
+    title_row->addWidget(title);
+    if (known != inspectors.end() && known->remove != nullptr) {
+        auto* remove = new QToolButton(section);
+        remove->setIcon(style()->standardIcon(QStyle::SP_TitleBarCloseButton));
+        remove->setAutoRaise(true);
+        remove->setToolTip(tr("Remove %1").arg(known->title));
+        // The rebuild that follows deletes this button later, not while it's in its signal.
+        connect(remove, &QToolButton::clicked, this, [this, remover = known->remove] {
+            if (entity_ != entt::null && context_.scene().IsValid(entity_)) {
+                remover(context_, entity_);
+                refresh();
+            }
+        });
+        title_row->addWidget(remove);
+    }
+    layout->addLayout(title_row);
 
     QWidget* body = nullptr;
     if (known != inspectors.end()) {
@@ -214,4 +243,27 @@ void InspectorPanel::addSection(const engine::Scene::ComponentType& type) {
 
     sections_layout_->insertWidget(sections_layout_->count() - 1, section);
     shown_types_.push_back(type.id);
+}
+
+void InspectorPanel::fillAddMenu() {
+    add_menu_->clear();
+    const ComponentList types = context_.scene().GetComponentTypes(entity_);
+    for (const ComponentInspector& inspector : componentInspectors()) {
+        if (inspector.add == nullptr ||
+            std::ranges::find(types, inspector.type, &engine::Scene::ComponentType::id) != types.end()) {
+            continue;
+        }
+        QAction* action = add_menu_->addAction(inspector.title);
+        connect(action, &QAction::triggered, this, [this, adder = inspector.add, id = inspector.type] {
+            if (entity_ == entt::null || !context_.scene().IsValid(entity_)) {
+                return;
+            }
+            collapsed_.erase(id);  // show what was just added
+            adder(context_, entity_);
+            refresh();
+        });
+    }
+    if (add_menu_->isEmpty()) {
+        add_menu_->addAction(tr("No more components"))->setEnabled(false);
+    }
 }
