@@ -20,8 +20,24 @@ UUID remains the identity.
 
 The dialog edits a copy; Save writes the project atomically before replacing the
 in-memory settings, and Cancel discards edits. It is unavailable during an active
-scripting session. This implements settings only: registering ScriptSubsystem in
-the editor and starting the saved autoloads belong to the following milestone.
+scripting session. The editor registers one ScriptSubsystem after input and before
+render extraction. Engine initialization prepares it without creating a Lua state;
+Engine::Tick is the only update loop. Editor Start/Stop actions are a later step.
+
+`BeginPlay(contentRoot, project.autoloads, error)` validates the definitions and
+resolves enabled entries by UUID using the owning Engine's shared asset catalog.
+It copies each source/UUID before execution, checks canonical source containment
+inside contentRoot (including symlinks/junctions), and never uses the path hint as
+a fallback. Disabled entries do not resolve or execute their assets.
+
+Once preflight succeeds, the subsystem creates one fresh state, then calls the
+existing CreateInstance and StartInstance in list order. These instances have no
+entity or ScriptComponent; Log and require are already available. Their IDs remain
+in runtime startup order and EndPlay destroys them in reverse order before dropping
+the state. A startup failure cleans up the partial session and returns false; an
+attempt to start while already playing preserves the active session. The original
+BeginPlay(contentRoot, error) delegates with an empty autoload list and remains
+usable without an owning Engine for the existing standalone runtime tests.
 
 ## Runtime lifecycle
 

@@ -218,6 +218,7 @@ void MainWindow::startEngine() {
     // Input first, so it's latched before anything reads it; the editor camera last, so it
     // replaces the scene camera that RenderExtractionSubsystem copied into the RenderWorld.
     viewport_->setInput(engine_.AddSubsystem<engine::InputSubsystem>());
+    engine_.AddSubsystem<engine::ScriptSubsystem>();
     engine_.AddSubsystem<engine::RenderingSubsystem>();
     engine_.AddSubsystem<engine::RenderExtractionSubsystem>();
     camera_ = engine_.AddSubsystem<EditorCameraSubsystem>();
