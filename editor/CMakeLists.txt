@@ -127,6 +127,7 @@ function(sri_add_editor_module name)
 endfunction()
 
 add_subdirectory(modules/scene)
+add_subdirectory(modules/content)
 
 # --- Install / deploy ------------------------------------------------------
 

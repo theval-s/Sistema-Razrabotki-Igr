@@ -5,6 +5,9 @@
 #include <QMenuBar>
 #include <QToolBar>
 
+#include <algorithm>
+
+#include <DockAreaWidget.h>
 #include <DockManager.h>
 #include <DockWidget.h>
 
@@ -93,16 +96,25 @@ void EditorContext::addPanel(const QString& id, const QString& title, QWidget* w
     dock->setObjectName(id);
     // Panels manage their own scrolling (lists, text views).
     dock->setWidget(widget, ads::CDockWidget::ForceNoScrollArea);
-    dock_manager_.addDockWidget(toAdsArea(area), dock);
+    dock_manager_.addDockWidgetTab(toAdsArea(area), dock);
     menu(QObject::tr("&View"))->addAction(dock->toggleViewAction());
     panels_.push_back({dock, area});
 }
 
 void EditorContext::placeNewPanels() {
+    const auto placed = [](const Panel& panel) { return panel.dock != nullptr && panel.dock->dockAreaWidget() != nullptr; };
     for (const Panel& panel : panels_) {
-        // Panels in the saved layout have an area even when closed; the unknown ones have none.
-        if (panel.dock != nullptr && panel.dock->dockAreaWidget() == nullptr) {
-            dock_manager_.addDockWidget(toAdsArea(panel.area), panel.dock);
+        if (panel.dock == nullptr || placed(panel)) {
+            continue;
+        }
+        // The restored layout doesn't tell ADS which areas count as bottom, left...
+        const auto sibling = std::ranges::find_if(panels_, [&](const Panel& other) {
+            return other.area == panel.area && placed(other);
+        });
+        if (sibling != panels_.end()) {
+            dock_manager_.addDockWidgetTabToArea(panel.dock, sibling->dock->dockAreaWidget());
+        } else {
+            dock_manager_.addDockWidgetTab(toAdsArea(panel.area), panel.dock);
         }
     }
 }

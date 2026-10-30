@@ -57,7 +57,8 @@ public:
     /// The editor's main toolbar, created on first use.
     QToolBar* toolBar();
 
-    /// Docks `widget` (reparented into a new dock panel) at `area` and lists it under View.
+    /// Docks `widget` (reparented into a new dock panel) at `area`, as a tab beside the panels
+    /// already there, and lists it under View.
     /// The user can then move, tab, float or close it. `id` must be unique and stable:
     /// it is the panel's objectName, which the saved layout refers to.
     void addPanel(const QString& id, const QString& title, QWidget* widget, Qt::DockWidgetArea area);

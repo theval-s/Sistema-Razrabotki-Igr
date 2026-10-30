@@ -1,0 +1,9 @@
+sri_add_editor_module(editor_module_content
+    content_module.cpp
+    content_browser.cpp
+    content_browser.hpp
+    asset_filter_model.cpp
+    asset_filter_model.hpp
+    asset_icons.cpp
+    asset_icons.hpp
+)
