@@ -1,16 +1,26 @@
 {
-  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
-  "name": "sri",
-  "version": "0.1.0",
-  "description": "Sistema Razrabotki Igr",
-  "dependencies": [
-    "spdlog", "directxtk", "entt", "enkits", "assimp", "nlohmann-json", "json-schema-validator", "stduuid", "gtest", "sol2", "lua"
-  ]
+    "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+    "name": "sri",
+    "version": "0.1.0",
+    "description": "Sistema Razrabotki Igr",
+    "dependencies": [
+        "spdlog",
+        "directxtk",
+        "entt",
+        "enkits",
+        "assimp",
+        "nlohmann-json",
+        "json-schema-validator",
+        "stduuid",
+        "gtest",
+        "sol2",
+        "lua"
+    ],
+    "builtin-baseline": "8a9d7414691554ff6c7e1f5e957872d6a033df26",
+    "overrides": [
+        {
+            "name": "lua",
+            "version": "5.4.8"
+        }
+    ]
 }
-"builtin-baseline": "8a9d7414691554ff6c7e1f5e957872d6a033df26",
-"overrides": [
-  {
-    "name": "lua",
-    "version": "5.4.8"
-  }
-]
