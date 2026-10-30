@@ -151,6 +151,7 @@ set(QT_DEPLOY_LIB_DIR .)
 qt_deploy_runtime_dependencies(
     EXECUTABLE \"$<TARGET_FILE:editor>\"
     GENERATE_QT_CONF
+    DEPLOY_TOOL_OPTIONS --no-opengl-sw
 )
 ")
 install(SCRIPT ${deploy_script} COMPONENT editor)
