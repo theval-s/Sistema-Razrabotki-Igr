@@ -15,6 +15,8 @@ Scene::Scene() {
     static_cast<void>(registry_.storage<MeshRenderer>());
     static_cast<void>(registry_.storage<Camera>());
     static_cast<void>(registry_.storage<DirectionalLight>());
+    static_cast<void>(registry_.storage<PointLight>());
+    static_cast<void>(registry_.storage<SpotLight>());
     static_cast<void>(registry_.storage<Bounds>());
     static_cast<void>(registry_.storage<GamePersistence>());
 }

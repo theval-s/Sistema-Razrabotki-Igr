@@ -30,7 +30,6 @@ struct RawMesh {
 ENGINE_API MeshHandle FromRawMesh(RenderingResourceManager& resourceManager, const RawMesh& rawMesh);
 ENGINE_API RawMesh CreateSphere(float size);
 ENGINE_API RawMesh CreateCube(float sizeX, float sizeY, float sizeZ);
-ENGINE_API RawMesh CreateSpotLightBoundingBox(float range, float spotOuterAngle);
 
 }
 }

@@ -32,6 +32,8 @@ struct SceneEntityDefinition {
     std::optional<Mesh> renderer;
     std::optional<Camera> camera;
     std::optional<DirectionalLight> directionalLight;
+    std::optional<PointLight> pointLight;
+    std::optional<SpotLight> spotLight;
     std::optional<ControllerDefinition> controller;
     std::optional<Bounds> bounds;
     std::optional<GamePersistence> persistence;

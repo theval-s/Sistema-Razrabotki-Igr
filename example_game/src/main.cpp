@@ -1,8 +1,8 @@
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include <windows.h>
@@ -11,7 +11,6 @@
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/rendering/RenderExtractionSubsystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
-#include <engine/rendering/UglyUtils.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/core/FrameContext.hpp>
 #include <engine/engine.hpp>
@@ -25,17 +24,9 @@ constexpr uint32_t ScreenHeight = 720;
 constexpr float Pi = 3.14159265358979323846f;
 
 using DirectX::SimpleMath::Matrix;
-using DirectX::SimpleMath::Vector2;
 using DirectX::SimpleMath::Vector3;
-using DirectX::SimpleMath::Vector4;
 
 constexpr std::string_view CubeId = "e862521f-5ad3-4942-bbd6-aa8dbddae52e";
-constexpr std::array<std::string_view, 4> MarkerIds{
-    "3b93eafd-a888-4720-be22-77c5ea028bca",
-    "16f57ae5-08c2-4f75-a8c7-4f8e2f4199f3",
-    "19296f46-7d6f-4258-af35-b41c0373017e",
-    "cafddd9c-1fe2-4492-8367-637f90ea291f"
-};
 
 bool IsKeyDown(int key) {
     return (GetAsyncKeyState(key) & 0x8000) != 0;
@@ -89,34 +80,63 @@ void UpdateCamera(engine::FPSCamera& camera, HWND window, float deltaTime) {
     }
 }
 
-void UpdateLights(engine::RenderWorld& world, float time) {
-    world.lights[0].position = Vector3{
-        std::cos(time * 0.8f) * 4.0f,
-        2.2f + std::sin(time * 1.7f) * 0.4f,
-        std::sin(time * 0.8f) * 4.0f
-    };
-    world.lights[1].position = Vector3{
-        std::cos(-time * 0.55f) * 3.0f,
-        1.4f,
-        std::sin(-time * 0.55f) * 3.0f
-    };
-    world.lights[1].intensity = 4.0f + std::sin(time * 2.2f) * 1.5f;
-
-    Vector3 sweepingDirection{std::sin(time * 0.7f) * 0.8f, -1.0f, std::cos(time * 0.7f) * 0.8f};
-    sweepingDirection.Normalize();
-    world.lights[2].direction = sweepingDirection;
-
-    world.lights[3].position = Vector3{
-        std::cos(time * 0.45f) * 5.0f,
-        4.5f,
-        std::sin(time * 0.45f) * 5.0f
-    };
-    Vector3 trackingDirection = Vector3::Zero - world.lights[3].position;
-    trackingDirection.Normalize();
-    world.lights[3].direction = trackingDirection;
+void AimLight(engine::Transform& transform, const Vector3& direction) {
+    const float yaw = std::atan2(-direction.x, -direction.z);
+    const float pitch = std::asin((std::clamp)(direction.y, -1.0f, 1.0f));
+    transform.rotation = DirectX::SimpleMath::Quaternion::CreateFromYawPitchRoll(yaw, pitch, 0.0f);
 }
 
 } // namespace
+
+/// Example-only animation; authored mode selects a motion pattern. No game state
+/// is saved for these decorative lights.
+class ExampleLightController final : public engine::Controller {
+public:
+    void LoadAuthored(const engine::StateValue& data) override { mode_ = data.String(); }
+    void Update(double deltaSeconds) override {
+        time_ += static_cast<float>(deltaSeconds);
+        auto& scene = GetScene();
+        auto& transform = scene.GetTransform(GetEntity());
+        if (mode_ == "orange") {
+            transform.position = {
+                std::cos(time_ * 0.8f) * 4.0f,
+                2.2f + std::sin(time_ * 1.7f) * 0.4f,
+                std::sin(time_ * 0.8f) * 4.0f
+            };
+        } else if (mode_ == "blue") {
+            transform.position = {
+                std::cos(-time_ * 0.55f) * 3.0f, 1.4f, std::sin(-time_ * 0.55f) * 3.0f
+            };
+            if (auto* light = scene.TryGetComponent<engine::PointLight>(GetEntity()))
+                light->intensity = 4.0f + std::sin(time_ * 2.2f) * 1.5f;
+        } else if (mode_ == "green") {
+            Vector3 direction{std::sin(time_ * 0.7f) * 0.8f, -1.0f, std::cos(time_ * 0.7f) * 0.8f};
+            direction.Normalize();
+            AimLight(transform, direction);
+        } else if (mode_ == "magenta") {
+            transform.position = {
+                std::cos(time_ * 0.45f) * 5.0f, 4.5f, std::sin(time_ * 0.45f) * 5.0f
+            };
+            Vector3 direction = -transform.position;
+            direction.Normalize();
+            AimLight(transform, direction);
+        }
+    }
+private:
+    std::string mode_;
+    float time_ = 0.0f;
+};
+
+engine::ControllerRegistration LightRegistration() {
+    return {1,
+        [](const engine::StateValue& data, std::string& error) {
+            const auto mode = data.String();
+            if (mode == "orange" || mode == "blue" || mode == "green" || mode == "magenta") return true;
+            error = "unknown light motion mode";
+            return false;
+        },
+        []() -> std::unique_ptr<engine::Controller> { return std::make_unique<ExampleLightController>(); }};
+}
 
 class ExampleMotionController final : public engine::Controller {
 public:
@@ -154,8 +174,8 @@ engine::ControllerRegistration MotionRegistration(bool hammer) {
         }};
 }
 
-/// Input and animated point/spot lights. Visible meshes and materials come from
-/// demo.scene.json through RenderExtractionSubsystem.
+/// Input and camera control. Scene controllers animate lights; the renderer
+/// extracts all scene meshes, materials and lights after controller updates.
 class ExampleGameLogic final : public engine::Subsystem {
 public:
     explicit ExampleGameLogic(HWND window) : window_(window) {
@@ -170,7 +190,6 @@ public:
         if (rendering_ == nullptr) {
             return false;
         }
-        auto& resources = rendering_->GetResourceManager();
         auto& world = rendering_->GetWorld();
 
         world.camera = {
@@ -181,70 +200,6 @@ public:
             .yaw = 0.0f,
             .pitch = -0.15f,
             .position = Vector3{0.0f, 3.0f, 7.0f}
-        };
-        world.directionalLight = {
-            .position = Vector3::Zero,
-            .direction = Vector3{-0.45f, -1.0f, -0.3f},
-            .color = Vector3{1.0f, 0.95f, 0.85f},
-            .intensity = 1.25f,
-            .range = 0.0f,
-            .type = engine::LightInfo::Directional
-        };
-        constexpr float firstSpotOuterHalfAngle = Pi / 7.0f;
-        constexpr float secondSpotOuterHalfAngle = Pi / 6.0f;
-        const engine::MeshHandle firstSpotBoundingBox = engine::ugly_utils::FromRawMesh(
-            resources, engine::ugly_utils::CreateSpotLightBoundingBox(10.0f, firstSpotOuterHalfAngle * 2.0f));
-        const engine::MeshHandle secondSpotBoundingBox = engine::ugly_utils::FromRawMesh(
-            resources, engine::ugly_utils::CreateSpotLightBoundingBox(8.0f, secondSpotOuterHalfAngle * 2.0f));
-        world.lights = {
-            {
-                .position = Vector3{4.0f, 2.2f, 0.0f},
-                .direction = Vector3::Zero,
-                .color = Vector3{1.0f, 0.25f, 0.08f},
-                .intensity = 5.0f,
-                .range = 5.5f,
-                .type = engine::LightInfo::Point
-            },
-            {
-                .position = Vector3{-3.0f, 1.4f, 0.0f},
-                .direction = Vector3::Zero,
-                .color = Vector3{0.08f, 0.35f, 1.0f},
-                .intensity = 4.0f,
-                .range = 4.5f,
-                .type = engine::LightInfo::Point
-            },
-            {
-                .position = Vector3{0.0f, 6.0f, 0.0f},
-                .direction = Vector3{0.0f, -1.0f, 0.0f},
-                .color = Vector3{0.2f, 1.0f, 0.35f},
-                .intensity = 7.0f,
-                .range = 10.0f,
-                .type = engine::LightInfo::Spot,
-                .lightParameters = {
-                    .spotLight = {
-                        .innerAngle = std::cos(Pi / 12.0f),
-                        .outerAngle = std::cos(firstSpotOuterHalfAngle),
-                        .range = 10.0f,
-                        .boundingBox = firstSpotBoundingBox
-                    }
-                }
-            },
-            {
-                .position = Vector3{5.0f, 4.5f, 0.0f},
-                .direction = Vector3{-1.0f, -1.0f, 0.0f},
-                .color = Vector3{0.85f, 0.15f, 1.0f},
-                .intensity = 6.0f,
-                .range = 8.0f,
-                .type = engine::LightInfo::Spot,
-                .lightParameters = {
-                    .spotLight = {
-                        .innerAngle = std::cos(Pi / 10.0f),
-                        .outerAngle = std::cos(secondSpotOuterHalfAngle),
-                        .range = 8.0f,
-                        .boundingBox = secondSpotBoundingBox
-                    }
-                }
-            }
         };
 
         CaptureMouse(window_);
@@ -296,11 +251,6 @@ public:
             transform.rotation = DirectX::SimpleMath::Quaternion::CreateFromYawPitchRoll(time * 0.35f, 0, 0);
             transform.position.y = 3.8f + 0.16f * std::sin(time * 1.7f);
         }
-        UpdateLights(world, time);
-        for (size_t i = 0; i < MarkerIds.size(); ++i) {
-            if (const auto marker = scene.FindById(MarkerIds[i]); marker != entt::null)
-                scene.GetTransform(marker).position = world.lights[i].position;
-        }
     }
 
 private:
@@ -330,7 +280,8 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
     engine.AddSubsystem<ExampleGameLogic>(window);
     engine.AddSubsystem<engine::RenderExtractionSubsystem>();
     if (!engine.GetScene().RegisterController("example/sign", MotionRegistration(false)) ||
-        !engine.GetScene().RegisterController("example/hammer", MotionRegistration(true))) return 1;
+        !engine.GetScene().RegisterController("example/hammer", MotionRegistration(true)) ||
+        !engine.GetScene().RegisterController("example/light-motion", LightRegistration())) return 1;
     enginePtr = &engine;
     if (!engine.Initialize()) return 1;
     std::string error;

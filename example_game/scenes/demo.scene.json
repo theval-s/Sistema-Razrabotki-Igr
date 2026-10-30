@@ -46,7 +46,9 @@
         "MeshRenderer": {
           "mesh": { "id": "827c0a87-e35b-4b10-9387-ad36433de1ce", "path": "game/models/LightMarker/model.obj" },
           "materialInstance": { "id": "68b68b7c-3d3f-474e-90b4-30b61e11993f", "path": "game/materials/marker-orange.material-instance.json" }
-        }
+        },
+        "PointLight": { "color": [1, 0.25, 0.08], "intensity": 5, "range": 5.5 },
+        "Controller": { "type": "example/light-motion", "version": 1, "enabled": true, "data": "orange" }
       }
     },
     {
@@ -58,7 +60,9 @@
         "MeshRenderer": {
           "mesh": { "id": "827c0a87-e35b-4b10-9387-ad36433de1ce", "path": "game/models/LightMarker/model.obj" },
           "materialInstance": { "id": "42087f87-43ce-4655-bf85-299f2c522166", "path": "game/materials/marker-blue.material-instance.json" }
-        }
+        },
+        "PointLight": { "color": [0.08, 0.35, 1], "intensity": 4, "range": 4.5 },
+        "Controller": { "type": "example/light-motion", "version": 1, "enabled": true, "data": "blue" }
       }
     },
     {
@@ -66,11 +70,14 @@
       "name": "Green light marker",
       "parent": null,
       "components": {
-        "Transform": { "position": [0, 6, 0], "rotation": [0, 0, 0, 1], "scale": [0.15, 0.15, 0.15] },
+        "Transform": { "position": [0, 6, 0], "rotation": [0, 0.9013032, 0.4331887, 0], "scale": [0.15, 0.15, 0.15] },
         "MeshRenderer": {
           "mesh": { "id": "827c0a87-e35b-4b10-9387-ad36433de1ce", "path": "game/models/LightMarker/model.obj" },
           "materialInstance": { "id": "f6f25002-423b-4a27-bb38-578c648e0680", "path": "game/materials/marker-green.material-instance.json" }
-        }
+        },
+        "SpotLight": { "color": [0.2, 1, 0.35], "intensity": 7, "range": 10,
+                       "innerHalfAngle": 0.2617993877991494, "outerHalfAngle": 0.4487989505128276 },
+        "Controller": { "type": "example/light-motion", "version": 1, "enabled": true, "data": "green" }
       }
     },
     {
@@ -78,11 +85,14 @@
       "name": "Magenta light marker",
       "parent": null,
       "components": {
-        "Transform": { "position": [5, 4.5, 0], "rotation": [0, 0, 0, 1], "scale": [0.15, 0.15, 0.15] },
+        "Transform": { "position": [5, 4.5, 0], "rotation": [-0.2533307, 0.6601693, 0.2533307, 0.6601693], "scale": [0.15, 0.15, 0.15] },
         "MeshRenderer": {
           "mesh": { "id": "827c0a87-e35b-4b10-9387-ad36433de1ce", "path": "game/models/LightMarker/model.obj" },
           "materialInstance": { "id": "ddfddec7-9b8a-4ed1-b500-f6beb1bf53ac", "path": "game/materials/marker-magenta.material-instance.json" }
-        }
+        },
+        "SpotLight": { "color": [0.85, 0.15, 1], "intensity": 6, "range": 8,
+                       "innerHalfAngle": 0.3141592653589793, "outerHalfAngle": 0.5235987755982988 },
+        "Controller": { "type": "example/light-motion", "version": 1, "enabled": true, "data": "magenta" }
       }
     },
     {

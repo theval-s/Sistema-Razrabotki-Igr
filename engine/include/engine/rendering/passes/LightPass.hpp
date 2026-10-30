@@ -18,6 +18,7 @@ private:
     ShaderHandle pixelShader_;
     ShaderHandle dirLightVertexShader_;
     MeshHandle lightSphere_;
+    MeshHandle spotLightBB_;
 };
 
 }
