@@ -1,30 +1,42 @@
 #include "content_browser.hpp"
 
+#include <QAction>
 #include <QButtonGroup>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QDir>
+#include <QDropEvent>
+#include <QFileInfo>
 #include <QFileSystemModel>
 #include <QFont>
 #include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QItemSelectionModel>
+#include <QKeySequence>
 #include <QLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
+#include <QMenu>
+#include <QMessageBox>
+#include <QMimeData>
+#include <QProcess>
 #include <QPushButton>
 #include <QSettings>
 #include <QSlider>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStyle>
+#include <QStyledItemDelegate>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -55,22 +67,87 @@ constexpr engine::CatalogAssetKind FilterKinds[] = {
     engine::CatalogAssetKind::MaterialInstance, engine::CatalogAssetKind::Shader,
 };
 
-QString cleanPath(const std::filesystem::path& path) {
-    return QDir::cleanPath(QDir::fromNativeSeparators(editor::toQString(path)));
+/// Files dragged in from outside the editor are copied, whatever the drag proposed: reporting
+/// a move back would let Explorer delete the originals.
+template <class View>
+class AssetView : public View {
+public:
+    using View::View;
+
+protected:
+    void dragEnterEvent(QDragEnterEvent* event) override {
+        View::dragEnterEvent(event);
+        copyExternal(event);
+    }
+    void dragMoveEvent(QDragMoveEvent* event) override {
+        View::dragMoveEvent(event);
+        copyExternal(event);
+    }
+    void dropEvent(QDropEvent* event) override {
+        View::dropEvent(event);
+        copyExternal(event);
+    }
+
+private:
+    static void copyExternal(QDropEvent* event) {
+        if (event->source() == nullptr && event->isAccepted() && (event->possibleActions() & Qt::CopyAction)) {
+            event->setDropAction(Qt::CopyAction);
+        }
+    }
+};
+
+/// Inline rename that preselects the name without its asset suffix, as Explorer does.
+class RenameDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void setEditorData(QWidget* editor, const QModelIndex& index) const override {
+        QStyledItemDelegate::setEditorData(editor, index);
+        auto* line = qobject_cast<QLineEdit*>(editor);
+        if (line == nullptr) {
+            return;
+        }
+        const bool dir = QFileInfo(index.data(QFileSystemModel::FilePathRole).toString()).isDir();
+        const auto stem = static_cast<int>(splitAssetName(line->text(), dir).first.size());
+        // The view selects all of the text once the editor is open.
+        QTimer::singleShot(0, line, [line, stem] { line->setSelection(0, stem); });
+    }
+};
+
+void setUpDragAndDrop(QAbstractItemView& view) {
+    //TODO: figure out drag and drop for viewport, probably needs mime data handling
+    view.setDragDropMode(QAbstractItemView::DragDrop);
+    view.setDefaultDropAction(Qt::MoveAction);  // Ctrl copies
+    view.setDragDropOverwriteMode(true);        // drop onto folders, not between items
+    view.setDropIndicatorShown(true);
 }
 
 }  // namespace
 
-ContentBrowser::ContentBrowser(editor::EditorContext& context, QWidget* parent) : QWidget(parent), context_(context) {
+ContentBrowser::ContentBrowser(editor::EditorContext& context, QWidget* parent)
+    : QWidget(parent), context_(context), operations_(context, this) {
+    adopt_timer_ = new QTimer(this);
+    adopt_timer_->setSingleShot(true);
+    adopt_timer_->setInterval(500);
+    connect(adopt_timer_, &QTimer::timeout, this, [this] {
+        operations_.adoptNewFiles();
+        refreshBanner();
+    });
+
     trees_ = new QStackedWidget;
-    items_ = new QListView;
+    items_ = new AssetView<QListView>;
     items_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     items_->setUniformItemSizes(true);
     items_->setTextElideMode(Qt::ElideMiddle);
+    items_->setEditTriggers(QAbstractItemView::EditKeyPressed);
+    items_->setItemDelegate(new RenameDelegate(items_));
+    items_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(items_, &QAbstractItemView::activated, this, &ContentBrowser::activate);
+    connect(items_, &QWidget::customContextMenuRequested, this, &ContentBrowser::showItemMenu);
 
-    addRoot(tr("Content"), QStringLiteral("game"), cleanPath(context.project().ContentDir()), false);
-    addRoot(tr("Engine"), QStringLiteral("engine"), cleanPath(engine::AssetPathResolver::GetRoot() / "engine"), true);
+    addRoot(tr("Content"), QStringLiteral("game"), cleanPath(editor::toQString(context.project().ContentDir())), false);
+    addRoot(tr("Engine"), QStringLiteral("engine"),
+            cleanPath(editor::toQString(engine::AssetPathResolver::GetRoot() / "engine")), true);
 
     auto* splitter = new QSplitter;
     splitter->addWidget(trees_);
@@ -85,6 +162,8 @@ ContentBrowser::ContentBrowser(editor::EditorContext& context, QWidget* parent) 
     layout->addWidget(buildBanner());
     layout->addWidget(splitter, 1);
 
+    buildActions();
+    connect(QGuiApplication::clipboard(), &QClipboard::dataChanged, this, &ContentBrowser::updateActions);
     applyViewMode();
     navigate(0, roots_[0].path);
 
@@ -107,19 +186,25 @@ void ContentBrowser::addRoot(const QString& title, const QString& name, const QS
     root.path = path;
     root.read_only = read_only;
     root.model = new QFileSystemModel(this);
-    // Renames and drops through the model would move a file without its .meta.
+    // Renames and drops through the model would move a file without its .meta: the filter
+    // models hand them to us instead.
     root.model->setReadOnly(true);
     root.model->setRootPath(path);
     root.folders = new AssetFilterModel(*root.model, AssetFilterModel::Mode::Folders, this);
     root.contents = new AssetFilterModel(*root.model, AssetFilterModel::Mode::Contents, this);
 
-    root.tree = new QTreeView;
+    root.tree = new AssetView<QTreeView>;
     root.tree->setModel(root.folders);
     root.tree->setRootIndex(root.folders->mapFromSource(root.model->index(path)));
     root.tree->setHeaderHidden(true);
     for (int column = 1; column < root.folders->columnCount(); ++column) {
         root.tree->hideColumn(column);
     }
+    root.tree->setEditTriggers(QAbstractItemView::EditKeyPressed);
+    root.tree->setAutoExpandDelay(500);  // while dragging over a folder
+    root.tree->setContextMenuPolicy(Qt::CustomContextMenu);
+    setUpDragAndDrop(*root.tree);
+
     const std::size_t index = roots_.size();
     connect(root.tree->selectionModel(), &QItemSelectionModel::currentChanged, this,
             [this, index](const QModelIndex& current) {
@@ -129,6 +214,28 @@ void ContentBrowser::addRoot(const QString& title, const QString& name, const QS
                 const Root& shown = roots_[index];
                 navigate(index, shown.model->filePath(shown.folders->mapToSource(current)));
             });
+    connect(root.tree, &QWidget::customContextMenuRequested, this,
+            [this, index](const QPoint& pos) { showFolderMenu(index, pos); });
+    // The shown folder may be deleted or moved from outside.
+    connect(root.model, &QAbstractItemModel::rowsRemoved, this, [this, index] {
+        if (index == root_) {
+            leaveMissingFolder();
+        }
+    });
+
+    if (!read_only) {
+        for (AssetFilterModel* model : {root.folders, root.contents}) {
+            model->setWritable(true);
+            // Queued: the operations show dialogs, which shouldn't run inside a view's drop or editor commit.
+            connect(model, &AssetFilterModel::renameRequested, this, &ContentBrowser::renameItem, Qt::QueuedConnection);
+            connect(model, &AssetFilterModel::dropRequested, this,
+                    [this, index](const QStringList& paths, const QString& folder, const Qt::DropAction action) {
+                        dropItems(index, paths, folder, action);
+                    }, Qt::QueuedConnection);
+        }
+        connect(root.model, &QAbstractItemModel::rowsInserted, adopt_timer_, qOverload<>(&QTimer::start));
+        connect(root.model, &QAbstractItemModel::rowsRemoved, adopt_timer_, qOverload<>(&QTimer::start));
+    }
     trees_->addWidget(root.tree);
     roots_.push_back(root);
 }
@@ -225,7 +332,45 @@ QWidget* ContentBrowser::buildBanner() {
     return banner_;
 }
 
+void ContentBrowser::buildActions() {
+    // Shortcuts work while the item view has focus, so they don't clash with other panels'.
+    const auto add = [this](const QString& text, const QKeySequence& shortcut, auto&& slot) {
+        auto* action = new QAction(text, this);
+        action->setShortcut(shortcut);
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        connect(action, &QAction::triggered, this, slot);
+        items_->addAction(action);
+        return action;
+    };
+    //TODO: extract shortcuts to another class for easier remapping??
+    // (so user could remap on their own)
+    open_ = add(tr("Open"), {}, [this] { activate(items_->currentIndex()); });
+    new_folder_ = add(tr("New Folder"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N),
+                      [this] { newFolder(root_, folder_); });
+    rename_ = add(tr("Rename"), QKeySequence(Qt::Key_F2), [this] { items_->edit(items_->currentIndex()); });
+    duplicate_ = add(tr("Duplicate"), QKeySequence(Qt::CTRL | Qt::Key_D),
+                     [this] { select(operations_.duplicate(selectedPaths())); });
+    cut_ = add(tr("Cut"), QKeySequence::Cut, [this] { copyToClipboard(selectedPaths(), true); });
+    copy_ = add(tr("Copy"), QKeySequence::Copy, [this] { copyToClipboard(selectedPaths(), false); });
+    paste_ = add(tr("Paste"), QKeySequence::Paste, [this] { pasteInto(folder_); });
+    delete_ = add(tr("Delete"), QKeySequence::Delete, [this] { deleteItems(selectedPaths()); });
+    // Without a selection these apply to the shown folder.
+    copy_path_ = add(tr("Copy Asset Path"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C), [this] {
+        const QStringList selected = selectedPaths();
+        copyAssetPaths(selected.isEmpty() ? QStringList{folder_} : selected);
+    });
+    copy_uuid_ = add(tr("Copy UUID"), {}, [this] { copyUuids(selectedPaths()); });
+    show_in_explorer_ = add(tr("Show in Explorer"), {}, [this] {
+        const QStringList selected = selectedPaths();
+        showInExplorer(selected.isEmpty() ? folder_ : selected.front());
+    });
+    open_->setShortcutVisibleInContextMenu(false);
+}
+
 void ContentBrowser::navigate(const std::size_t root, const QString& folder) {
+    // Showing another root's tree moves focus into it, which gives it a current item: that
+    // mustn't navigate again from in here.
+    navigating_ = true;
     Root& shown = roots_[root];
     const QModelIndex source = shown.model->index(folder);
     root_ = root;
@@ -236,6 +381,7 @@ void ContentBrowser::navigate(const std::size_t root, const QString& folder) {
         QItemSelectionModel* old_selection = items_->selectionModel();
         items_->setModel(shown.contents);
         delete old_selection;
+        connect(items_->selectionModel(), &QItemSelectionModel::selectionChanged, this, &ContentBrowser::updateActions);
         trees_->setCurrentWidget(shown.tree);
         shown.button->setChecked(true);
         read_only_label_->setVisible(shown.read_only);
@@ -243,7 +389,6 @@ void ContentBrowser::navigate(const std::size_t root, const QString& folder) {
     items_->setRootIndex(shown.contents->mapFromSource(source));
 
     // The tree's root folder has no item of its own.
-    navigating_ = true;
     const QModelIndex in_tree = folder == shown.path ? QModelIndex() : shown.folders->mapFromSource(source);
     shown.tree->setCurrentIndex(in_tree);
     if (in_tree.isValid()) {
@@ -251,9 +396,24 @@ void ContentBrowser::navigate(const std::size_t root, const QString& folder) {
     }
     navigating_ = false;
     rebuildBreadcrumb();
+    updateActions();
+}
+
+void ContentBrowser::leaveMissingFolder() {
+    const Root& shown = roots_[root_];
+    QString folder = folder_;
+    while (folder != shown.path && isWithin(folder, shown.path) && !QFileInfo(folder).isDir()) {
+        folder = QFileInfo(folder).absolutePath();
+    }
+    if (folder != folder_) {
+        navigate(root_, folder);
+    }
 }
 
 void ContentBrowser::activate(const QModelIndex& index) {
+    if (!index.isValid()) {
+        return;
+    }
     const Root& shown = roots_[root_];
     const QModelIndex source = shown.contents->mapToSource(index);
     const QString path = shown.model->filePath(source);
@@ -320,9 +480,10 @@ void ContentBrowser::applyViewMode() {
         items_->setWordWrap(true);
     }
     icon_size_->setEnabled(!list_mode_->isChecked());
-    // setViewMode() resets these.
+    // setViewMode() resets these, and Static movement turns dragging off.
     items_->setMovement(QListView::Static);
     items_->setResizeMode(QListView::Adjust);
+    setUpDragAndDrop(*items_);
 }
 
 void ContentBrowser::applyFilters() {
@@ -335,8 +496,7 @@ void ContentBrowser::applyFilters() {
 }
 
 void ContentBrowser::rescan() {
-    std::string error;  // the banner shows it, from the catalog
-    (void)context_.engine().RescanAssetCatalogs(error);
+    operations_.rescan();
     refreshBanner();
 }
 
@@ -350,6 +510,224 @@ void ContentBrowser::refreshBanner() {
     // First line in the banner, all of it in the tooltip.
     banner_text_->setText(tr("Asset catalog: %1").arg(text.section(QLatin1Char('\n'), 0, 0)));
     banner_text_->setToolTip(text);
+}
+
+QStringList ContentBrowser::selectedPaths() const {
+    QStringList paths;
+    if (items_->selectionModel() == nullptr) {
+        return paths;
+    }
+    const Root& shown = roots_[root_];
+    for (const QModelIndex& index : items_->selectionModel()->selectedIndexes()) {
+        if (index.column() == 0) {
+            paths << shown.model->filePath(shown.contents->mapToSource(index));
+        }
+    }
+    return paths;
+}
+
+bool ContentBrowser::select(const QStringList& paths) {
+    const Root& shown = roots_[root_];
+    QItemSelection selection;
+    QModelIndex first;
+    for (const QString& path : paths) {
+        // index() lists a new file right away; the model's file watcher would take a moment.
+        const QModelIndex index = shown.contents->mapFromSource(shown.model->index(path));
+        if (index.isValid() && index.parent() == items_->rootIndex()) {
+            selection.select(index, index);
+            if (!first.isValid()) {
+                first = index;
+            }
+        }
+    }
+    if (!first.isValid()) {
+        return false;
+    }
+    items_->selectionModel()->select(selection, QItemSelectionModel::ClearAndSelect);
+    items_->selectionModel()->setCurrentIndex(first, QItemSelectionModel::NoUpdate);
+    items_->scrollTo(first);
+    items_->setFocus();
+    return true;
+}
+
+void ContentBrowser::updateActions() {
+    if (open_ == nullptr) {
+        return;  // before buildActions()
+    }
+    const bool writable = !roots_[root_].read_only;
+    const QStringList selected = selectedPaths();
+    const bool any = !selected.isEmpty();
+    const bool assets = std::ranges::any_of(selected, [](const QString& path) {
+        return engine::CatalogKindForFile(editor::toPath(path)).has_value();
+    });
+    const QMimeData* clipboard = QGuiApplication::clipboard()->mimeData();
+
+    open_->setEnabled(selected.size() == 1);
+    new_folder_->setEnabled(writable);
+    rename_->setEnabled(writable && selected.size() == 1);
+    duplicate_->setEnabled(writable && any);
+    cut_->setEnabled(writable && any);
+    copy_->setEnabled(any);
+    paste_->setEnabled(writable && clipboard != nullptr && !AssetFilterModel::droppedPaths(clipboard).isEmpty());
+    delete_->setEnabled(writable && any);
+    copy_uuid_->setEnabled(assets);
+}
+
+void ContentBrowser::showItemMenu(const QPoint& pos) {
+    const QModelIndex index = items_->indexAt(pos);
+    if (!index.isValid()) {
+        items_->clearSelection();
+    } else if (!items_->selectionModel()->isSelected(index)) {
+        items_->setCurrentIndex(index);
+    }
+    updateActions();
+
+    QMenu menu(window());
+    if (index.isValid()) {
+        menu.addAction(open_);
+        menu.addSeparator();
+        menu.addActions({cut_, copy_, paste_, duplicate_});
+        menu.addSeparator();
+        menu.addActions({rename_, delete_});
+        menu.addSeparator();
+        menu.addActions({copy_path_, copy_uuid_, show_in_explorer_});
+    } else {
+        menu.addActions({new_folder_, paste_});
+        menu.addSeparator();
+        menu.addActions({copy_path_, show_in_explorer_});
+    }
+    menu.exec(items_->viewport()->mapToGlobal(pos));
+}
+
+void ContentBrowser::showFolderMenu(const std::size_t root, const QPoint& pos) {
+    const Root& shown = roots_[root];
+    const QModelIndex index = shown.tree->indexAt(pos);
+    const QString folder = index.isValid() ? shown.model->filePath(shown.folders->mapToSource(index)) : shown.path;
+    const bool writable = !shown.read_only;
+    const bool top = folder == shown.path;  // the root folder itself can't be renamed or deleted
+    const QMimeData* clipboard = QGuiApplication::clipboard()->mimeData();
+
+    QMenu menu(window());  // see showItemMenu()
+    menu.addAction(tr("New Folder"), this, [this, root, folder] { newFolder(root, folder); })->setEnabled(writable);
+    menu.addAction(tr("Paste"), this, [this, folder] { pasteInto(folder); })
+        ->setEnabled(writable && clipboard != nullptr && !AssetFilterModel::droppedPaths(clipboard).isEmpty());
+    menu.addSeparator();
+    menu.addAction(tr("Rename"), this, [&shown, index] { shown.tree->edit(index); })->setEnabled(writable && !top);
+    menu.addAction(tr("Delete"), this, [this, folder] { deleteItems({folder}); })->setEnabled(writable && !top);
+    menu.addSeparator();
+    menu.addAction(tr("Copy Asset Path"), this, [this, folder] { copyAssetPaths({folder}); });
+    menu.addAction(tr("Show in Explorer"), this, [this, folder] { showInExplorer(folder); });
+    menu.exec(shown.tree->viewport()->mapToGlobal(pos));
+}
+
+void ContentBrowser::renameItem(const QString& path, const QString& name) {
+    const QString renamed = operations_.rename(path, name);
+    if (renamed.isEmpty()) {
+        return;
+    }
+    if (isWithin(folder_, path)) {
+        navigate(root_, renamed + folder_.mid(path.size()));  // renamed the shown folder or one above it
+    } else {
+        select({renamed});
+    }
+}
+
+void ContentBrowser::dropItems(const std::size_t root, const QStringList& paths, const QString& folder,
+                               const Qt::DropAction action) {
+    // Files from outside the content are copied in, never taken from where they were.
+    QStringList moves;
+    QStringList copies;
+    for (const QString& path : paths) {
+        (action == Qt::MoveAction && isWithin(path, roots_[root].path) ? moves : copies) << path;
+    }
+    QStringList added = operations_.transfer(moves, folder, false);
+    added << operations_.transfer(copies, folder, true);
+    leaveMissingFolder();
+    select(added);
+}
+
+void ContentBrowser::newFolder(const std::size_t root, const QString& parent) {
+    if (root != root_ || parent != folder_) {
+        navigate(root, parent);
+    }
+    const QString path = AssetOperations::uniquePath(parent, tr("New Folder"), true);
+    if (!QDir().mkdir(path)) {
+        QMessageBox::warning(this, tr("New Folder"), tr("Could not create %1").arg(QDir::toNativeSeparators(path)));
+        return;
+    }
+    if (select({path})) {  // not if the filter hides it
+        items_->edit(items_->currentIndex());
+    }
+}
+
+void ContentBrowser::deleteItems(const QStringList& paths) {
+    operations_.remove(paths);
+    leaveMissingFolder();
+}
+
+void ContentBrowser::copyToClipboard(const QStringList& paths, const bool cut) {
+    if (paths.isEmpty()) {
+        return;
+    }
+    // thank god copying files is not that hard
+    // good luck pasting file://C:/Users/Asdfg/... into your messages folks
+    QList<QUrl> urls;
+    for (const QString& path : paths) {
+        urls << QUrl::fromLocalFile(path);
+    }
+    auto* mime = new QMimeData;
+    mime->setUrls(urls);
+    QGuiApplication::clipboard()->setMimeData(mime);
+    cut_paths_ = cut ? paths : QStringList();
+}
+
+void ContentBrowser::pasteInto(const QString& folder) {
+    const QMimeData* mime = QGuiApplication::clipboard()->mimeData();
+    if (mime == nullptr) {
+        return;
+    }
+    const QStringList paths = AssetFilterModel::droppedPaths(mime);
+    // Anything else on the clipboard, such as files copied in Explorer, is copied in.
+    const bool cut = !cut_paths_.isEmpty() && paths == cut_paths_;
+    const QStringList added = operations_.transfer(paths, folder, !cut);
+    if (cut) {
+        cut_paths_.clear();
+        QGuiApplication::clipboard()->clear();  // they're gone from where the URLs point
+    }
+    leaveMissingFolder();
+    select(added);
+}
+
+void ContentBrowser::copyAssetPaths(const QStringList& paths) {
+    QStringList names;
+    for (const QString& path : paths) {
+        names << assetName(path);
+    }
+    QGuiApplication::clipboard()->setText(names.join(QLatin1Char('\n')));
+}
+
+void ContentBrowser::copyUuids(const QStringList& paths) {
+    QStringList ids;
+    for (const QString& path : paths) {
+        engine::AssetMetadata metadata;
+        if (std::string error; engine::ReadAssetMetadata(editor::toPath(path), metadata, error)) {
+            ids << QString::fromStdString(metadata.id.ToString());
+        }
+    }
+    if (!ids.isEmpty()) {
+        QGuiApplication::clipboard()->setText(ids.join(QLatin1Char('\n')));
+    }
+}
+
+void ContentBrowser::showInExplorer(const QString& path) {
+    if (path == folder_) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        return;
+    }
+    //TODO: will we have other systems?... maybe there is a better way to do this?
+    // explorer.exe wants "/select," and the path as separate arguments.
+    QProcess::startDetached(QStringLiteral("explorer.exe"),
+                            {QStringLiteral("/select,"), QDir::toNativeSeparators(path)});
 }
 
 }  // namespace content

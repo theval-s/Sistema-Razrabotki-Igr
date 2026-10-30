@@ -40,6 +40,8 @@ public:
     void markDirty();
     /// Forgets unsaved changes, e.g. after building a scene in code.
     void markClean();
+    /// Follows the open file to `file` after it was renamed or moved on disk.
+    void relocate(const std::filesystem::path& file);
 
     /// Loads `file` into the engine's scene. Missing assets are only logged.
     /// On failure the current scene stays.

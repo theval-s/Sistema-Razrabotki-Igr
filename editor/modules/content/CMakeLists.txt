@@ -6,4 +6,6 @@ sri_add_editor_module(editor_module_content
     asset_filter_model.hpp
     asset_icons.cpp
     asset_icons.hpp
+    asset_operations.cpp
+    asset_operations.hpp
 )

@@ -17,6 +17,7 @@
 
 #include <filesystem>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -230,7 +231,13 @@ void MainWindow::refreshTitle() {
 
 void MainWindow::adoptStartupScene() {
     const std::filesystem::path& file = context_->sceneDocument().filePath();
-    if (!project_.startupScene.empty() || file.empty() || context_->sceneDocument().isDirty()) {
+    if (file.empty() || context_->sceneDocument().isDirty()) {
+        return;
+    }
+    // Keep a startup scene that still exists; one that was moved or deleted gets replaced.
+    std::error_code ec;
+    if (!project_.startupScene.empty() &&
+        std::filesystem::exists(engine::AssetPathResolver::ToAbsolute(engine::FromUtf8(project_.startupScene)), ec)) {
         return;
     }
     const std::string name = engine::AssetPathResolver::ToName(file);

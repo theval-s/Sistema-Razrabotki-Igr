@@ -120,6 +120,11 @@ void SceneDocument::markClean() {
     setClean(file_);
 }
 
+void SceneDocument::relocate(const std::filesystem::path& file) {
+    file_ = file;
+    checkState();
+}
+
 bool SceneDocument::open(const std::filesystem::path& file, std::string& error) {
     const std::filesystem::path target = engine::AssetPathResolver::ToAbsolute(file);
     std::string diagnostics;
