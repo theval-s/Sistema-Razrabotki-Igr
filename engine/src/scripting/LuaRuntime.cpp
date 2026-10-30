@@ -117,8 +117,10 @@ namespace engine {
             std::string failure;
 
             std::string Context() const {
+                const std::string owner = desc.autoloadName.empty()
+                    ? ", entity=" + desc.entityId : ", autoload=" + desc.autoloadName;
                 return ToUtf8(desc.source) + " [script=" + desc.assetId.ToString() +
-                    ", entity=" + desc.entityId + "]";
+                    owner + "]";
             }
             bool Fail(std::string& error, const std::string& message) {
                 faulted = true;
@@ -526,6 +528,27 @@ namespace engine {
         impl_->instances.erase(found);
         if (clean) error.clear();
         return clean;
+    }
+
+    void LuaRuntime::DestroyEntityInstances() noexcept {
+        // Re-find after each callback: destruction may invalidate other records or rehash the map.
+        // No ordering between entities is promised; all of them precede the autoload services.
+        while (impl_->state) {
+            const auto found = std::find_if(impl_->instances.begin(), impl_->instances.end(), [](const auto& entry) {
+                return entry.second->desc.autoloadName.empty() && !entry.second->destroying;
+            });
+            if (found == impl_->instances.end()) break;
+            InstanceId id;
+            id.value_ = found->first;
+            id.session_ = impl_->session;
+            try {
+                std::string error;
+                (void)DestroyInstance(id, error);
+            } catch (...) {
+                // Keep cleanup progressing even if diagnostic allocation fails.
+                impl_->instances.erase(id.value_);
+            }
+        }
     }
 
     bool LuaRuntime::UpdateInstances(double deltaSeconds, std::string& error) {

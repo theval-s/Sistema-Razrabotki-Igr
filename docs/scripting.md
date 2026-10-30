@@ -34,10 +34,24 @@ Once preflight succeeds, the subsystem creates one fresh state, then calls the
 existing CreateInstance and StartInstance in list order. These instances have no
 entity or ScriptComponent; Log and require are already available. Their IDs remain
 in runtime startup order and EndPlay destroys them in reverse order before dropping
-the state. A startup failure cleans up the partial session and returns false; an
+the state. Entity-owned instances finish before those services, so their OnDestroy
+callbacks can still use session services. A startup failure cleans up the partial session and returns false; an
 attempt to start while already playing preserves the active session. The original
 BeginPlay(contentRoot, error) delegates with an empty autoload list and remains
 usable without an owning Engine for the existing standalone runtime tests.
+
+Autoload instances fill the trailing optional `ScriptInstanceDesc::autoloadName`
+field and leave entityId empty. Runtime diagnostics show `autoload=Name` in place
+of `entity=...`, together with the source, script UUID, callback and Lua file:line.
+Existing entity callers can keep using the three-field descriptor unchanged.
+
+Logging has one owner per failure: LuaRuntime logs Lua load/callback failures;
+ScriptSubsystem logs validation/catalog/root failures that never reached Lua.
+BeginPlay returns that same error for the host to display in a status or dialog;
+the host must not log it again. Preflight failures have no Lua source line.
+Cleanup errors are separate diagnostics and do not overwrite the original startup
+error. A failed startup leaves no state or instances; a later OnUpdate error faults
+only that instance while the session and other scripts continue.
 
 ## Runtime lifecycle
 
@@ -107,7 +121,7 @@ fault state from the previous one.
 Instance callbacks and compatibility callbacks use the same protected-call helper.
 Load errors and call errors preserve the full Lua message and traceback. File chunks
 are named with `@` plus the UTF-8 native path, preserving Cyrillic Windows filenames.
-Instance errors add the callback, source, script UUID, and entity UUID. The runtime's
+Instance errors add the callback, source, script UUID, and entity UUID or autoload name. The runtime's
 SetError is the sole place that logs runtime failures; callers should not log the
 returned message again. Clickable source locations are deferred to stage 07.
 
@@ -117,7 +131,8 @@ skip it. Cleanup always releases callbacks, table, and environment even when
 OnDestroy fails. Repeated destruction of a known ID in the current session succeeds
 without invoking Lua again; invalid IDs and stale session tokens fail. EndPlay
 performs the same cleanup for every record, clears bookkeeping, and only then
-destroys the Lua state. Repeated Stop is safe.
+destroys the Lua state. Repeated and reentrant Stop calls are safe; an OnDestroy
+failure cannot prevent cleanup of later instances or the state.
 
 Instance environments isolate script globals and tables, but inherit the runtime's
 global bindings; this is not a separate security sandbox. Instance data and Lua

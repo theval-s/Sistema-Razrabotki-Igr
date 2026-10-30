@@ -9,9 +9,17 @@
 #include <engine/core/PathUtils.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/engine.hpp>
+#include <spdlog/spdlog.h>
 
 namespace engine {
 namespace {
+
+// Runtime failures are already logged by LuaRuntime. Only orchestration/preflight errors use this.
+bool StartupError(std::string& error, std::string message) {
+    error = std::move(message);
+    spdlog::error("[Lua] {}", error);
+    return false;
+}
 
 // Match the runtime loader's component-wise, canonical containment check.
 bool IsUnderRoot(const std::filesystem::path& path, const std::filesystem::path& root) {
@@ -27,11 +35,6 @@ bool IsUnderRoot(const std::filesystem::path& path, const std::filesystem::path&
     }
     return true;
 }
-
-struct ResolvedAutoload {
-    std::string name;
-    ScriptInstanceDesc script;
-};
 
 }  // namespace
 
@@ -56,43 +59,40 @@ bool ScriptSubsystem::BeginPlay(const std::filesystem::path& root, std::string& 
 bool ScriptSubsystem::BeginPlay(const std::filesystem::path& root,
                                 std::span<const AutoloadDefinition> autoloads, std::string& error) {
     if (!ready_) {
-        error = "ScriptSubsystem is not initialized";
-        return false;
+        return StartupError(error, "ScriptSubsystem is not initialized");
     }
-    if (playing_) {
-        error = "A scripting Play session is already active";
-        return false;
+    if (playing_ || endingPlay_) {
+        return StartupError(error, "A scripting Play session is already active or ending");
     }
-    if (!ValidateAutoloadDefinitions(autoloads, error)) return false;
+    if (!ValidateAutoloadDefinitions(autoloads, error)) return StartupError(error, error);
     try {
         const auto absolute = std::filesystem::weakly_canonical(std::filesystem::absolute(root));
         if (root.empty() || !std::filesystem::is_directory(absolute)) {
-            error = "The scripting root must be an existing directory";
-            return false;
+            return StartupError(error, "The scripting root must be an existing directory");
         }
-        std::vector<ResolvedAutoload> resolved;
+        std::vector<ScriptInstanceDesc> resolved;
         resolved.reserve(autoloads.size());
         for (const auto& definition : autoloads) {
             if (!definition.enabled) continue;
+            const std::string context = "Autoload '" + definition.name + "' [script=" +
+                definition.script.id.ToString() + "]";
             // The shared catalog survives scene-assets teardown. The path hint is never a lookup key.
             const auto* entry = GetEngine().GetAssets().GetCatalog().Find(
                 definition.script.id, CatalogAssetKind::Script);
             if (!entry) {
-                error = "Autoload '" + definition.name + "': missing Script UUID " + definition.script.id.ToString();
-                return false;
+                return StartupError(error, context + ": missing Script UUID");
             }
             std::error_code sourceError;
             const auto source = std::filesystem::canonical(entry->source, sourceError);
-            if (sourceError || !std::filesystem::is_regular_file(source)) {
-                error = "Autoload '" + definition.name + "': cannot read script source " + ToUtf8(entry->source);
+            if (sourceError || !std::filesystem::is_regular_file(source, sourceError)) {
+                error = context + ": cannot read script source " + ToUtf8(entry->source);
                 if (sourceError) error += ": " + sourceError.message();
-                return false;
+                return StartupError(error, error);
             }
             if (!IsUnderRoot(source, absolute)) {
-                error = "Autoload '" + definition.name + "': script source escapes project content root";
-                return false;
+                return StartupError(error, context + ": script source escapes project content root");
             }
-            resolved.push_back({definition.name, {source, entry->metadata.id, {}}});
+            resolved.push_back({source, entry->metadata.id, {}, definition.name});
         }
 
         // Resolve every asset before executing Lua. Keep IDs before StartInstance so a failed
@@ -103,14 +103,12 @@ bool ScriptSubsystem::BeginPlay(const std::filesystem::path& root,
         root_ = absolute;
         for (const auto& definition : resolved) {
             InstanceId instance;
-            if (!runtime_.CreateInstance(definition.script, instance, error)) {
-                error = "Autoload '" + definition.name + "': " + error;
+            if (!runtime_.CreateInstance(definition, instance, error)) {
                 EndPlay();
                 return false;
             }
             autoloadInstances_.push_back(instance);
             if (!runtime_.StartInstance(instance, error)) {
-                error = "Autoload '" + definition.name + "': " + error;
                 EndPlay();
                 return false;
             }
@@ -119,14 +117,17 @@ bool ScriptSubsystem::BeginPlay(const std::filesystem::path& root,
         error.clear();
         return true;
     } catch (const std::exception& exception) {
-        error = exception.what();
+        StartupError(error, exception.what());
         EndPlay();
         return false;
     }
 }
 
 void ScriptSubsystem::EndPlay() noexcept {
+    if (endingPlay_) return;
+    endingPlay_ = true;
     playing_ = false;
+    runtime_.DestroyEntityInstances();
     for (auto it = autoloadInstances_.rbegin(); it != autoloadInstances_.rend(); ++it) {
         try {
             std::string error;
@@ -138,6 +139,7 @@ void ScriptSubsystem::EndPlay() noexcept {
     autoloadInstances_.clear();
     runtime_.Shutdown();
     root_.clear();
+    endingPlay_ = false;
 }
 
 void ScriptSubsystem::Update(const FrameContext& frame) {

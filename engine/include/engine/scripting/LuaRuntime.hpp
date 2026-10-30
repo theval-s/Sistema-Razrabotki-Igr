@@ -28,6 +28,8 @@ namespace engine {
         std::filesystem::path source;
         AssetUuid assetId;
         std::string entityId;
+        // Empty for entity-owned instances. Autoloads set this and leave entityId empty.
+        std::string autoloadName{};
     };
 
     class ENGINE_API LuaRuntime final {
@@ -86,6 +88,8 @@ namespace engine {
 
     private:
         friend class ScriptSubsystem;
+        /// Finish entity-owned instances while autoload services and shared modules still exist.
+        void DestroyEntityInstances() noexcept;
         bool UpdateInstances(double deltaSeconds, std::string& error);
         struct Impl;
         std::unique_ptr<Impl> impl_;

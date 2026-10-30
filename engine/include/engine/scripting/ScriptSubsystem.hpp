@@ -40,6 +40,7 @@ private:
     std::vector<InstanceId> autoloadInstances_;
     bool ready_ = false;
     bool playing_ = false;
+    bool endingPlay_ = false;
 };
 
 }  // namespace engine
