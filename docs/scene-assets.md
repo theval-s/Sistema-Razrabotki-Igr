@@ -65,8 +65,11 @@ Store a scene under the game root as `<name>.scene.json` and give it its own
 
 The cube and material UUIDs above match checked-in engine sidecars. Entity UUIDs
 are illustrative and unique within the scene. Parent values refer to entity UUIDs
-within the same file. The codec also supports `Bounds`, `Controller` and
-`GamePersistence` (below);
+within the same file. The codec also supports `Bounds`, `Controller`,
+`GamePersistence` (below), and one `Script` component per entity. A Script stores
+`{"script": {"id": "<asset UUID>", "path": "game/Move.lua"}, "enabled": true}`;
+an unassigned slot uses `"script": null`. Lua tables and instance IDs are not saved.
+See [scripting.md](scripting.md) for attachment and lifecycle details. The codec
 it rejects unknown fields/components, duplicate keys, cycles, invalid numbers,
 and bad active camera/light selections before scene switching.
 

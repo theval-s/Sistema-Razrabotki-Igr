@@ -3,6 +3,8 @@
 #include <string_view>
 #include <span>
 #include <vector>
+#include <unordered_map>
+#include <engine/scene/Scene.hpp>
 
 #include <engine/core/Subsystem.hpp>
 #include <engine/scripting/LuaRuntime.hpp>
@@ -27,6 +29,10 @@ public:
     [[nodiscard]] bool BeginPlay(const std::filesystem::path& root,
                                  std::span<const AutoloadDefinition> autoloads, std::string& error);
     void EndPlay() noexcept;
+    /// After scene population, bind attachments to this session. The scene must outlive
+    /// this association; call ClearSceneScripts before unloading it. Autoloads survive.
+    void StartSceneScripts(Scene& scene);
+    void ClearSceneScripts() noexcept;
     [[nodiscard]] bool IsPlaying() const noexcept { return playing_; }
     [[nodiscard]] const std::filesystem::path& GetRoot() const noexcept { return root_; }
 
@@ -35,6 +41,18 @@ public:
     [[nodiscard]] const LuaRuntime& GetRuntime() const noexcept { return runtime_; }
 
 private:
+    void ReconcileSceneScripts();
+    void RemoveSceneScript(entt::entity entity) noexcept;
+    struct SceneInstance {
+        AssetUuid asset;
+        bool enabled = false;
+        InstanceId instance{};
+        bool created = false;
+        std::shared_ptr<void> lifetime;
+    };
+    Scene* scene_ = nullptr;
+    std::size_t observer_ = 0;
+    std::unordered_map<entt::entity, SceneInstance> sceneInstances_;
     LuaRuntime runtime_;
     std::filesystem::path root_;
     std::vector<InstanceId> autoloadInstances_;

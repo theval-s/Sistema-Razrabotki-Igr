@@ -4,6 +4,7 @@
 #include <engine/core/FileSystem.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
 #include <engine/scene/SceneDocument.hpp>
+#include <engine/core/FrameContext.hpp>
 #include <gtest/gtest.h>
 
 namespace {
@@ -137,6 +138,127 @@ TEST(PlayMode, NativeControllersStayDormantInEditAndRestartOnPlay) {
     EXPECT_EQ(created, 1);
     ASSERT_TRUE(f.host.PlayCurrentScene(f.root, {}, error)) << error;
     EXPECT_EQ(created, 2);
+    f.host.StopPlay();
+}
+TEST(ScriptComponents, IndependentInstancesMoveOwnersAndStopRestoresAuthoringData) {
+    PlayFixture f;
+    std::string error;
+    const auto source = f.root / "Move.lua";
+    const engine::AssetMetadata meta{engine::NewUuid(), engine::CatalogAssetKind::Script};
+    ASSERT_TRUE(engine::CreateNewFile(source, R"(
+        elapsed = 0
+        function OnStart() assert(entity:IsValid()) end
+        function OnUpdate(dt)
+            elapsed = elapsed + dt
+            local p = entity:GetPosition()
+            p.x = p.x + elapsed
+            entity:SetPosition(p)
+        end
+    )", error));
+    ASSERT_TRUE(engine::WriteAssetMetadata(source, meta, error));
+    ASSERT_TRUE(f.host.Initialize());
+    auto& scene = f.host.GetScene();
+    auto first = scene.CreateEntity("First");
+    auto second = scene.CreateEntity("Second");
+    scene.GetTransform(second).position.x = 10;
+    for (const auto entity : {first, second})
+        scene.AddComponent<engine::ScriptComponent>(entity, engine::ScriptComponent{{meta.id, "game/Move.lua"}, true});
+    EXPECT_EQ(scene.AddComponent<engine::ScriptComponent>(first), nullptr);
+    ASSERT_TRUE(f.host.PlayCurrentScene(f.root, {}, error)) << error;
+    first = scene.FindFirstByName("First"); second = scene.FindFirstByName("Second");
+    engine::FrameContext frame; frame.deltaSeconds = 0.5;
+    f.scripting->Update(frame);
+    EXPECT_FLOAT_EQ(scene.GetTransform(first).position.x, 0.5f);
+    EXPECT_FLOAT_EQ(scene.GetTransform(second).position.x, 10.5f);
+    scene.TryGetComponent<engine::ScriptComponent>(first)->enabled = false;
+    f.scripting->Update(frame);
+    EXPECT_FLOAT_EQ(scene.GetTransform(first).position.x, 0.5f);
+    EXPECT_FLOAT_EQ(scene.GetTransform(second).position.x, 11.5f);
+    scene.TryGetComponent<engine::ScriptComponent>(first)->enabled = true;
+    f.scripting->Update(frame);
+    EXPECT_FLOAT_EQ(scene.GetTransform(first).position.x, 1.0f); // elapsed restarted at zero.
+    scene.RemoveComponent<engine::ScriptComponent>(second);
+    f.scripting->Update(frame);
+    EXPECT_FLOAT_EQ(scene.GetTransform(second).position.x, 13.0f);
+    f.host.StopPlay();
+    first = scene.FindFirstByName("First"); second = scene.FindFirstByName("Second");
+    EXPECT_FLOAT_EQ(scene.GetTransform(first).position.x, 0);
+    EXPECT_FLOAT_EQ(scene.GetTransform(second).position.x, 10);
+    ASSERT_TRUE(scene.HasComponent<engine::ScriptComponent>(second));
+    EXPECT_TRUE(scene.TryGetComponent<engine::ScriptComponent>(first)->enabled);
+}
+
+TEST(ScriptComponents, SceneSwitchStartsNewScriptsAndInvalidatesRetainedOwner) {
+    PlayFixture f;
+    std::string error;
+    ASSERT_TRUE(engine::CreateNewFile(f.root / "shared.lua", "return {owners={}, destroys=0}", error));
+    const auto source = f.root / "Owner.lua";
+    const engine::AssetMetadata meta{engine::NewUuid(), engine::CatalogAssetKind::Script};
+    ASSERT_TRUE(engine::CreateNewFile(source, R"(
+        local shared = require('shared')
+        function OnStart() table.insert(shared.owners, entity) end
+        function OnDestroy()
+            assert(entity:IsValid())
+            shared.destroys = shared.destroys + 1
+        end
+    )", error));
+    ASSERT_TRUE(engine::WriteAssetMetadata(source, meta, error));
+    engine::SceneDocument document;
+    engine::SceneEntityDefinition next; next.id = engine::NewUuid(); next.name = "Next";
+    next.script = engine::ScriptComponent{{meta.id, "game/Owner.lua"}, true};
+    document.entities.push_back(next);
+    std::string text;
+    ASSERT_TRUE(engine::SerializeSceneDocument(document, text, error));
+    const auto level = f.root / "scenes/Next.scene.json";
+    ASSERT_TRUE(engine::CreateNewFile(level, text, error));
+    ASSERT_TRUE(engine::WriteAssetMetadata(level, {engine::NewUuid(), engine::CatalogAssetKind::Scene}, error));
+    ASSERT_TRUE(f.host.Initialize());
+    auto& scene = f.host.GetScene();
+    scene.AddComponent<engine::ScriptComponent>(scene.CreateEntity("Old"), *next.script);
+    ASSERT_TRUE(f.host.PlayCurrentScene(f.root, {}, error)) << error;
+    ASSERT_TRUE(f.host.RequestOpenLevel("Next", error));
+    f.host.Tick();
+    EXPECT_TRUE(f.scripting->GetRuntime().ExecuteString(R"(
+        local s = require('shared')
+        assert(#s.owners == 2 and s.destroys == 1)
+        assert(not s.owners[1]:IsValid() and s.owners[2]:IsValid())
+        assert(not pcall(function() s.owners[1]:GetPosition() end))
+    )", "owners-after-scene-change", error)) << error;
+    scene.DestroyEntity(scene.FindFirstByName("Next"));
+    EXPECT_TRUE(f.scripting->GetRuntime().ExecuteString(
+        "assert(require('shared').destroys == 2); assert(not require('shared').owners[2]:IsValid())",
+        "owners-after-delete", error)) << error;
+    f.host.StopPlay();
+}
+
+TEST(ScriptComponents, BrokenAndMissingAttachmentsDoNotStopHealthyObjects) {
+    PlayFixture f;
+    std::string error;
+    const auto file = f.root / "Check.lua";
+    const engine::AssetMetadata meta{engine::NewUuid(), engine::CatalogAssetKind::Script};
+    ASSERT_TRUE(engine::CreateNewFile(file, R"(
+        function OnUpdate(dt)
+            local p = entity:GetPosition()
+            if p.x < 0 then error('broken object') end
+            p.x = p.x + 1
+            entity:SetPosition(p)
+        end
+    )", error));
+    ASSERT_TRUE(engine::WriteAssetMetadata(file, meta, error));
+    ASSERT_TRUE(f.host.Initialize());
+    auto& scene = f.host.GetScene();
+    const auto bad = scene.CreateEntity("Broken");
+    scene.GetTransform(bad).position.x = -1;
+    const auto good = scene.CreateEntity("Healthy");
+    for (auto entity : {bad, good}) scene.AddComponent<engine::ScriptComponent>(entity,
+        engine::ScriptComponent{{meta.id, "game/Check.lua"}, true});
+    scene.AddComponent<engine::ScriptComponent>(scene.CreateEntity("Missing"),
+        engine::ScriptComponent{{engine::NewUuid(), "game/missing.lua"}, true});
+    ASSERT_TRUE(f.host.PlayCurrentScene(f.root, {}, error)) << error;
+    engine::FrameContext frame; frame.deltaSeconds = 0.1;
+    f.scripting->Update(frame); f.scripting->Update(frame);
+    EXPECT_FLOAT_EQ(scene.GetTransform(scene.FindFirstByName("Healthy")).position.x, 2);
+    EXPECT_FLOAT_EQ(scene.GetTransform(scene.FindFirstByName("Broken")).position.x, -1);
     f.host.StopPlay();
 }
 } // namespace

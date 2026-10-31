@@ -365,6 +365,7 @@ bool Engine::PlayCurrentScene(const std::filesystem::path& root,
         StopPlay();
         return false;
     }
+    scripting->StartSceneScripts(impl_->scene);
     impl_->scene.SetControllerInstantiationEnabled(true);
     impl_->scene.SetControllersActive(true);
     impl_->frame.simulationTimeSeconds = 0;
@@ -421,13 +422,18 @@ bool Engine::RequestOpenLevel(std::string_view name, std::string& error) {
 }
 
 void Engine::CommitScene(const SceneDocument& document) {
-    if (auto* scripting = GetSubsystem<ScriptSubsystem>()) scripting->GetRuntime().ClearEntityInstances();
+    if (auto* scripting = GetSubsystem<ScriptSubsystem>()) {
+        scripting->ClearSceneScripts();
+        scripting->GetRuntime().ClearEntityInstances();
+    }
     if (auto* rendering = GetSubsystem<RenderingSubsystem>()) rendering->GetWorld().sceneItems.clear();
     impl_->scene.SetControllerInstantiationEnabled(false);
     impl_->scene.Clear();
     impl_->sceneAssets->UnloadAll();
     PopulateScene(document, *impl_->sceneAssets, impl_->scene);
     impl_->sceneBaseline = document;
+    if (auto* scripting = GetSubsystem<ScriptSubsystem>(); scripting && scripting->IsPlaying())
+        scripting->StartSceneScripts(impl_->scene);
     if (!impl_->editorMode || (IsPlaying() && !impl_->transitioning)) {
         impl_->scene.SetControllerInstantiationEnabled(true);
         if (!impl_->deferControllerActivation) impl_->scene.SetControllersActive(true);

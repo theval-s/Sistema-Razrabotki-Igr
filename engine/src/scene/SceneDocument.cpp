@@ -86,7 +86,15 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
     }
     if (j.contains("parent")) entity.parent = OptionalId(j.at("parent"));
     const auto& components = j.at("components");
-    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence"});
+    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script"});
+    if (components.contains("Script")) {
+        const auto& script = components.at("Script");
+        Fields(script, {"script", "enabled"});
+        ScriptComponent value;
+        if (!script.at("script").is_null()) value.script = Reference(script.at("script"));
+        value.enabled = script.at("enabled").get<bool>();
+        entity.script = std::move(value);
+    }
     if (components.contains("GamePersistence")) {
         const auto& persist = components.at("GamePersistence");
         Fields(persist, {"transform", "controllerState"});
@@ -251,6 +259,13 @@ Json Encode(const SceneDocument& document) {
         if (entity.persistence)
             components["GamePersistence"] = {{"transform", entity.persistence->transform},
                                               {"controllerState", entity.persistence->controllerState}};
+        if (entity.script) {
+            const auto& reference = entity.script->script;
+            if (!reference.id.IsValid() && !reference.path.empty())
+                throw std::invalid_argument("invalid Script reference");
+            components["Script"] = {{"script", reference.id.IsValid() ? Encode(reference) : Json(nullptr)},
+                                    {"enabled", entity.script->enabled}};
+        }
         root["entities"].push_back({{"id", entity.id.ToString()}, {"name", entity.name}, {"tags", entity.tags},
                                      {"parent", Encode(entity.parent)},
                                      {"components", std::move(components)}});
@@ -306,6 +321,7 @@ bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDo
             if (const auto* controller = scene.GetControllerDefinition(entity)) definition.controller = *controller;
             if (const auto* bounds = scene.TryGetComponent<Bounds>(entity)) definition.bounds = *bounds;
             if (const auto* persistence = scene.TryGetComponent<GamePersistence>(entity)) definition.persistence = *persistence;
+            if (const auto* script = scene.TryGetComponent<ScriptComponent>(entity)) definition.script = *script;
             if (auto parent = scene.GetParent(entity); parent != entt::null)
                 definition.parent = scene.GetId(parent);
             definition.transform = scene.GetTransform(entity);
@@ -359,6 +375,7 @@ void PopulateScene(const SceneDocument& document, AssetSystem& assets, Scene& de
         if (definition.spotLight) destination.AddComponent<SpotLight>(entity, *definition.spotLight);
         if (definition.bounds) destination.AddComponent<Bounds>(entity, *definition.bounds);
         if (definition.persistence) destination.AddComponent<GamePersistence>(entity, *definition.persistence);
+        if (definition.script) destination.AddComponent<ScriptComponent>(entity, *definition.script);
         if (definition.controller) destination.AttachController(entity, *definition.controller);
     }
     if (document.activeCamera) destination.SetActiveCamera(destination.FindByUuid(*document.activeCamera));

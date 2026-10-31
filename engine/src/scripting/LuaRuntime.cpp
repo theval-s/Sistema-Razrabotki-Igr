@@ -23,8 +23,22 @@
 
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
+#include <engine/scene/Scene.hpp>
 
 namespace engine {
+    bool ScriptEntityHandle::IsValid() const {
+        return !lifetime.expired() && scene && scene->IsValid(entity);
+    }
+    DirectX::SimpleMath::Vector3 ScriptEntityHandle::GetPosition() const {
+        if (!IsValid()) throw std::runtime_error("Entity handle is no longer valid");
+        return scene->GetTransform(entity).position;
+    }
+    void ScriptEntityHandle::SetPosition(DirectX::SimpleMath::Vector3 position) const {
+        if (!IsValid()) throw std::runtime_error("Entity handle is no longer valid");
+        if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z))
+            throw std::runtime_error("Position must be finite");
+        scene->GetTransform(entity).position = position;
+    }
 
     namespace {
 
@@ -317,6 +331,12 @@ namespace engine {
             globals["loadfile"] = sol::nil;
 
             RegisterLog(*impl_->state);
+            using Vector3 = DirectX::SimpleMath::Vector3;
+            impl_->state->new_usertype<Vector3>("Vector3", sol::constructors<Vector3(), Vector3(float, float, float)>(),
+                "x", &Vector3::x, "y", &Vector3::y, "z", &Vector3::z);
+            impl_->state->new_usertype<ScriptEntityHandle>("Entity", sol::no_constructor,
+                "IsValid", &ScriptEntityHandle::IsValid, "GetPosition", &ScriptEntityHandle::GetPosition,
+                "SetPosition", &ScriptEntityHandle::SetPosition);
             sol::table scene = impl_->state->create_named_table("Scene");
             scene.set_function("OpenLevel", [runtime = impl_.get()](const std::string& name) {
                 std::string error;
@@ -432,6 +452,7 @@ namespace engine {
             // defaults) and closures belong to this instance, never a shared prototype.
             record->environment = sol::environment(*impl_->state, sol::create, impl_->state->globals());
             record->environment["_G"] = record->environment;
+            if (desc.owner) record->environment["entity"] = *desc.owner;
             const std::string context = record->Context() + " [callback=CreateInstance]";
             sol::load_result loaded = impl_->state->load(source, "@" + ToUtf8(desc.source));
             if (!CheckResult(loaded, error, context)) {

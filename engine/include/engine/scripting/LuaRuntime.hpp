@@ -10,8 +10,20 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <optional>
+#include <SimpleMath.h>
+#include <entt/entity/entity.hpp>
 
 namespace engine {
+    class Scene;
+    struct ENGINE_API ScriptEntityHandle {
+        Scene* scene = nullptr;
+        entt::entity entity = entt::null;
+        std::weak_ptr<void> lifetime;
+        [[nodiscard]] bool IsValid() const;
+        [[nodiscard]] DirectX::SimpleMath::Vector3 GetPosition() const;
+        void SetPosition(DirectX::SimpleMath::Vector3 position) const;
+    };
 
     /// Transient handle: a local slot plus a unique runtime-session token. Never serialized.
     class InstanceId final {
@@ -31,6 +43,7 @@ namespace engine {
         std::string entityId;
         // Empty for entity-owned instances. Autoloads set this and leave entityId empty.
         std::string autoloadName{};
+        std::optional<ScriptEntityHandle> owner{};
     };
 
     class ENGINE_API LuaRuntime final {

@@ -127,6 +127,7 @@ void ScriptSubsystem::EndPlay() noexcept {
     if (endingPlay_) return;
     endingPlay_ = true;
     playing_ = false;
+    ClearSceneScripts();
     runtime_.DestroyEntityInstances();
     for (auto it = autoloadInstances_.rbegin(); it != autoloadInstances_.rend(); ++it) {
         try {
@@ -144,8 +145,74 @@ void ScriptSubsystem::EndPlay() noexcept {
 
 void ScriptSubsystem::Update(const FrameContext& frame) {
     if (!playing_ || frame.paused || frame.deltaSeconds <= 0.0) return;
+    ReconcileSceneScripts();
     std::string error;
     (void)runtime_.UpdateInstances(frame.deltaSeconds, error);  // Runtime logs instance diagnostics.
+}
+
+void ScriptSubsystem::RemoveSceneScript(entt::entity entity) noexcept {
+    const auto it = sceneInstances_.find(entity);
+    if (it == sceneInstances_.end()) return;
+    if (it->second.created) {
+        try {
+            std::string error;
+            (void)runtime_.DestroyInstance(it->second.instance, error);
+        } catch (...) {}
+    }
+    sceneInstances_.erase(it); // Expire owner handles after OnDestroy.
+}
+
+void ScriptSubsystem::ClearSceneScripts() noexcept {
+    while (!sceneInstances_.empty()) RemoveSceneScript(sceneInstances_.begin()->first);
+    if (scene_) scene_->RemoveLifecycleObserver(observer_);
+    scene_ = nullptr;
+}
+
+void ScriptSubsystem::StartSceneScripts(Scene& scene) {
+    ClearSceneScripts();
+    if (!playing_) return;
+    scene_ = &scene;
+    observer_ = scene.AddLifecycleObserver([this](Scene::LifecycleEvent event, entt::entity entity,
+                                                 entt::id_type component) {
+        if (event == Scene::LifecycleEvent::EntityDestroying ||
+            component == entt::type_hash<ScriptComponent>::value()) RemoveSceneScript(entity);
+    });
+    ReconcileSceneScripts();
+}
+
+void ScriptSubsystem::ReconcileSceneScripts() {
+    if (!scene_) return;
+    std::vector<entt::entity> removed;
+    for (const auto& [entity, record] : sceneInstances_) {
+        const auto* component = scene_->TryGetComponent<ScriptComponent>(entity);
+        if (!component || component->script.id != record.asset || component->enabled != record.enabled)
+            removed.push_back(entity);
+    }
+    for (const auto entity : removed) RemoveSceneScript(entity);
+    std::vector<InstanceId> start;
+    scene_->ForEach<ScriptComponent>([&](entt::entity entity, const ScriptComponent& component) {
+        if (sceneInstances_.contains(entity)) return;
+        auto& record = sceneInstances_[entity];
+        record.asset = component.script.id;
+        record.enabled = component.enabled;
+        if (!component.enabled || !component.script.id.IsValid()) return;
+        const auto* entry = GetEngine().GetAssets().GetCatalog().Find(record.asset, CatalogAssetKind::Script);
+        if (!entry) {
+            spdlog::error("[Lua] Entity {} [script={}]: missing Script UUID", scene_->GetId(entity).ToString(),
+                          record.asset.ToString());
+            return; // Remember the failed attachment; do not repeat the error every frame.
+        }
+        record.lifetime = std::make_shared<int>(0);
+        ScriptInstanceDesc desc{entry->source, record.asset, scene_->GetId(entity).ToString()};
+        desc.owner = ScriptEntityHandle{scene_, entity, record.lifetime};
+        std::string error;
+        record.created = runtime_.CreateInstance(desc, record.instance, error);
+        if (record.created) start.push_back(record.instance);
+    });
+    for (const auto instance : start) {
+        std::string error;
+        (void)runtime_.StartInstance(instance, error); // A failed entity instance does not stop other scripts.
+    }
 }
 
 }  // namespace engine

@@ -5,6 +5,13 @@
 #include <QObject>
 #include <QSignalBlocker>
 #include <QStringList>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QPushButton>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <engine/core/PathUtils.hpp>
 
 #include <algorithm>
 #include <memory>
@@ -238,6 +245,73 @@ void buildGamePersistence(PropertyForm& form, editor::EditorContext& context, co
                  field(scene, entity, &engine::GamePersistence::controllerState));
 }
 
+class ScriptPicker final : public editor::AssetPicker {
+public:
+    explicit ScriptPicker(const engine::AssetCatalog& catalog)
+        : AssetPicker(catalog, engine::CatalogAssetKind::Script, QObject::tr("None")), catalog_(catalog) {
+        setAcceptDrops(true);
+        lineEdit()->setAcceptDrops(false);
+    }
+protected:
+    const engine::CatalogEntry* dropped(const QMimeData* mime) const {
+        if (!mime->hasFormat("application/x-sri-asset-paths")) return nullptr;
+        const auto paths = QString::fromUtf8(mime->data("application/x-sri-asset-paths")).split('\n', Qt::SkipEmptyParts);
+        if (paths.size() != 1) return nullptr;
+        const auto path = engine::FromUtf8(paths.front().toStdString());
+        for (const auto* entry : catalog_.List(engine::CatalogAssetKind::Script)) {
+            if (entry->source == path) return entry;
+        }
+        return nullptr;
+    }
+    void dragEnterEvent(QDragEnterEvent* event) override {
+        if (dropped(event->mimeData())) { event->setDropAction(Qt::CopyAction); event->accept(); }
+    }
+    void dropEvent(QDropEvent* event) override {
+        if (const auto* entry = dropped(event->mimeData())) {
+            reload();
+            selectId(entry->metadata.id);
+            event->setDropAction(Qt::CopyAction);
+            event->accept();
+        }
+    }
+private:
+    const engine::AssetCatalog& catalog_;
+};
+
+void buildScript(PropertyForm& form, editor::EditorContext& context, entt::entity entity) {
+    auto& scene = context.scene();
+    auto& catalog = context.engine().GetAssets().GetCatalog();
+    form.addBool(QObject::tr("Enabled"), field(scene, entity, &engine::ScriptComponent::enabled));
+    auto* picker = new ScriptPicker(catalog);
+    QObject::connect(picker, &QComboBox::currentIndexChanged, picker, [&context, &scene, entity, picker] {
+        if (auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity)) {
+            component->script = picker->reference().value_or(engine::AssetReference{});
+            context.sceneDocument().markDirty();
+        }
+    });
+    form.addRow(QObject::tr("Script"), picker, [&scene, entity, picker] {
+        const auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity);
+        if (!component || picker->hasFocus() || picker->lineEdit()->hasFocus() || picker->view()->isVisible()) return;
+        const QSignalBlocker blocker(picker);
+        if (!component->script.id.IsValid()) { picker->setCurrentIndex(0); return; }
+        if (!picker->selectId(component->script.id)) {
+            picker->setCurrentIndex(-1);
+            picker->lineEdit()->setPlaceholderText(QObject::tr("%1 (missing)").arg(
+                QString::fromStdString(component->script.path.empty() ? component->script.id.ToString() : component->script.path)));
+        }
+    });
+    auto* open = new QPushButton(QObject::tr("Open script"));
+    QObject::connect(open, &QPushButton::clicked, open, [&scene, &catalog, entity] {
+        if (const auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity))
+            if (const auto* entry = catalog.Find(component->script.id, engine::CatalogAssetKind::Script))
+                QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromStdString(engine::ToUtf8(entry->source))));
+    });
+    form.addRow({}, open, [&scene, &catalog, entity, open] {
+        const auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity);
+        open->setEnabled(component && catalog.Find(component->script.id, engine::CatalogAssetKind::Script));
+    });
+}
+
 /// Default-constructed, through Scene: it counts as a structural change, so the scene is dirty.
 template <class T>
 void addComponent(editor::EditorContext& context, const entt::entity entity) {
@@ -287,6 +361,8 @@ void addBounds(editor::EditorContext& context, const entt::entity entity) {
 std::span<const ComponentInspector> componentInspectors() {
     // maybe not necessary? I doubt we're gonna be caring about translation soon
     static const std::vector<ComponentInspector> inspectors{
+        {entt::type_hash<engine::ScriptComponent>::value(), QObject::tr("Script"), buildScript,
+         addComponent<engine::ScriptComponent>, removeComponent<engine::ScriptComponent>},
         {entt::type_hash<engine::Transform>::value(), QObject::tr("Transform"), buildTransform},
         {entt::type_hash<engine::Tags>::value(), QObject::tr("Tags"), buildTags},
         {entt::type_hash<engine::MeshRenderer>::value(), QObject::tr("Mesh Renderer"), buildMeshRenderer,

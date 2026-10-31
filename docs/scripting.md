@@ -5,7 +5,7 @@
 Use **Play Current Scene** on the toolbar (F5), **Pause** to suspend simulation,
 and **Stop** (Shift+F5) to return to editing. Play uses the current in-memory scene,
 including unsaved edits; it does not compile C++ or write the scene to disk.
-Autoloads start before native controllers. Stop restores the original scene,
+Autoloads start before entity scripts and native controllers. Stop restores the original scene,
 selection and unsaved-change status, even after visiting other levels. Authoring
 panels and scene/project file actions are disabled during Play. Closing the editor
 stops the game before offering to save the restored editing scene.
@@ -34,9 +34,7 @@ logged by the engine, so displaying the returned message is optional.
 
 Scene changes destroy entity-owned Lua instances before removing old entities,
 then load the new scene. Autoload instances and require cache survive across levels
-until Stop. The future ScriptComponent integration must create/start new entity
-instances after scene population; component attachment and Transform bindings are
-not implemented by Play mode itself. Unknown/unserializable authored components
+until Stop. New entity scripts start after scene population. Unknown/unserializable authored components
 cause Play to fail before scene mutation rather than silently dropping them.
 
 Snapshots are authored data, not SaveGame files. In editor mode C++ controller
@@ -66,7 +64,7 @@ The dialog edits a copy; Save writes the project atomically before replacing the
 in-memory settings, and Cancel discards edits. It is unavailable during an active
 scripting session. The editor registers one ScriptSubsystem after input and before
 render extraction. Engine initialization prepares it without creating a Lua state;
-Engine::Tick is the only update loop. Editor Start/Stop actions are a later step.
+Engine::Tick is the only update loop. Play/Stop controls the session.
 
 `BeginPlay(contentRoot, project.autoloads, error)` validates the definitions and
 resolves enabled entries by UUID using the owning Engine's shared asset catalog.
@@ -84,7 +82,7 @@ attempt to start while already playing preserves the active session. The origina
 BeginPlay(contentRoot, error) delegates with an empty autoload list and remains
 usable without an owning Engine for the existing standalone runtime tests.
 
-Autoload instances fill the trailing optional `ScriptInstanceDesc::autoloadName`
+Autoload instances fill the optional `ScriptInstanceDesc::autoloadName`
 field and leave entityId empty. Runtime diagnostics show `autoload=Name` in place
 of `entity=...`, together with the source, script UUID, callback and Lua file:line.
 Existing entity callers can keep using the three-field descriptor unchanged.
@@ -99,6 +97,46 @@ only that instance while the session and other scripts continue.
 
 ## Runtime lifecycle
 
+### GameObject scripts
+
+Select a GameObject, choose **Add Component → Script**, and choose an imported Lua
+asset in the Script picker (or drag one from the Content Browser onto the picker).
+Each object has at most one Script component. Use **Open script** to open the file
+in its associated external editor. Enabled and the asset reference are saved with
+the scene, including empty slots and references to missing assets.
+
+Press Play to run the script. Each object executes the source separately and owns
+its own fields and callbacks, even when several objects use the same asset.
+Autoloads have no `entity`. Object scripts receive a checked owner handle:
+
+```lua
+speed = 2
+
+function OnStart()
+    Log.info("Movement started")
+end
+
+function OnUpdate(dt)
+    local position = entity:GetPosition()
+    position.x = position.x + speed * dt
+    entity:SetPosition(position)
+end
+```
+
+Positions are local to the parent. GetPosition returns a Vector3 copy; changes
+take effect only after SetPosition. `Vector3.new(x, y, z)` also constructs a value.
+SetPosition rejects nonfinite values. `entity:IsValid()` becomes false after the
+attachment is removed/replaced, its object is deleted, the scene changes, or Play
+stops. Retained handles cannot address a later object that reuses an entity slot.
+
+Disabled/empty attachments do not execute. A missing asset or a Lua error affects
+only that attachment and is logged once; other objects continue. Removing an
+attachment destroys its instance while the owner still exists. Native changes to
+the asset/enabled flag are reconciled before the next scripting update; re-enabling
+creates a fresh instance. OnDestroy follows the existing fault policy below.
+Stop restores the original attachments and transforms. Script Properties in the
+Inspector and general ECS get/add/has bindings remain separate work.
+
 `ScriptSubsystem::Initialize()` prepares the subsystem without creating a Lua state.
 After initialization, `BeginPlay(contentRoot, error)` starts a fresh Lua runtime;
 the root must be an existing directory. Calling BeginPlay during Play fails and
@@ -111,10 +149,10 @@ overload still works but leaves filesystem require unconfigured.
 `EndPlay()` destroys all instances before releasing the state. It is safe to call
 repeatedly; subsystem Shutdown also calls it. A subsequent BeginPlay creates a new
 state. Pause only suppresses updates: it preserves the state, tables, and IDs.
-Button wiring and scene/asset integration are separate steps.
+The editor's Play/Stop actions own this lifecycle.
 
-The persisted asset identity is `AssetReference::id`. The future scene integration
-must resolve it with `GetCatalog().Find(reference.id, CatalogAssetKind::Script)`
+The persisted asset identity is `AssetReference::id`. Scene integration
+resolves it with `GetCatalog().Find(reference.id, CatalogAssetKind::Script)`
 and pass the resulting `CatalogEntry::source` to the runtime. The reference's path
 is a diagnostic hint, never a fallback source. The runtime does not resolve assets.
 
