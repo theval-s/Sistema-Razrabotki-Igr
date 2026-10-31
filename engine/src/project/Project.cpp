@@ -13,7 +13,8 @@
 namespace engine {
 namespace {
 
-constexpr int FormatVersion = 1;
+// v2 adds autoloads. we need upgrade path tbh, but let's just crash for now
+constexpr int FormatVersion = 2;
 
 bool IsValidName(const std::string_view name) {
     return !name.empty() && name.find_first_of("<>:\"/\\|?*") == std::string_view::npos &&
