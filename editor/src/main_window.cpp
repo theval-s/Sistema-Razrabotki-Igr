@@ -183,6 +183,7 @@ void MainWindow::startEngine() {
         spdlog::critical("Engine failed to initialize, see log above");
         return;
     }
+    viewport_->setCamera(camera_);
     openStartupScene();
 
     tick_timer_->start(16);

@@ -1,5 +1,10 @@
 find_package(GTest CONFIG REQUIRED)
 
+add_executable(input_tests input_tests.cpp)
+target_link_libraries(input_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
+set_project_warnings(input_tests)
+set_target_properties(input_tests PROPERTIES FOLDER tests)
+
 add_executable(asset_catalog_tests asset_catalog_tests.cpp)
 target_link_libraries(asset_catalog_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(asset_catalog_tests)

@@ -208,6 +208,8 @@ configure_file(cmake/MaterialSchema.hpp.in generated/MaterialSchema.hpp @ONLY)
 set(ENGINE_CORE_HEADERS
     include/engine/input/InputSubsystem.hpp
     include/engine/input/InputTypes.hpp
+    include/engine/input/Win32InputHost.hpp
+    include/engine/input/Win32PhysicalKey.hpp
     include/engine/rendering/RenderingSubsystem.hpp
     include/engine/rendering/RenderComponents.hpp
     include/engine/rendering/RenderExtractionSubsystem.hpp
@@ -242,6 +244,7 @@ set(ENGINE_CORE_HEADERS
 set(ENGINE_CORE_SOURCES
     src/rendering/RenderingSubsystem.cpp
     src/input/InputSubsystem.cpp
+    src/input/Win32InputHost.cpp
     src/rendering/RenderExtractionSubsystem.cpp
     src/assets/AssetPathResolver.cpp
     src/assets/AssetAuthoring.cpp

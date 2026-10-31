@@ -5,6 +5,7 @@
 #include <SimpleMath.h>
 
 #include <engine/core/Subsystem.hpp>
+#include <engine/input/InputSubsystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 
 #include <editor/editor_core_export.hpp>
@@ -26,12 +27,14 @@ class EDITOR_CORE_API EditorCameraSubsystem final : public engine::Subsystem {
 public:
     [[nodiscard]] std::string_view GetName() const override;
     [[nodiscard]] bool Initialize() override;
+    void Shutdown() override;
     void Update(const engine::FrameContext& frame) override;
     void LateUpdate(const engine::FrameContext& frame) override;
 
     /// On the next frame, starts from the scene's active camera, or from the default
     /// viewpoint when the scene has none. Call after a scene was opened.
     void ResetToSceneCamera();
+    void SetInputActive(bool active);
 
     /// The viewpoint, in world space.
     [[nodiscard]] DirectX::SimpleMath::Vector3 GetPosition() const noexcept;
@@ -44,6 +47,7 @@ private:
     void TakeSceneCamera();
 
     engine::InputSubsystem* input_ = nullptr;
+    engine::InputSubsystem::Context controls_;
     engine::RenderingSubsystem* rendering_ = nullptr;
     DirectX::SimpleMath::Vector3 position_;
     float yaw_ = 0.0f;
