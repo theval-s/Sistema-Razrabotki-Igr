@@ -69,6 +69,8 @@ public:
     /// Replaces an existing definition without touching its metadata/UUID.
     bool updateMaterial(const QString& path, const engine::MaterialDefinition& definition);
     bool updateMaterialInstance(const QString& path, const engine::MaterialInstanceDefinition& definition);
+    /// Write a new .lua script from the default template at `path`, with its meta. False on failure.
+    bool createScript(const QString& path);
     /// Adds metas and rescans
     void adoptNewFiles();
     void rescan();

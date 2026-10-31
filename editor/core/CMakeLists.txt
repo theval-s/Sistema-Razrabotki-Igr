@@ -17,7 +17,6 @@ add_library(editor_core SHARED
     include/editor/asset_icons.hpp
     include/editor/asset_picker.hpp
     include/editor/editor_camera.hpp
-    src/script_creation.cpp
     src/lua_definitions.cpp
     include/editor/lua_definitions.hpp
     include/editor/editor_context.hpp
@@ -25,7 +24,6 @@ add_library(editor_core SHARED
     include/editor/paths.hpp
     include/editor/scene_document.hpp
     include/editor/selection.hpp
-    include/editor/script_creation.hpp
 )
 
 include(GenerateExportHeader)
