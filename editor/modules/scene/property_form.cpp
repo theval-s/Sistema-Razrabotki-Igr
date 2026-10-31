@@ -229,6 +229,12 @@ void PropertyForm::addRow(const QString& label, QWidget* widget, std::function<v
     refreshers_.push_back(std::move(refresh));
 }
 
+void PropertyForm::addRow(QWidget* widget, std::function<void()> refresh) {
+    widget->setParent(this);
+    layout_->addRow(widget);
+    refreshers_.push_back(std::move(refresh));
+}
+
 void PropertyForm::refresh() {
     for (const auto& refresher : refreshers_) {
         refresher();
