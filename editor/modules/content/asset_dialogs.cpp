@@ -40,6 +40,10 @@ namespace {
 const QString DefaultMaterial = QStringLiteral("engine/primitives/default.material.json");
 const QString WhiteTexture = QStringLiteral("engine/primitives/white/texture.png");
 
+// How often, and how many times, a material instance dialog looks for a texture still being imported.
+constexpr int PendingAlbedoInterval = 100;  // ms
+constexpr int PendingAlbedoTicks = 100;     // 10 s
+
 bool isImage(const QString& path) {
     return engine::AssetPathResolver::IsImageFile(editor::toPath(path));
 }
@@ -328,17 +332,24 @@ MaterialInstanceDialog::MaterialInstanceDialog(const engine::AssetCatalog& catal
     });
     albedo_->setEnabled(false);
     pending_albedo_timer_ = new QTimer(this);
-    pending_albedo_timer_->setInterval(100);
+    pending_albedo_timer_->setInterval(PendingAlbedoInterval);
     connect(pending_albedo_timer_, &QTimer::timeout, this, [this] {
         // The catalog rescan may still be pending while an imported texture is loading.
         // Keep the dialog open rather than saving an instance without its intended override.
+        if (!catalog_.FindPath(pending_albedo_.toStdString())) {
+            if (++pending_albedo_ticks_ >= PendingAlbedoTicks) {
+                pending_albedo_timer_->stop();  // gave up: problem() says so, the picker stays usable
+                validate();
+            }
+            return;
+        }
         const QSignalBlocker blocker(albedo_);
         albedo_->reload();
         if (albedo_->selectPath(pending_albedo_)) {
             pending_albedo_.clear();
-            pending_albedo_timer_->stop();
-            validate();
         }
+        pending_albedo_timer_->stop();
+        validate();
     });
     connect(albedo_, &QComboBox::currentIndexChanged, this, [this] {
         pending_albedo_.clear();
@@ -371,6 +382,7 @@ void MaterialInstanceDialog::setAlbedo(const QString& path) {
     albedo_->reload();
     if (!albedo_->selectPath(path)) {
         pending_albedo_ = path;
+        pending_albedo_ticks_ = 0;
         pending_albedo_timer_->start();
     }
     validate();
@@ -428,8 +440,11 @@ QString MaterialInstanceDialog::problem() const {
         return problem;
     }
     if (!material_->reference()) return tr("Choose a material.");
-    if (albedo_mode_->currentIndex() == 1 && !pending_albedo_.isEmpty())
-        return tr("Waiting for the new texture to appear in the asset catalog.");
+    if (albedo_mode_->currentIndex() == 1 && !pending_albedo_.isEmpty()) {
+        return pending_albedo_timer_->isActive()
+            ? tr("Waiting for the new texture to appear in the asset catalog.")
+            : tr("%1 isn't in the asset catalog. Choose an albedo texture.").arg(pending_albedo_);
+    }
     if (albedo_mode_->currentIndex() == 1 && !albedo_->reference()) return tr("Choose an albedo texture.");
     return {};
 }
@@ -488,6 +503,7 @@ MaterialDialog::MaterialDialog(const engine::AssetCatalog& catalog, const QStrin
         albedo_->setEnabled(albedo_mode_->currentIndex() == 1);
         validate();
     });
+    connect(albedo_, &QComboBox::currentIndexChanged, this, &MaterialDialog::validate);
     const engine::MaterialPBRParameters defaults;
     override_specular_ = new QCheckBox(tr("Specular colour"));
     override_specular_->setChecked(true);

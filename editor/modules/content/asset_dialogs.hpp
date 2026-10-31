@@ -115,6 +115,7 @@ private:
     QComboBox* albedo_mode_ = nullptr;
     QTimer* pending_albedo_timer_ = nullptr;
     QString pending_albedo_;
+    int pending_albedo_ticks_ = 0;
     QCheckBox* override_specular_ = nullptr;
     ColorButton* specular_ = nullptr;
     QCheckBox* override_shininess_ = nullptr;
