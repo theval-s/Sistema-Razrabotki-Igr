@@ -45,10 +45,7 @@ EditorContext::EditorContext(engine::Engine& engine, engine::Project& project, Q
                              ads::CDockManager& dock_manager)
     : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager), selection_(engine.GetScene()),
       scene_document_(std::make_unique<SceneDocument>(engine, project, selection_)),
-      play_session_(std::make_unique<PlaySession>(engine, project, selection_, *scene_document_)) {
-    QObject::connect(play_session_.get(), &PlaySession::playingChanged, play_session_.get(),
-                     [this](const bool playing) { setAuthoringEnabled(!playing); });
-}
+      play_session_(std::make_unique<PlaySession>(engine, project, selection_, *scene_document_)) {}
 
 EditorContext::~EditorContext() {
     // Panels would otherwise die with the dock manager, after the engine they show.
@@ -59,17 +56,6 @@ EditorContext::~EditorContext() {
             delete panel.dock;
         }
     }
-}
-
-void EditorContext::setAuthoringEnabled(bool enabled) {
-    for (const auto& panel : panels_)
-        if (panel.dock && panel.dock->objectName() != QStringLiteral("LogDock"))
-            if (auto* widget = panel.dock->widget()) widget->setEnabled(enabled);
-    for (const auto& title : {QObject::tr("&File"), QObject::tr("&Project"), QObject::tr("&Scene")})
-        menu(title)->setEnabled(enabled);
-    if (tool_bar_)
-        for (auto* action : tool_bar_->actions())
-            if (!action->property("playControl").toBool()) action->setEnabled(enabled);
 }
 
 engine::Engine& EditorContext::engine() noexcept {

@@ -87,9 +87,6 @@ private:
         Qt::DockWidgetArea area;
     };
 
-    /// Greys out the panels, menus and toolbar actions that edit the scene or project.
-    void setAuthoringEnabled(bool enabled);
-
     engine::Engine& engine_;
     engine::Project& project_;
     QMainWindow& window_;

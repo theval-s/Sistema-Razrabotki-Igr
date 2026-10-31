@@ -17,6 +17,7 @@
 
 #include <editor/editor_context.hpp>
 #include <editor/editor_module.hpp>
+#include <editor/play_session.hpp>
 #include <editor/selection.hpp>
 
 #include "inspector_panel.hpp"
@@ -145,6 +146,12 @@ public:
         auto* add_cube = context.menu(QObject::tr("&Scene"))->addAction(QObject::tr("Add &Cube"));
         context.toolBar()->addAction(add_cube);
         QObject::connect(add_cube, &QAction::triggered, add_cube, [this] { addCube(); });
+
+        // Edits during play would land in the running copy, which Stop throws away.
+        const editor::PlaySession* session = &context.playSession();
+        QObject::connect(session, &editor::PlaySession::playingChanged, hierarchy, &QWidget::setDisabled);
+        QObject::connect(session, &editor::PlaySession::playingChanged, inspector, &QWidget::setDisabled);
+        QObject::connect(session, &editor::PlaySession::playingChanged, add_cube, &QAction::setDisabled);
     }
 
 private:

@@ -61,8 +61,6 @@ private:
         stop_ = menu->addAction(QObject::tr("Stop"));
         stop_->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F5));
         for (QAction* action : {play_, pause_, stop_}) {
-            // Stays enabled while playing, unlike the editing actions.
-            action->setProperty("playControl", true);
             context_->toolBar()->addAction(action);
         }
 
@@ -79,6 +77,9 @@ private:
         autoload_ = menu->addAction(QObject::tr("&Autoload..."));
         refresh_definitions_ = menu->addAction(QObject::tr("Refresh Lua Definitions"));
         QObject::connect(autoload_, &QAction::triggered, autoload_, [this] { editAutoloads(); });
+        // Play runs with the autoloads it started with.
+        QObject::connect(&context_->playSession(), &editor::PlaySession::playingChanged, autoload_,
+                         &QAction::setDisabled);
         QObject::connect(refresh_definitions_, &QAction::triggered, refresh_definitions_, [this] {
             std::string error;
             if (!editor::refreshLuaDefinitions(context_->project(), error)) {

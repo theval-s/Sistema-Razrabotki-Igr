@@ -1,5 +1,6 @@
 #include <editor/editor_context.hpp>
 #include <editor/editor_module.hpp>
+#include <editor/play_session.hpp>
 
 #include "content_browser.hpp"
 
@@ -14,6 +15,8 @@ public:
     void startup(editor::EditorContext& context) override {
         auto* browser = new content::ContentBrowser(context);
         context.addPanel(QStringLiteral("ContentBrowser"), QObject::tr("Content"), browser, Qt::BottomDockWidgetArea);
+        // Play loads assets from the project as they were when it started.
+        QObject::connect(&context.playSession(), &editor::PlaySession::playingChanged, browser, &QWidget::setDisabled);
     }
 };
 

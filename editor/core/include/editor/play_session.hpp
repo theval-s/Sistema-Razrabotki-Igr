@@ -18,8 +18,10 @@ class SceneDocument;
 class Selection;
 
 /// Play mode: runs the open scene with the project's autoloads, and on Stop puts the edited scene
-/// and selection back. Owned by EditorContext; the play controls drive it, and whatever behaves
-/// differently while playing follows its signals.
+/// and selection back. Owned by EditorContext; the play controls drive it.
+///
+/// While playing, the scene is a running copy that Stop throws away, and the project is in use:
+/// whatever edits either should follow playingChanged, e.g. by connecting it to setDisabled.
 class EDITOR_CORE_API PlaySession : public QObject {
     Q_OBJECT
 

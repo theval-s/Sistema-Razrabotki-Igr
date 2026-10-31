@@ -370,6 +370,8 @@ void MainWindow::buildMenus() {
     file_menu->addSeparator();
 
     file_menu->addAction(tr("E&xit"), this, &QWidget::close);
+    // Scenes and projects can't be opened or saved while the scene is a running copy.
+    connect(&context_->playSession(), &PlaySession::playingChanged, file_menu, &QWidget::setDisabled);
 
     // The menu bar's order. Modules fill Project and Engine, EditorContext::addPanel() fills View.
     for (const QString& title : {tr("&Project"), tr("&Engine"), tr("&View")}) {
