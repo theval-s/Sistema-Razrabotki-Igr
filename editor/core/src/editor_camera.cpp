@@ -40,7 +40,32 @@ bool EditorCameraSubsystem::Initialize() {
         spdlog::error("EditorCameraSubsystem: needs InputSubsystem and RenderingSubsystem registered");
         return false;
     }
+    auto& bindings = input_->DefineContext("EditorViewport");
+    using engine::PhysicalKey;
+    using Vector2 = DirectX::SimpleMath::Vector2;
+    bindings.BindAxis2D("Move", PhysicalKey::W, Vector2{0, 1});
+    bindings.BindAxis2D("Move", PhysicalKey::S, Vector2{0, -1});
+    bindings.BindAxis2D("Move", PhysicalKey::D, Vector2{1, 0});
+    bindings.BindAxis2D("Move", PhysicalKey::A, Vector2{-1, 0});
+    bindings.BindAxis1D("Elevate", PhysicalKey::E, 1);
+    bindings.BindAxis1D("Elevate", PhysicalKey::Q, -1);
+    bindings.BindAction("Sprint", engine::InputSubsystem::Binding::Keyboard(PhysicalKey::LeftShift));
+    bindings.BindAction("Sprint", engine::InputSubsystem::Binding::Keyboard(PhysicalKey::RightShift));
+    bindings.BindAction("Look", engine::InputSubsystem::Binding::Mouse(engine::MouseButton::Right));
     return true;
+}
+
+void EditorCameraSubsystem::SetInputActive(bool active) {
+    if (active && input_ && !controls_) {
+        // Activation only on focus transitions (the caller does not repeat this each frame).
+        controls_ = input_->Activate("EditorViewport", 10);
+    } else if (!active) {
+        controls_.Reset();
+    }
+}
+
+void EditorCameraSubsystem::Shutdown() {
+    controls_.Reset();
 }
 
 void EditorCameraSubsystem::ResetToSceneCamera() {
@@ -80,16 +105,14 @@ void EditorCameraSubsystem::TakeSceneCamera() {
 }
 
 void EditorCameraSubsystem::Update(const engine::FrameContext& frame) {
-    using engine::Key;
-
     if (reset_pending_) {
         reset_pending_ = false;
         TakeSceneCamera();
     }
 
     const Quaternion rotation = Quaternion::CreateFromYawPitchRoll(yaw_, pitch_, 0.0f);
-    const float wheel = input_->GetWheelDelta();
-    if (!input_->IsDown(engine::MouseButton::Right)) {
+    const float wheel = controls_.WheelDelta();
+    if (!controls_.Down("Look")) {
         if (wheel != 0.0f) {
             position_ += Vector3::Transform(Vector3::Forward, rotation) * wheel * DollyStep;
         }
@@ -97,8 +120,7 @@ void EditorCameraSubsystem::Update(const engine::FrameContext& frame) {
     }
 
     // On the press frame the delta still holds whatever the mouse did before the click.
-    const auto look = input_->WasPressed(engine::MouseButton::Right) ? DirectX::SimpleMath::Vector2{}
-                                                                     : input_->GetMouseDelta();
+    const auto look = controls_.Pressed("Look") ? DirectX::SimpleMath::Vector2{} : controls_.MouseDelta();
     yaw_ -= look.x * LookSensitivity;
     pitch_ = std::clamp(pitch_ - look.y * LookSensitivity, -MaxPitch, MaxPitch);
     speed_ = std::clamp(speed_ * std::pow(1.2f, wheel), MinSpeed, MaxSpeed);
@@ -108,15 +130,12 @@ void EditorCameraSubsystem::Update(const engine::FrameContext& frame) {
     const Vector3 right = Vector3::Transform(Vector3::Right, turned);
 
     Vector3 movement{};
-    if (input_->IsDown(Key::W)) movement += forward;
-    if (input_->IsDown(Key::S)) movement -= forward;
-    if (input_->IsDown(Key::D)) movement += right;
-    if (input_->IsDown(Key::A)) movement -= right;
-    if (input_->IsDown(Key::E)) movement += Vector3::Up;
-    if (input_->IsDown(Key::Q)) movement -= Vector3::Up;
+    const auto move = controls_.Axis2D("Move");
+    movement += forward * move.y + right * move.x;
+    movement += Vector3::Up * controls_.Axis1D("Elevate");
     if (movement.LengthSquared() > 0.0f) {
         movement.Normalize();
-        const float speed = input_->IsDown(Key::Shift) ? speed_ * FastMultiplier : speed_;
+        const float speed = controls_.Down("Sprint") ? speed_ * FastMultiplier : speed_;
         position_ += movement * speed * static_cast<float>(frame.realDeltaSeconds);
     }
 }

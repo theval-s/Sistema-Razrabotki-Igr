@@ -9,6 +9,8 @@
 #include <cmath>
 
 #include <engine/input/InputSubsystem.hpp>
+#include <engine/input/Win32PhysicalKey.hpp>
+#include <editor/editor_camera.hpp>
 
 namespace editor {
 
@@ -78,6 +80,11 @@ void ViewportWidget::setInput(engine::InputSubsystem* input) {
     input_ = input;
 }
 
+void ViewportWidget::setCamera(EditorCameraSubsystem* camera) {
+    camera_ = camera;
+    if (camera_ && hasFocus()) camera_->SetInputActive(true);
+}
+
 QPaintEngine* ViewportWidget::paintEngine() const {
     return nullptr;
 }
@@ -91,6 +98,9 @@ void ViewportWidget::resizeEvent(QResizeEvent* event) {
 void ViewportWidget::keyPressEvent(QKeyEvent* event) {
     if (input_ != nullptr && !event->isAutoRepeat()) {
         input_->OnKey(toEngineKey(event->key()), true);
+        const auto scan = event->nativeScanCode();
+        input_->OnPhysicalKey(engine::PhysicalKeyFromWin32Scan(scan & 0xff,
+            (scan & 0xe000) == 0xe000 || (scan & 0x100) != 0), true);
     }
     QWidget::keyPressEvent(event);
 }
@@ -98,6 +108,9 @@ void ViewportWidget::keyPressEvent(QKeyEvent* event) {
 void ViewportWidget::keyReleaseEvent(QKeyEvent* event) {
     if (input_ != nullptr && !event->isAutoRepeat()) {
         input_->OnKey(toEngineKey(event->key()), false);
+        const auto scan = event->nativeScanCode();
+        input_->OnPhysicalKey(engine::PhysicalKeyFromWin32Scan(scan & 0xff,
+            (scan & 0xe000) == 0xe000 || (scan & 0x100) != 0), false);
     }
     QWidget::keyReleaseEvent(event);
 }
@@ -156,7 +169,13 @@ void ViewportWidget::focusOutEvent(QFocusEvent* event) {
     if (input_ != nullptr) {
         input_->OnFocusLost();
     }
+    if (camera_) camera_->SetInputActive(false);
     QWidget::focusOutEvent(event);
+}
+
+void ViewportWidget::focusInEvent(QFocusEvent* event) {
+    QWidget::focusInEvent(event);
+    if (camera_) camera_->SetInputActive(true);
 }
 
 void ViewportWidget::leaveEvent(QEvent* event) {

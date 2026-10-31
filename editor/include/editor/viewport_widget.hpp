@@ -12,6 +12,7 @@ class InputSubsystem;
 }
 
 namespace editor {
+class EditorCameraSubsystem;
 
 /// The area the engine renders into. Owns a native window (HWND) that is
 /// handed to the engine as its NativeSurface; Qt never paints it.
@@ -27,6 +28,7 @@ public:
     [[nodiscard]] engine::NativeSurface surface();
     /// nullptr = input goes nowhere.
     void setInput(engine::InputSubsystem* input);
+    void setCamera(EditorCameraSubsystem* camera);
 
     /// No Qt painting at all, so it can't draw over the swap chain.
     [[nodiscard]] QPaintEngine* paintEngine() const override;
@@ -44,6 +46,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
+    void focusInEvent(QFocusEvent* event) override;
     void leaveEvent(QEvent* event) override;
 
 private:
@@ -51,6 +54,7 @@ private:
     void releaseCursor();
 
     engine::InputSubsystem* input_ = nullptr;
+    EditorCameraSubsystem* camera_ = nullptr;
     /// Global position of the previous mouse move; none after the cursor left the widget,
     /// so coming back in elsewhere isn't reported as a jump.
     std::optional<QPoint> last_cursor_{};

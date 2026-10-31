@@ -16,6 +16,8 @@
 #include <engine/engine.hpp>
 #include <engine/scene/Controller.hpp>
 #include <engine/window.hpp>
+#include <engine/input/InputSubsystem.hpp>
+#include <engine/input/Win32InputHost.hpp>
 
 namespace {
 
@@ -28,54 +30,23 @@ using DirectX::SimpleMath::Vector3;
 
 constexpr std::string_view CubeId = "e862521f-5ad3-4942-bbd6-aa8dbddae52e";
 
-bool IsKeyDown(int key) {
-    return (GetAsyncKeyState(key) & 0x8000) != 0;
-}
-
-void CaptureMouse(HWND window) {
-    SetCapture(window);
-    while (ShowCursor(FALSE) >= 0) {
-    }
-    RECT client{};
-    GetClientRect(window, &client);
-    POINT center{(client.right - client.left) / 2, (client.bottom - client.top) / 2};
-    ClientToScreen(window, &center);
-    SetCursorPos(center.x, center.y);
-}
-
-void UpdateCamera(engine::FPSCamera& camera, HWND window, float deltaTime) {
-    const bool mouseCaptured = GetCapture() == window;
-    if (!mouseCaptured && (GetAsyncKeyState(VK_LBUTTON) & 1) != 0 && GetForegroundWindow() == window) {
-        CaptureMouse(window);
-    }
-
-    if (GetCapture() == window && GetForegroundWindow() == window) {
-        RECT client{};
-        GetClientRect(window, &client);
-        POINT center{(client.right - client.left) / 2, (client.bottom - client.top) / 2};
-        ClientToScreen(window, &center);
-        POINT cursor{};
-        GetCursorPos(&cursor);
-        camera.yaw -= static_cast<float>(cursor.x - center.x) * 0.0035f;
-        camera.pitch -= static_cast<float>(cursor.y - center.y) * 0.0035f;
-        camera.pitch = (std::clamp)(camera.pitch, -Pi * 0.49f, Pi * 0.49f);
-        SetCursorPos(center.x, center.y);
-    }
+void UpdateCamera(engine::FPSCamera& camera, const engine::InputSubsystem::Context& controls, float deltaTime) {
+    const auto look = controls.MouseDelta();
+    camera.yaw -= look.x * 0.0035f;
+    camera.pitch -= look.y * 0.0035f;
+    camera.pitch = (std::clamp)(camera.pitch, -Pi * 0.49f, Pi * 0.49f);
 
     const Matrix rotation = Matrix::CreateFromYawPitchRoll(camera.yaw, camera.pitch, 0.0f);
     const Vector3 forward = Vector3::TransformNormal(Vector3::Forward, rotation);
     const Vector3 right = Vector3::TransformNormal(Vector3::Right, rotation);
     Vector3 movement{};
-    if (IsKeyDown('W')) movement += forward;
-    if (IsKeyDown('S')) movement -= forward;
-    if (IsKeyDown('D')) movement += right;
-    if (IsKeyDown('A')) movement -= right;
-    if (IsKeyDown('E')) movement += Vector3::Up;
-    if (IsKeyDown('Q')) movement -= Vector3::Up;
+    const auto move = controls.Axis2D("Move");
+    movement += forward * move.y + right * move.x;
+    movement += Vector3::Up * controls.Axis1D("Elevate");
 
     if (movement.LengthSquared() > 0.0f) {
         movement.Normalize();
-        const float speed = IsKeyDown(VK_SHIFT) ? 12.0f : 5.0f;
+        const float speed = controls.Down("Sprint") ? 12.0f : 5.0f;
         camera.position += movement * speed * deltaTime;
     }
 }
@@ -187,9 +158,28 @@ public:
 
     [[nodiscard]] bool Initialize() override {
         rendering_ = GetEngine().GetSubsystem<engine::RenderingSubsystem>();
-        if (rendering_ == nullptr) {
+        input_ = GetEngine().GetSubsystem<engine::InputSubsystem>();
+        host_ = GetEngine().GetSubsystem<engine::Win32InputHost>();
+        if (rendering_ == nullptr || input_ == nullptr || host_ == nullptr) {
             return false;
         }
+        auto& bindings = input_->DefineContext("Gameplay");
+        using engine::PhysicalKey;
+        using Vector2 = DirectX::SimpleMath::Vector2;
+        bindings.BindAxis2D("Move", PhysicalKey::W, Vector2{0, 1});
+        bindings.BindAxis2D("Move", PhysicalKey::S, Vector2{0, -1});
+        bindings.BindAxis2D("Move", PhysicalKey::D, Vector2{1, 0});
+        bindings.BindAxis2D("Move", PhysicalKey::A, Vector2{-1, 0});
+        bindings.BindAxis1D("Elevate", PhysicalKey::E, 1);
+        bindings.BindAxis1D("Elevate", PhysicalKey::Q, -1);
+        using Binding = engine::InputSubsystem::Binding;
+        bindings.BindAction("Sprint", Binding::Keyboard(PhysicalKey::LeftShift));
+        bindings.BindAction("Sprint", Binding::Keyboard(PhysicalKey::RightShift));
+        bindings.BindAction("Save", Binding::Keyboard(PhysicalKey::F5));
+        bindings.BindAction("Load", Binding::Keyboard(PhysicalKey::F9));
+        bindings.BindAction("Raycast", Binding::Keyboard(PhysicalKey::R));
+        bindings.BindAction("CaptureMouse", Binding::Mouse(engine::MouseButton::Left));
+        controls_ = input_->Activate("Gameplay");
         auto& world = rendering_->GetWorld();
 
         world.camera = {
@@ -202,42 +192,40 @@ public:
             .position = Vector3{0.0f, 3.0f, 7.0f}
         };
 
-        CaptureMouse(window_);
+        host_->SetRelativeMouseMode(true);
         return true;
     }
 
+    void Shutdown() override {
+        controls_.Reset();
+        host_->SetRelativeMouseMode(false);
+    }
+
     void Update(const engine::FrameContext& frame) override {
-        MSG message{};
-        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
-            if (message.message == WM_QUIT) {
-                GetEngine().RequestExit();
-                return;
-            }
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
         if (!IsWindow(window_)) {
             GetEngine().RequestExit();
             return;
         }
+        if (controls_.Pressed("CaptureMouse") && !host_->IsRelativeMouseMode())
+            host_->SetRelativeMouseMode(true);
 
         auto& world = rendering_->GetWorld();
         const auto& surface = GetEngine().GetSurface();
         if (surface.width > 0 && surface.height > 0) {
             world.camera.aspectRatio = static_cast<float>(surface.width) / static_cast<float>(surface.height);
         }
-        UpdateCamera(world.camera, window_, static_cast<float>(frame.deltaSeconds));
-        if (GetAsyncKeyState(VK_F5) & 1) {
+        UpdateCamera(world.camera, controls_, static_cast<float>(frame.deltaSeconds));
+        if (controls_.Pressed("Save")) {
             std::string error;
             if (!GetEngine().SaveGame("game/example.save.json", error)) spdlog::error("Save game: {}", error);
             else spdlog::info("Saved game/example.save.json");
         }
-        if (GetAsyncKeyState(VK_F9) & 1) {
+        if (controls_.Pressed("Load")) {
             std::string error;
             if (!GetEngine().LoadGame("game/example.save.json", error)) spdlog::error("Load game: {}", error);
             else if (!error.empty()) spdlog::warn("Load game: {}", error);
         }
-        if (GetAsyncKeyState('R') & 1) {
+        if (controls_.Pressed("Raycast")) {
             const Matrix rotation = Matrix::CreateFromYawPitchRoll(world.camera.yaw, world.camera.pitch, 0);
             const Vector3 direction = Vector3::TransformNormal(Vector3::Forward, rotation);
             const auto hits = engine::RaycastAll(GetEngine().GetScene(), GetEngine().GetSceneAssets(),
@@ -256,6 +244,9 @@ public:
 private:
     HWND window_ = nullptr;
     engine::RenderingSubsystem* rendering_ = nullptr;
+    engine::InputSubsystem* input_ = nullptr;
+    engine::Win32InputHost* host_ = nullptr;
+    engine::InputSubsystem::Context controls_;
 };
 
 
@@ -276,6 +267,8 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
     config.surface = engine::NativeSurface{window, ScreenWidth, ScreenHeight};
 
     engine::Engine engine{config};
+    engine.AddSubsystem<engine::Win32InputHost>(window);
+    engine.AddSubsystem<engine::InputSubsystem>();
     engine.AddSubsystem<engine::RenderingSubsystem>();
     engine.AddSubsystem<ExampleGameLogic>(window);
     engine.AddSubsystem<engine::RenderExtractionSubsystem>();
@@ -292,9 +285,6 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
     }
     spdlog::info("ExampleGame: {} animated entities", engine.GetScene().FindWithTag("animated").size());
     const bool ran = engine.Run();
-
-    ReleaseCapture();
-    while (ShowCursor(TRUE) < 0) {
-    }
+    engine.Shutdown();
     return ran ? 0 : 1;
 }
