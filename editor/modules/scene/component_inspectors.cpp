@@ -349,14 +349,20 @@ void buildScript(PropertyForm& form, editor::EditorContext& context, entt::entit
     auto& catalog = context.engine().GetAssets().GetCatalog();
     form.addBool(QObject::tr("Enabled"), field(scene, entity, &engine::ScriptComponent::enabled));
     auto* picker = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Script, QObject::tr("None"));
-    QObject::connect(picker, &QComboBox::currentIndexChanged, picker, [&context, &scene, entity, picker] {
-        if (auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity)) {
-            const auto chosen = picker->reference().value_or(engine::AssetReference{});
-            if (chosen.id == component->script.id) return;
-            component->script = chosen;
-            component->properties.clear();
-            context.sceneDocument().markDirty();
+    QObject::connect(picker, &QComboBox::currentIndexChanged, picker, [&context, &scene, entity, picker](const int index) {
+        auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity);
+        // -1 means nothing is chosen
+        if (component == nullptr || index < 0) {
+            return;
         }
+        // "None" is chosen, so no reference.
+        const engine::AssetReference chosen = picker->reference().value_or(engine::AssetReference{});
+        if (chosen.id == component->script.id) {
+            return;
+        }
+        component->script = chosen;
+        component->properties.clear();
+        context.sceneDocument().markDirty();
     });
     form.addRow(QObject::tr("Script"), picker, [&scene, entity, picker] {
         const auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity);
