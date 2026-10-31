@@ -234,9 +234,9 @@ bool AssetSystem::ReloadReady(LoadJob& job, std::string& error) {
             error = "live material instance is no longer available";
             return false;
         }
-        auto parameters = job.resolvedParameters;
-        parameters.customBuffer = old->parameters.customBuffer;
-        const bool committed = resources.UpdateMaterialInstance(record->value->instance, job.resolvedMaterial, parameters);
+        const bool committed = resources.UpdateMaterialInstance(record->value->instance, job.resolvedMaterial,
+            MaterialInstanceImporter::MakeOverrides(job.payload.materialInstance.parameters,
+                job.resolvedParameters.albedoTexture));
         resources.DestroyMaterialInstance(staged.materialInstance);
         if (!committed) { error = "cannot update the loaded material instance"; return false; }
         record->value->definition = std::move(job.payload.materialInstance);
@@ -245,26 +245,9 @@ bool AssetSystem::ReloadReady(LoadJob& job, std::string& error) {
 
     auto* record = materials_.Get(materials_.Find(job.name));
     const MaterialHandle live = record->value->material;
-    const auto* replacement = resources.TryGetMaterial(staged.material);
-    std::vector<RenderingResourceManager::MaterialInstanceUpdate> updates;
-    // Scan both registries only when a material changes; each instance retains its own GPU handle.
-    const auto gather = [&](AssetSystem& assets) {
-        assets.materialInstances_.ForEachReadyRecord([&](const auto& instanceRecord) {
-            const auto* instance = resources.TryGetMaterialInstance(instanceRecord.value->instance);
-            if (!instance || instance->material != live) return;
-            const auto& overrides = instanceRecord.value->definition.parameters;
-            const TextureHandle explicitTexture = overrides.albedoTexture && !overrides.albedoTexture->empty()
-                ? instance->parameters.albedoTexture : TextureHandle{};
-            updates.push_back({instanceRecord.value->instance,
-                MaterialInstanceImporter::Inherit(replacement->defaultParameters, overrides, explicitTexture,
-                                                   instance->parameters.customBuffer)});
-        });
-    };
-    gather(engine_.GetAssets());
-    gather(engine_.GetSceneAssets());
-    if (!resources.ReplaceMaterial(live, staged.material, updates)) {
+    if (!resources.ReplaceMaterial(live, staged.material)) {
         resources.DestroyMaterial(staged.material);
-        error = "cannot replace the loaded material or its dependent instances";
+        error = "cannot replace the loaded material";
         return false;
     }
     record->value->definition = std::move(job.payload.material.definition);
@@ -590,7 +573,6 @@ AssetSystem::DependencyState AssetSystem::ResolveDependencies(LoadJob& job, bool
             job.error = "parent material no longer exists";
             return DependencyState::Failed;
         }
-        parameters = material->defaultParameters;
         job.resolvedMaterial = parent->material;
     }
     if (overrides.specularColor) parameters.parameters.specularColor = *overrides.specularColor;

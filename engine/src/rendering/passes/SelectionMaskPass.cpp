@@ -59,7 +59,7 @@ void SelectionMaskPass::Render(RenderWorld& world, RenderingContext& context, Re
                 context.SetShader(draw.vertexShader);
                 boundVS = draw.vertexShader;
             }
-            const auto& params = draw.instance->parameters;
+            const auto params = ResolveMaterialParameters(*draw.material, *draw.instance);
             if (params.customBuffer) context.BindCBuffer(BindSlots::CBuffer::MaterialCustomBuffer, params.customBuffer);
             else context.UnbindCBuffer(BindSlots::CBuffer::MaterialCustomBuffer);
             context.SetShaderResources(BindSlots::Texture::Albedo,

@@ -194,7 +194,7 @@ void ShadowCSMPass::Render(RenderWorld& world, RenderingContext& context, Render
             boundVS = draw.vertexShader;
         }
         if (draw.item->materialInstance != boundInstance) {
-            const auto& params = draw.instance->parameters;
+            const auto params = ResolveMaterialParameters(*draw.material, *draw.instance);
             resources.materialCBuffer.Update(context, [&](MaterialBufferData& data){
                 data.specularColor = params.parameters.specularColor;
                 data.shininess = params.parameters.shininess;

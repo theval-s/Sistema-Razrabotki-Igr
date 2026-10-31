@@ -87,6 +87,11 @@ struct HandleMap {
     [[nodiscard]] std::size_t Size() const noexcept {
         return storage_.size() - freeSlots_.size();
     }
+
+    template <typename F>
+    void ForEach(F&& visit) const {
+        for (const auto& slot : storage_) if (slot.Used()) visit(slot.val.value);
+    }
     
     bool Remove(Handle h) {
         if (!Contains(h)) {

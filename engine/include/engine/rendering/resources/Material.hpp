@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <SimpleMath.h>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "Buffer.hpp"
@@ -66,8 +67,25 @@ using MaterialHandle = HandleMap<Material>::Handle;
 
 struct MaterialInstance {
     MaterialHandle material;
-    MaterialParameters parameters;
+    struct Overrides {
+        std::optional<Vector3> specularColor;
+        std::optional<float> shininess;
+        // absent = inherit; present texture handle = override; present null handle = clear.
+        std::optional<TextureHandle> albedoTexture;
+    } overrides;
+    // Caller-owned runtime state, independent of authored overrides.
+    BufferHandle customBuffer;
 };
+
+// Resolve when binding a draw so inherited fields reflect the current material.
+inline MaterialParameters ResolveMaterialParameters(const Material& material, const MaterialInstance& instance) {
+    MaterialParameters result = material.defaultParameters;
+    if (instance.overrides.specularColor) result.parameters.specularColor = *instance.overrides.specularColor;
+    if (instance.overrides.shininess) result.parameters.shininess = *instance.overrides.shininess;
+    if (instance.overrides.albedoTexture) result.albedoTexture = *instance.overrides.albedoTexture;
+    if (instance.customBuffer) result.customBuffer = instance.customBuffer;
+    return result;
+}
 
 using MaterialInstanceHandle = HandleMap<MaterialInstance>::Handle;
 

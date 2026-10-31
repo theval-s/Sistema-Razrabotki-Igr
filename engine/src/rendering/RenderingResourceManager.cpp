@@ -110,14 +110,12 @@ ShaderHandle RenderingResourceManager::RegisterCompiledShader(const CompiledShad
 
 bool RenderingResourceManager::DestroyShader(const ShaderHandle shaderHandle) {
     // Material-owned shaders are released by DestroyMaterial.
-    for (const auto& [id, instanceHandle] : defaultInstances_) {
-        const auto* instance = materialInstances_.TryGet(instanceHandle);
-        if (!instance) continue;
-        const auto* material = materials_.TryGet(instance->material);
-        if (material && (material->shaders.shadowPassVS == shaderHandle ||
-                         material->shaders.gBufferPassVS == shaderHandle ||
-                         material->shaders.gBufferPassPS == shaderHandle)) return false;
-    }
+    bool owned = false;
+    materials_.ForEach([&](const Material& material) {
+        owned |= material.shaders.shadowPassVS == shaderHandle ||
+                 material.shaders.gBufferPassVS == shaderHandle || material.shaders.gBufferPassPS == shaderHandle;
+    });
+    if (owned) return false;
     return shaders_.Remove(shaderHandle);
 }
 
@@ -168,26 +166,22 @@ MaterialHandle RenderingResourceManager::RegisterMaterial(const ShaderSet& shade
         (defaults.albedoTexture && !textures_.Contains(defaults.albedoTexture)) ||
         (defaults.customBuffer && (!buffers_.Contains(defaults.customBuffer) ||
                                   buffers_.Get(defaults.customBuffer).type != BufferType::Constant))) return {};
-    for (const auto& [id, instanceHandle] : defaultInstances_) {
-        const auto& owned = materials_.Get(materialInstances_.Get(instanceHandle).material).shaders;
+    bool shared = false;
+    materials_.ForEach([&](const Material& material) {
+        const auto& owned = material.shaders;
         for (auto candidate : {shaders.shadowPassVS, shaders.gBufferPassVS, shaders.gBufferPassPS}) {
             if (candidate && (candidate == owned.shadowPassVS || candidate == owned.gBufferPassVS ||
-                              candidate == owned.gBufferPassPS)) return {};
+                               candidate == owned.gBufferPassPS)) shared = true;
         }
-    }
-    Material material{.shaders = shaders, .defaultParameters = defaults, .instanceCount = 1};
-    const auto handle = materials_.Add(std::move(material));
-    const auto instance = materialInstances_.Add(MaterialInstance{handle, defaults});
-    defaultInstances_.emplace(handle.id, instance);
-    return handle;
+    });
+    if (shared) return {};
+    return materials_.Add(Material{.shaders = shaders, .defaultParameters = defaults});
 }
 
 bool RenderingResourceManager::DestroyMaterial(const MaterialHandle handle) {
     const auto* material = materials_.TryGet(handle);
-    if (!material || material->instanceCount != 1) return false;
+    if (!material || material->instanceCount != 0) return false;
     const auto shaders = material->shaders;
-    materialInstances_.Remove(defaultInstances_.at(handle.id));
-    defaultInstances_.erase(handle.id);
     materials_.Remove(handle);
     shaders_.Remove(shaders.shadowPassVS);
     shaders_.Remove(shaders.gBufferPassVS);
@@ -195,16 +189,29 @@ bool RenderingResourceManager::DestroyMaterial(const MaterialHandle handle) {
     return true;
 }
 
-MaterialInstanceHandle RenderingResourceManager::GetDefaultMaterialInstance(const MaterialHandle handle) const {
-    if (!materials_.Contains(handle)) return {};
-    return defaultInstances_.at(handle.id);
-}
-
 MaterialInstanceHandle RenderingResourceManager::CreateMaterialInstance(const MaterialHandle handle) {
     auto* material = materials_.TryGet(handle);
     if (!material) return {};
     ++material->instanceCount;
-    return materialInstances_.Add(MaterialInstance{handle, material->defaultParameters});
+    return materialInstances_.Add(MaterialInstance{.material = handle});
+}
+
+bool RenderingResourceManager::SetMaterialInstanceOverrides(const MaterialInstanceHandle handle,
+                                                              const MaterialInstance::Overrides& overrides) {
+    auto* instance = materialInstances_.TryGet(handle);
+    if (!instance || (overrides.albedoTexture && *overrides.albedoTexture &&
+        !textures_.Contains(*overrides.albedoTexture))) return false;
+    instance->overrides = overrides;
+    return true;
+}
+
+bool RenderingResourceManager::SetMaterialInstanceCustomBuffer(const MaterialInstanceHandle handle,
+                                                                 const BufferHandle buffer) {
+    auto* instance = materialInstances_.TryGet(handle);
+    if (!instance || (buffer && (!buffers_.Contains(buffer) || buffers_.Get(buffer).type != BufferType::Constant)))
+        return false;
+    instance->customBuffer = buffer;
+    return true;
 }
 
 bool RenderingResourceManager::SetMaterialInstanceParameters(const MaterialInstanceHandle handle,
@@ -213,30 +220,19 @@ bool RenderingResourceManager::SetMaterialInstanceParameters(const MaterialInsta
     if (!instance || (parameters.albedoTexture && !textures_.Contains(parameters.albedoTexture)) ||
         (parameters.customBuffer && (!buffers_.Contains(parameters.customBuffer) ||
             buffers_.Get(parameters.customBuffer).type != BufferType::Constant))) return false;
-    instance->parameters = parameters;
+    instance->overrides = {.specularColor = parameters.parameters.specularColor,
+        .shininess = parameters.parameters.shininess, .albedoTexture = parameters.albedoTexture};
+    instance->customBuffer = parameters.customBuffer;
     return true;
 }
 
-bool RenderingResourceManager::ReplaceMaterial(const MaterialHandle live, const MaterialHandle staged,
-                                                std::span<const MaterialInstanceUpdate> inherited) {
+bool RenderingResourceManager::ReplaceMaterial(const MaterialHandle live, const MaterialHandle staged) {
     auto* current = materials_.TryGet(live);
     auto* replacement = materials_.TryGet(staged);
-    if (!current || !replacement || live == staged) return false;
-    for (const auto& update : inherited) {
-        const auto* instance = materialInstances_.TryGet(update.handle);
-        if (!instance || instance->material != live ||
-            (update.parameters.albedoTexture && !textures_.Contains(update.parameters.albedoTexture)) ||
-            (update.parameters.customBuffer && (!buffers_.Contains(update.parameters.customBuffer) ||
-                buffers_.Get(update.parameters.customBuffer).type != BufferType::Constant))) return false;
-    }
+    if (!current || !replacement || live == staged || replacement->instanceCount != 0) return false;
     const auto oldShaders = current->shaders;
-    const auto stagedDefault = defaultInstances_.at(staged.id);
     current->shaders = replacement->shaders;
     current->defaultParameters = replacement->defaultParameters;
-    materialInstances_.Get(defaultInstances_.at(live.id)).parameters = current->defaultParameters;
-    for (const auto& update : inherited) materialInstances_.Get(update.handle).parameters = update.parameters;
-    materialInstances_.Remove(stagedDefault);
-    defaultInstances_.erase(staged.id);
     materials_.Remove(staged);
     shaders_.Remove(oldShaders.shadowPassVS);
     shaders_.Remove(oldShaders.gBufferPassVS);
@@ -245,24 +241,22 @@ bool RenderingResourceManager::ReplaceMaterial(const MaterialHandle live, const 
 }
 
 bool RenderingResourceManager::UpdateMaterialInstance(const MaterialInstanceHandle handle, const MaterialHandle material,
-                                                       const MaterialParameters& parameters) {
+                                                       const MaterialInstance::Overrides& overrides) {
     auto* instance = materialInstances_.TryGet(handle);
-    if (!instance || !materials_.Contains(material) || defaultInstances_.at(instance->material.id) == handle ||
-        (parameters.albedoTexture && !textures_.Contains(parameters.albedoTexture)) ||
-        (parameters.customBuffer && (!buffers_.Contains(parameters.customBuffer) ||
-            buffers_.Get(parameters.customBuffer).type != BufferType::Constant))) return false;
+    if (!instance || !materials_.Contains(material) ||
+        (overrides.albedoTexture && *overrides.albedoTexture && !textures_.Contains(*overrides.albedoTexture))) return false;
     if (instance->material != material) {
         --materials_.Get(instance->material).instanceCount;
         ++materials_.Get(material).instanceCount;
         instance->material = material;
     }
-    instance->parameters = parameters;
+    instance->overrides = overrides;
     return true;
 }
 
 bool RenderingResourceManager::DestroyMaterialInstance(const MaterialInstanceHandle handle) {
     auto* instance = materialInstances_.TryGet(handle);
-    if (!instance || defaultInstances_.at(instance->material.id) == handle) return false;
+    if (!instance) return false;
     --materials_.Get(instance->material).instanceCount;
     return materialInstances_.Remove(handle);
 }
