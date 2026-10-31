@@ -166,13 +166,14 @@ void AutoloadDialog::addScript() {
             QMessageBox::warning(this, tr("Autoload"), tr("Choose a .lua script; .d.lua files are declarations."));
             return;
         }
+        // rescan first
+        if (!engine_.RescanAssetCatalogs(error)) {
+            QMessageBox::warning(this, tr("Autoload"), tr("Could not refresh the asset catalog.\n%1").arg(text(error)));
+            return;
+        }
         engine::AssetMetadata metadata;
         if (!engine::ReadAssetMetadata(source, metadata, error)) {
             QMessageBox::warning(this, tr("Autoload"), tr("The script needs valid asset metadata.\n%1").arg(text(error)));
-            return;
-        }
-        if (!engine_.RescanAssetCatalogs(error)) {
-            QMessageBox::warning(this, tr("Autoload"), tr("Could not refresh the asset catalog.\n%1").arg(text(error)));
             return;
         }
         const auto* entry = engine_.GetAssets().GetCatalog().FindPath(engine::AssetPathResolver::ToName(source));
