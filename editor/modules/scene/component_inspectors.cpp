@@ -15,7 +15,6 @@
 #include <QDoubleSpinBox>
 #include <QApplication>
 #include <chrono>
-#include <limits>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
 
@@ -327,9 +326,15 @@ public:
                 auto* edit = new QCheckBox; edit->setChecked(*boolean); line->addWidget(edit);
                 QObject::connect(edit, &QCheckBox::toggled, edit, [commit](bool changed) { commit(changed); });
             } else {
+                // The inspector's usual number format: a box sizes itself to its range's text, so the
+                // full double range made it thousands of pixels wide. Widened only to fit the value.
+                const PropertyForm::NumberFormat format;
                 auto* edit = new QDoubleSpinBox;
-                edit->setRange(std::numeric_limits<double>::lowest(), std::numeric_limits<double>::max()); edit->setDecimals(6);
-                edit->setValue(value.Number()); line->addWidget(edit);
+                edit->setRange(std::min(format.minimum, value.Number()), std::max(format.maximum, value.Number()));
+                edit->setDecimals(format.decimals);
+                edit->setSingleStep(format.step);
+                edit->setValue(value.Number());
+                line->addWidget(edit);
                 QObject::connect(edit, &QDoubleSpinBox::valueChanged, edit, [commit](double changed) { commit(changed); });
             }
             auto* reset = new QPushButton(tr("Reset")); reset->setEnabled(overridden); line->addWidget(reset);
@@ -349,6 +354,7 @@ void buildScript(PropertyForm& form, editor::EditorContext& context, entt::entit
     auto& catalog = context.engine().GetAssets().GetCatalog();
     form.addBool(QObject::tr("Enabled"), field(scene, entity, &engine::ScriptComponent::enabled));
     auto* picker = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Script, QObject::tr("None"));
+    picker->setMinimumContentsLength(12);  // as in addAssetSlot: a wider row widens every component's form
     QObject::connect(picker, &QComboBox::currentIndexChanged, picker, [&context, &scene, entity, picker](const int index) {
         auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity);
         // -1 means nothing is chosen
