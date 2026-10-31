@@ -257,6 +257,9 @@ void MainWindow::tickEngine() {
 }
 
 void MainWindow::buildMenus() {
+    if (auto* bar = menuBar()) {
+        bar->setObjectName(QStringLiteral("mainMenuBar"));
+    }
     auto* file_menu = context_->menu(tr("&File"));
     file_menu->addAction(tr("New &Project..."), this, [this] { switchProject(createProjectInteractively(this)); });
     file_menu->addAction(tr("&Open Project..."), this, [this] { switchProject(pickProjectFile(this)); });
@@ -284,6 +287,7 @@ void MainWindow::buildMenus() {
 
 void MainWindow::buildLogDock() {
     log_view_ = new QPlainTextEdit;
+    log_view_->setObjectName(QStringLiteral("logConsoleOutput"));
     log_view_->setReadOnly(true);
     log_view_->setMaximumBlockCount(5000);
 

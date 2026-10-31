@@ -29,6 +29,7 @@ qt_add_executable(editor
     include/editor/module_loader.hpp
     include/editor/project_dialog.hpp
     include/editor/viewport_widget.hpp
+    resources/editor.qrc
 )
 
 target_include_directories(editor PRIVATE

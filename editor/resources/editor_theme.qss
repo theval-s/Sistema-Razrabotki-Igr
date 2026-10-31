@@ -1,0 +1,260 @@
+/* --- Global Color Variables & Root Window --- */
+QMainWindow, QDialog {
+    background-color: #252525;
+    color: #E8E8C6;
+    font-family: "Segoe UI", "SF Pro Display", -apple-system, sans-serif;
+    font-size: 13px;
+}
+
+QWidget {
+    background-color: transparent;
+    color: #E8E8C6;
+    selection-background-color: #E8E8C6;
+    selection-color: #252525;
+}
+
+/* --- Top Menu Bar --- */
+QMenuBar {
+    background-color: #252525;
+    color: #E8E8C6;
+    border: 1px solid #E8E8C6;
+    border-radius: 8px;
+    padding: 6px 12px;
+    margin: 6px 8px;
+    font-weight: 500;
+}
+
+QMenuBar::item {
+    background: transparent;
+    padding: 4px 14px;
+    border-radius: 4px;
+    color: #E8E8C6;
+    text-transform: lowercase;
+}
+
+QMenuBar::item:selected {
+    background-color: #4A4945;
+    color: #FFFFFF;
+}
+
+QMenuBar::item:pressed {
+    background-color: #55544F;
+}
+
+QMenu {
+    background-color: #252525;
+    color: #E8E8C6;
+    border: 1px solid #E8E8C6;
+    border-radius: 6px;
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 6px 24px 6px 12px;
+    border-radius: 4px;
+}
+
+QMenu::item:selected {
+    background-color: #E8E8C6;
+    color: #252525;
+}
+
+/* --- Qt Advanced Docking System (Qt ADS) Styling --- */
+
+ads--CDockContainerWidget {
+    background-color: #252525;
+    padding: 4px;
+}
+
+ads--CDockAreaWidget {
+    background-color: #474744;
+    border: 1px solid #474744;
+    border-radius: 10px;
+    margin: 4px;
+}
+
+ads--CDockAreaTitleBar {
+    background-color: transparent;
+    border-bottom: 1px solid rgba(223, 219, 190, 0.15);
+    min-height: 32px;
+    padding: 2px 8px;
+}
+
+ads--CDockWidgetTitleLabel {
+    color: #E8E8C6;
+    font-size: 14px;
+    font-weight: 600;
+    padding-left: 6px;
+}
+
+/* Close & Pin/Restore Buttons in ADS Title Bar */
+ads--CDockAreaTitleBar QPushButton,
+ads--CDockWidget QPushButton {
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    min-width: 18px;
+    min-height: 18px;
+    max-width: 20px;
+    max-height: 20px;
+    color: #E8E8C6;
+}
+
+ads--CDockAreaTitleBar QPushButton:hover {
+    background-color: rgba(239, 230, 202, 0.2);
+}
+
+ads--CDockWidgetTab {
+    background-color: #333230;
+    color: #C2BEA5;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 6px 14px;
+    margin-right: 2px;
+}
+
+ads--CDockWidgetTab[activeTab="true"] {
+    background-color: #474744;
+    color: #E8E8C6;
+    font-weight: bold;
+    border-bottom: 2px solid #E8E8C6;
+}
+
+/* --- Input Fields (Inspector Position/Rotation/Scale & Name) --- */
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+    background-color: #E8E8C6;
+    color: #252525;
+    border: 1px solid #E8E8C6;
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-weight: 600;
+    font-size: 12px;
+}
+
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+    border: 1px solid #252525;
+    background-color: #E8E8C6;
+}
+
+QLabel {
+    color: #E8E8C6;
+    font-weight: 500;
+}
+
+/* --- Hierarchy Panel (Tree View) --- */
+QTreeView, QTreeWidget {
+    background-color: #474744;
+    color: #E8E8C6;
+    border: none;
+    border-radius: 8px;
+    padding: 6px;
+    outline: none;
+}
+
+QTreeView::item {
+    padding: 4px 6px;
+    border-radius: 4px;
+}
+
+QTreeView::item:hover {
+    background-color: rgba(234, 230, 202, 0.12);
+}
+
+QTreeView::item:selected {
+    background-color: #E8E8C6;
+    color: #252525;
+    font-weight: 600;
+}
+
+QTreeView::branch:has-children:!has-siblings:closed,
+QTreeView::branch:closed:has-children:has-siblings {
+    image: url(:/icons/folder_closed.png);
+}
+
+QTreeView::branch:open:has-children:!has-siblings,
+QTreeView::branch:open:has-children:has-siblings {
+    image: url(:/icons/folder_open.png);
+}
+
+/* --- Log Panel (Special Light Cream Background) --- */
+#logDockArea, #logWidget, QTextEdit#logConsoleOutput, QPlainTextEdit#logConsoleOutput {
+    background-color: #E8E8C6;
+    color: #252525;
+    border-radius: 8px;
+    font-family: "JetBrains Mono", "Consolas", "Courier New", monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    selection-background-color: #474744;
+    selection-color: #E8E8C6;
+}
+
+/* ADS Title Bar when inside Light Log Panel */
+#logDockArea ads--CDockAreaTitleBar,
+#logDockArea ads--CDockWidgetTitleLabel {
+    background-color: #E8E8C6;
+    color: #252525;
+}
+
+#logDockArea ads--CDockAreaTitleBar QPushButton {
+    color: #252525;
+}
+
+/* --- Scrollbars --- */
+QScrollBar:vertical {
+    background-color: transparent;
+    width: 8px;
+    margin: 2px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: rgba(234, 230, 202, 0.3);
+    border-radius: 4px;
+    min-height: 20px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: rgba(234, 230, 202, 0.6);
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
+    height: 0px;
+}
+
+QScrollBar:horizontal {
+    background-color: transparent;
+    height: 8px;
+    margin: 2px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: rgba(234, 230, 202, 0.3);
+    border-radius: 4px;
+    min-width: 20px;
+}
+
+/* Special scrollbar handle inside Log Panel */
+#logWidget QScrollBar::handle:vertical,
+QPlainTextEdit#logConsoleOutput QScrollBar::handle:vertical {
+    background-color: rgba(38, 37, 36, 0.3);
+}
+
+/* --- Buttons --- */
+QPushButton {
+    background-color: #4A4945;
+    color: #E8E8C6;
+    border: 1px solid #63615B;
+    border-radius: 5px;
+    padding: 6px 14px;
+    font-weight: 500;
+}
+
+QPushButton:hover {
+    background-color: #585651;
+    border-color: #E8E8C6;
+}
+
+QPushButton:pressed {
+    background-color: #474744;
+}

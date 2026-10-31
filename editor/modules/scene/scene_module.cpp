@@ -137,9 +137,11 @@ public:
     void startup(editor::EditorContext& context) override {
         context_ = &context;
         auto* hierarchy = new HierarchyPanel(context.scene(), context.selection());
+        hierarchy->setObjectName(QStringLiteral("hierarchyTree"));
         context.addPanel(QStringLiteral("HierarchyPanel"), QObject::tr("Hierarchy"), hierarchy, Qt::LeftDockWidgetArea);
 
-        auto* inspector = new InspectorPanel(context);
+        auto* inspector = new InspectorPanel(context.scene(), context.selection());
+        inspector->setObjectName(QStringLiteral("inspectorWidget"));
         context.addPanel(QStringLiteral("InspectorPanel"), QObject::tr("Inspector"), inspector, Qt::RightDockWidgetArea);
 
         auto* add_cube = context.menu(QObject::tr("&Scene"))->addAction(QObject::tr("Add &Cube"));

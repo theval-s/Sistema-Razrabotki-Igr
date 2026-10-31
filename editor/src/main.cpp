@@ -2,6 +2,8 @@
 #include <QCommandLineParser>
 #include <QDir>
 #include <QMessageBox>
+#include <QFile>
+#include <QTextStream>
 
 #include <optional>
 #include <string>
@@ -18,6 +20,17 @@
 #include <editor/project_dialog.hpp>
 
 namespace {
+
+void applyTheme(QApplication& app) {
+    QFile file(QStringLiteral(":/styles/editor_theme.qss"));
+    if (file.open(QFile::ReadOnly | QFile::Text)) {
+        QTextStream stream(&file);
+        app.setStyleSheet(stream.readAll());
+        spdlog::info("Editor theme QSS successfully applied");
+    } else {
+        spdlog::warn("Failed to load QSS resource ':/styles/editor_theme.qss'");
+    }
+}
 
 void addFileLog() {
     //logging in the exe path instead of cwd
@@ -64,6 +77,7 @@ int main(int argc, char* argv[]) {
 
     // Before the window starts the engine and its threads, which log to the same logger.
     addFileLog();
+    applyTheme(app);
 
     QCommandLineParser parser;
     parser.addHelpOption();
