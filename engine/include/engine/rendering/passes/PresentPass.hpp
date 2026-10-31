@@ -23,6 +23,8 @@ private:
     ShaderHandle vertexShader_;
     ShaderHandle pixelShader_;
     ShaderHandle outlinedPixelShader_;
+    ShaderHandle linesVertexShader_;
+    ShaderHandle linesPixelShader_;
     TextureHandle backBufferView_;
 };
 

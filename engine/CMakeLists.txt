@@ -70,6 +70,7 @@ set(ENGINE_SOURCES
 
 set(ENGINE_SHADERS
     shaders/Common.hlsl
+    shaders/EditorLines.hlsl
     shaders/DirectionalLightVS.hlsl
     shaders/GBufferPass.hlsl
     shaders/GBufferVS.hlsl

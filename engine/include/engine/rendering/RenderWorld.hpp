@@ -41,6 +41,8 @@ struct RenderWorld {
     std::vector<RenderItem> sceneItems;
     // Supplied by an editor host; empty in games. Uses the same mesh/material as sceneItems.
     std::vector<RenderItem> selectedSceneItems;
+    // Editor-owned world-space line endpoints, drawn over the final scene.
+    std::vector<Vector3> editorLines;
     // Rebuilt from scene light components by RenderExtractionSubsystem.
     std::vector<LightInfo> lights;
     LightInfo directionalLight; //as for now only one dir light allowed
