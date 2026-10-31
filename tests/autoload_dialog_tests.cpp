@@ -1,14 +1,21 @@
 #include <editor/autoload_dialog.hpp>
 #include <editor/scene_document.hpp>
 #include <editor/selection.hpp>
+#include <editor/lua_definitions.hpp>
 
 #include <QApplication>
 #include <QPushButton>
 #include <QTableWidget>
+#include <QTemporaryDir>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 
 #include <engine/engine.hpp>
 #include <engine/project/Project.hpp>
 #include <engine/scripting/LuaRuntime.hpp>
+#include <engine/core/FileSystem.hpp>
+#include <engine/core/PathUtils.hpp>
 
 #include <gtest/gtest.h>
 #include <spdlog/sinks/callback_sink.h>
@@ -72,6 +79,97 @@ TEST(AutoloadDialog, RemoveAndSaveOnlyChangeTheDialogCopy) {
     EXPECT_EQ(edited[0].name, "Second");
     EXPECT_EQ(edited[0].script.id, project.autoloads[1].script.id);
     EXPECT_EQ(project.autoloads.size(), 2u);
+}
+
+TEST(LuaDefinitions, GeneratesApiAndNamesAndMergesSettingsWithoutLosingUserOptions) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    auto project = SampleProject();
+    project.file = engine::FromUtf8(directory.path().toStdString()) / "test.sriproject";
+    std::string error, definitions, config;
+    ASSERT_TRUE(engine::CreateNewFile(project.Root() / ".luarc.json", R"({
+        "workspace.library": ["my-library"], "diagnostics.globals": ["MyGlobal"], "runtime.version": "Lua 5.4"
+    })", error));
+    ASSERT_TRUE(editor::refreshLuaDefinitions(project, error)) << error;
+    ASSERT_TRUE(engine::ReadTextFile(project.Root() / ".sri/lua/autoloads.d.lua", definitions, error));
+    EXPECT_NE(definitions.find("---@field First table<string, any>\n"), std::string::npos);
+    EXPECT_NE(definitions.find("---@field Second table<string, any>?"), std::string::npos);
+    ASSERT_TRUE(engine::ReadTextFile(project.Root() / ".sri/lua/engine.d.lua", definitions, error));
+    EXPECT_NE(definitions.find("function Log.info(message)"), std::string::npos);
+    EXPECT_NE(definitions.find("function Entity:SetPosition(position)"), std::string::npos);
+    ASSERT_TRUE(engine::ReadTextFile(project.Root() / ".luarc.json", config, error));
+    auto object = QJsonDocument::fromJson(QByteArray::fromStdString(config)).object();
+    const auto libraries = object.value("workspace.library").toArray();
+    ASSERT_EQ(libraries.size(), 2);
+    EXPECT_EQ(libraries[0].toString(), QStringLiteral("my-library"));
+    EXPECT_EQ(libraries[1].toString(), QStringLiteral(".sri/lua"));
+    EXPECT_EQ(object.value("diagnostics.globals").toArray()[0].toString(), QStringLiteral("MyGlobal"));
+    project.autoloads.erase(project.autoloads.begin());
+    project.autoloads[0].name = "Renamed";
+    ASSERT_TRUE(editor::refreshLuaDefinitions(project, error)) << error;
+    ASSERT_TRUE(engine::ReadTextFile(project.Root() / ".sri/lua/autoloads.d.lua", definitions, error));
+    EXPECT_EQ(definitions.find("---@field First"), std::string::npos);
+    EXPECT_EQ(definitions.find("---@field Second"), std::string::npos);
+    EXPECT_NE(definitions.find("---@field Renamed"), std::string::npos);
+    std::string unchanged;
+    ASSERT_TRUE(engine::ReadTextFile(project.Root() / ".luarc.json", unchanged, error));
+    EXPECT_EQ(unchanged, config);
+}
+
+TEST(LuaDefinitions, NewProjectGetsLua54ConfigurationWithoutTouchingContent) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    auto project = SampleProject();
+    project.file = engine::FromUtf8(directory.path().toStdString()) / "test.sriproject";
+    std::string error, text;
+    ASSERT_TRUE(editor::refreshLuaDefinitions(project, error)) << error;
+    ASSERT_TRUE(engine::ReadTextFile(project.Root() / ".luarc.json", text, error));
+    const auto object = QJsonDocument::fromJson(QByteArray::fromStdString(text)).object();
+    EXPECT_EQ(object.value("runtime.version").toString(), QStringLiteral("Lua 5.4"));
+    EXPECT_EQ(object.value("runtime.path").toArray()[0].toString(), QStringLiteral("content/?.lua"));
+    EXPECT_EQ(object.value("workspace.library").toArray()[0].toString(), QStringLiteral(".sri/lua"));
+    EXPECT_FALSE(std::filesystem::exists(project.ContentDir()));
+}
+
+TEST(LuaDefinitions, InvalidAndCommentedConfigurationsArePreservedAndDefinitionsStillRefresh) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    auto project = SampleProject();
+    project.file = engine::FromUtf8(directory.path().toStdString()) / "test.sriproject";
+    std::string error, text;
+    const auto config = project.Root() / ".luarc.json";
+    ASSERT_TRUE(engine::CreateNewFile(config, "{broken", error));
+    EXPECT_FALSE(editor::refreshLuaDefinitions(project, error));
+    ASSERT_TRUE(engine::ReadTextFile(config, text, error));
+    EXPECT_EQ(text, "{broken");
+    EXPECT_TRUE(std::filesystem::exists(project.Root() / ".sri/lua/autoloads.d.lua"));
+    std::filesystem::remove(config);
+    ASSERT_TRUE(engine::CreateNewFile(project.Root() / ".luarc.jsonc", "// User's config\n{}", error));
+    EXPECT_FALSE(editor::refreshLuaDefinitions(project, error));
+    EXPECT_NE(error.find("workspace.library"), std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(config));
+}
+
+TEST(LuaDefinitions, NestedSettingsRetainTheirExistingLibrariesAndRuntimeChoices) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    auto project = SampleProject();
+    project.file = engine::FromUtf8(directory.path().toStdString()) / "test.sriproject";
+    std::string error, text;
+    const auto config = project.Root() / ".luarc.json";
+    ASSERT_TRUE(engine::CreateNewFile(config,
+        R"({"workspace":{"library":["existing"]},"runtime":{"version":"Lua 5.4","path":["custom/?.lua"]}})", error));
+    ASSERT_TRUE(editor::refreshLuaDefinitions(project, error)) << error;
+    ASSERT_TRUE(engine::ReadTextFile(config, text, error));
+    const auto object = QJsonDocument::fromJson(QByteArray::fromStdString(text)).object();
+    EXPECT_FALSE(object.contains("workspace.library"));
+    EXPECT_FALSE(object.contains("runtime.path"));
+    EXPECT_FALSE(object.contains("runtime.version"));
+    const auto libraries = object.value("workspace").toObject().value("library").toArray();
+    ASSERT_EQ(libraries.size(), 2);
+    EXPECT_EQ(libraries[0].toString(), QStringLiteral("existing"));
+    EXPECT_EQ(libraries[1].toString(), QStringLiteral(".sri/lua"));
+    EXPECT_EQ(object.value("runtime").toObject().value("path").toArray()[0].toString(), QStringLiteral("custom/?.lua"));
 }
 
 TEST(AutoloadLogging, LuaUsesTheSharedDefaultLogger) {

@@ -69,6 +69,7 @@ TEST(PlayMode, LuaOpenLevelIsDeferredAndAutoloadStateSurvivesAcrossScenes) {
         local shared = require('shared')
         function OnStart()
             shared.starts = shared.starts + 1
+            starts = (starts or 0) + 1
             assert(Scene.OpenLevel('Next'))
         end
     )", error));
@@ -76,8 +77,20 @@ TEST(PlayMode, LuaOpenLevelIsDeferredAndAutoloadStateSurvivesAcrossScenes) {
     const engine::AssetMetadata meta{engine::NewUuid(), engine::CatalogAssetKind::Script};
     ASSERT_TRUE(engine::WriteAssetMetadata(source, meta, error));
     ASSERT_TRUE(engine::WriteAssetMetadata(f.root / "shared.lua", {engine::NewUuid(), engine::CatalogAssetKind::Script}, error));
+    const auto behavior = f.root / "Player.lua";
+    const engine::AssetMetadata behaviorMeta{engine::NewUuid(), engine::CatalogAssetKind::Script};
+    ASSERT_TRUE(engine::CreateNewFile(behavior, R"(
+        function OnStart()
+            Autoloads.Game.player_score = 42
+        end
+        function OnDestroy()
+            assert(Autoloads.Game.player_score == 42)
+        end
+    )", error));
+    ASSERT_TRUE(engine::WriteAssetMetadata(behavior, behaviorMeta, error));
     ASSERT_TRUE(f.host.Initialize());
-    f.host.GetScene().CreateEntity("Editor original");
+    f.host.GetScene().AddComponent<engine::ScriptComponent>(f.host.GetScene().CreateEntity("Editor original"),
+        engine::ScriptComponent{{behaviorMeta.id, "game/Player.lua"}, true});
     const std::vector<engine::AutoloadDefinition> autoloads{{"Game", {meta.id, "game/Game.lua"}, true}};
     ASSERT_TRUE(f.host.PlayCurrentScene(f.root, autoloads, error)) << error;
     EXPECT_NE(f.host.GetScene().FindFirstByName("Editor original"), NullEntity);
@@ -87,7 +100,9 @@ TEST(PlayMode, LuaOpenLevelIsDeferredAndAutoloadStateSurvivesAcrossScenes) {
     EXPECT_NE(f.host.GetScene().FindFirstByName("Next"), NullEntity);
     f.host.Tick();
     EXPECT_NE(f.host.GetScene().FindFirstByName("Last"), NullEntity);
-    EXPECT_TRUE(f.scripting->GetRuntime().ExecuteString("assert(require('shared').starts == 1)", "check", error));
+    EXPECT_TRUE(f.scripting->GetRuntime().ExecuteString(
+        "assert(require('shared').starts == 1 and Autoloads.Game.starts == 1 and Autoloads.Game.player_score == 42)",
+        "check", error));
     EXPECT_FALSE(f.host.RequestOpenLevel("../escape", error));
     EXPECT_FALSE(f.host.RequestOpenLevel("Missing", error));
     EXPECT_NE(f.host.GetScene().FindFirstByName("Last"), NullEntity);

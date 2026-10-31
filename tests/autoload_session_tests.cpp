@@ -75,6 +75,53 @@ TEST(ScriptAutoloads, InitializeDoesNotStartLuaAndCompatibilityOverloadStillWork
     EXPECT_FALSE(fixture.scripts->GetRuntime().IsInitialized());
 }
 
+TEST(ScriptAutoloads, NamedInstancesShareLiveFieldsAndFunctionsAndRemainAvailableDuringTeardown) {
+    Fixture fixture;
+    const std::vector<engine::AutoloadDefinition> definitions{
+        fixture.Add("GameState", R"(
+            player_score = 10
+            local secret = 5
+            function AddScore(amount) player_score = player_score + amount + secret end
+            function OnStart() assert(Autoloads.GameState.player_score == 10) end
+            function OnUpdate(dt) assert(player_score == 20) end
+            function OnDestroy()
+                assert(Autoloads.GameState.player_score == 20)
+                assert(Autoloads.Legacy == nil)
+            end
+        )"),
+        fixture.Add("Legacy", R"(
+            return {
+                value = 3,
+                Add = function(self, amount) self.value = self.value + amount end,
+                OnStart = function(self)
+                    assert(Autoloads.Legacy == self)
+                    assert(Autoloads.GameState.secret == nil)
+                    Autoloads.GameState.AddScore(5)
+                end,
+                OnDestroy = function(self) assert(Autoloads.GameState.player_score == 20) end
+            }
+        )"),
+        fixture.Add("Disabled", "error('must not run')", false),
+    };
+    std::string error;
+    ASSERT_TRUE(fixture.host.Initialize());
+    ASSERT_TRUE(fixture.scripts->BeginPlay(fixture.root, definitions, error)) << error;
+    auto& runtime = fixture.scripts->GetRuntime();
+    ASSERT_TRUE(runtime.ExecuteString(R"(
+        assert(Autoloads.Disabled == nil)
+        assert(Autoloads.GameState.player_score == 20)
+        Autoloads.Legacy:Add(7)
+        assert(Autoloads.Legacy.value == 10)
+    )", "named-autoloads", error)) << error;
+    LogCapture capture;
+    engine::FrameContext frame; frame.deltaSeconds = 0.25;
+    fixture.scripts->Update(frame);
+    fixture.scripts->EndPlay();
+    EXPECT_TRUE(capture.errors.empty());
+    ASSERT_TRUE(fixture.scripts->BeginPlay(fixture.root, error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString("assert(next(Autoloads) == nil)", "fresh-autoloads", error)) << error;
+}
+
 TEST(ScriptAutoloads, StartOrderUsesOneStateAndSharedModulesAndStopReversesOrder) {
     Fixture fixture;
     std::string error;

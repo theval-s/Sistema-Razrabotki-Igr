@@ -44,6 +44,58 @@ Engine keeps its existing lifecycle unless its host opts into SetEditorMode().
 
 ## Editor logging and autoload settings
 
+### Lua completion in VS Code
+
+Open the folder containing your `.sriproject` in VS Code, with the Lua Language
+Server extension installed. On project opening and after saving Autoload settings,
+SRI Editor writes `.sri/lua/engine.d.lua` and `autoloads.d.lua`, and merges their
+library path into `.luarc.json`. **Project → Refresh Lua Definitions** regenerates
+them on demand. These are tooling files outside `content/`; never require them.
+Generated files are replaced on refresh, so keep your own annotations elsewhere.
+
+The engine definitions describe only implemented bindings: Log, Vector3, Entity
+and Scene.OpenLevel. Existing LuaLS settings and library paths are retained. A
+malformed `.luarc.json` is left intact and reported; if you use `.luarc.jsonc`, add
+`.sri/lua` to `workspace.library` yourself (the editor leaves comments untouched).
+The automatic setup assumes VS Code opens the project root, not just `content/`
+or an individual Lua file. After updating definitions, restart the Lua language
+server if completion has not refreshed.
+
+### Accessing autoloads
+
+The configured name addresses the actual running instance:
+
+```lua
+-- GameState.lua, registered as GameState in Project → Autoload
+player_score = 0
+local bonus = 5 -- private, not exposed through Autoloads
+
+function AddScore(amount)
+    player_score = player_score + amount + bonus
+end
+
+-- In a GameObject script:
+function OnStart()
+    Autoloads.GameState.AddScore(10)
+    Log.info(tostring(Autoloads.GameState.player_score))
+end
+```
+
+Top-level script functions use dot calls; legacy table methods that accept self
+use colon calls. `Autoloads.Name` is not a second execution of the source and does
+not require a module. Public fields/functions stay live across scene changes.
+Only configured names get completion: each entry is an open table, so the engine
+does not infer or validate its fields or function signatures. Maintain those
+contracts in your scripts. Disabled names get optional types and are nil at runtime.
+Lua keywords used as names need brackets, e.g. `Autoloads["end"]`.
+
+Startup follows list order: later autoloads can use earlier ones; object scripts
+start after all enabled autoloads. An autoload is published after its file loads
+and before its OnStart. During reverse teardown, an instance remains available
+through its own OnDestroy, then its name is removed. Stop/failed startup drops the
+whole registry with the session. A callback fault keeps the table available but
+disables that instance's remaining lifecycle callbacks, following normal policy.
+
 `Log.info("Hello world")`, `Log.warning(...)`, and `Log.error(...)` are registered
 by LuaRuntime's RegisterLog during state initialization. They write to the shared
 spdlog default logger. MainWindow::buildLogDock installs a callback sink, copies

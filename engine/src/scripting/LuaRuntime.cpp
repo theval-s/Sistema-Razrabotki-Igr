@@ -165,6 +165,7 @@ namespace engine {
         std::unique_ptr<sol::state> state;
         LevelLoader levelLoader;
         // Declared after state so all Lua references are released first, including at destruction.
+        sol::table autoloads;
         std::unordered_map<std::uint64_t, std::unique_ptr<Instance>> instances;
         struct Module {
             sol::object value;
@@ -326,6 +327,7 @@ namespace engine {
             );
 
             sol::table globals = impl_->state->globals();
+            impl_->autoloads = impl_->state->create_named_table("Autoloads");
 
             globals["dofile"] = sol::nil;
             globals["loadfile"] = sol::nil;
@@ -414,6 +416,7 @@ namespace engine {
         }
         impl_->instances.clear();  // All callbacks, tables and environments die before state.
         impl_->modules.clear();
+        impl_->autoloads = sol::table{};
         impl_->loadingModules.clear();
         impl_->moduleRoot.clear();
         impl_->destroyed.clear();
@@ -443,6 +446,9 @@ namespace engine {
             return record->Fail(error, "expected a script UUID and an absolute resolved source path");
         }
         try {
+            if (!desc.autoloadName.empty() &&
+                impl_->autoloads.raw_get<sol::object>(desc.autoloadName).get_type() != sol::type::nil)
+                return record->Fail(error, "duplicate autoload name: " + desc.autoloadName);
             std::string source;
             if (!ReadTextFile(desc.source, source, error)) {
                 const std::string message = error;
@@ -495,6 +501,13 @@ namespace engine {
             id.session_ = impl_->session;
             auto [entry, inserted] = impl_->instances.try_emplace(id.value_);
             if (!inserted) return record->Fail(error, "instance ID space exhausted");
+            // Publish the actual instance before OnStart, retaining its private locals/closures.
+            try {
+                if (!desc.autoloadName.empty()) impl_->autoloads.raw_set(desc.autoloadName, record->table);
+            } catch (...) {
+                impl_->instances.erase(entry);
+                throw;
+            }
             entry->second = std::move(record);
             instance = id;
             error.clear();
@@ -566,6 +579,7 @@ namespace engine {
         impl_->destroyed.insert(instance.value_);
         record.destroying = true;
         const bool clean = !record.started || record.faulted || record.Invoke(record.destroy, "OnDestroy", error);
+        if (!record.desc.autoloadName.empty()) impl_->autoloads.raw_set(record.desc.autoloadName, sol::nil);
         impl_->instances.erase(found);
         if (clean) error.clear();
         return clean;

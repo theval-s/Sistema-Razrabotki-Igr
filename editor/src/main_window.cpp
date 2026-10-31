@@ -48,6 +48,7 @@
 #include <editor/module_loader.hpp>
 #include <editor/paths.hpp>
 #include <editor/project_dialog.hpp>
+#include <editor/lua_definitions.hpp>
 #include <editor/scene_document.hpp>
 #include <editor/viewport_widget.hpp>
 #include <editor/selection.hpp>
@@ -235,6 +236,8 @@ void MainWindow::startEngine() {
         return;
     }
     viewport_->setCamera(camera_);
+    std::string luaDefinitionsError;
+    if (!refreshLuaDefinitions(project_, luaDefinitionsError)) spdlog::warn("{}", luaDefinitionsError);
     openStartupScene();
 
     tick_timer_->start(16);
@@ -379,6 +382,14 @@ void MainWindow::buildMenus() {
 
     auto* project_menu = context_->menu(tr("&Project"));
     auto* autoload_action = project_menu->addAction(tr("&Autoload..."), this, &MainWindow::editAutoloads);
+    project_menu->addAction(tr("Refresh Lua Definitions"), this, [this] {
+        std::string error;
+        if (!refreshLuaDefinitions(project_, error)) {
+            QMessageBox::warning(this, tr("Lua completion"), toQString(std::string_view(error)));
+            return;
+        }
+        statusBar()->showMessage(tr("Lua definitions updated. Open the project folder in VS Code for completion."), 6000);
+    });
     connect(project_menu, &QMenu::aboutToShow, this, [this, autoload_action] {
         const auto* scripts = engine_.GetSubsystem<engine::ScriptSubsystem>();
         autoload_action->setEnabled(engine_.IsInitialized() && (!scripts || !scripts->IsPlaying()));
@@ -466,6 +477,10 @@ void MainWindow::editAutoloads() {
             continue;
         }
         project_ = std::move(updated);
+        if (!refreshLuaDefinitions(project_, error)) {
+            spdlog::warn("{}", error);
+            QMessageBox::warning(this, tr("Lua completion"), toQString(std::string_view(error)));
+        }
         return;
     }
 }

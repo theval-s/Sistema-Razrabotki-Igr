@@ -5,6 +5,8 @@
 # use (asset icons and picker).
 # ---------------------------------------------------------------------------
 
+find_package(nlohmann_json CONFIG REQUIRED)
+
 add_library(editor_core SHARED
     src/asset_icons.cpp
     src/asset_picker.cpp
@@ -16,6 +18,8 @@ add_library(editor_core SHARED
     include/editor/asset_picker.hpp
     include/editor/editor_camera.hpp
     src/script_creation.cpp
+    src/lua_definitions.cpp
+    include/editor/lua_definitions.hpp
     include/editor/editor_context.hpp
     include/editor/editor_module.hpp
     include/editor/paths.hpp
@@ -44,7 +48,7 @@ target_link_libraries(editor_core PUBLIC
     Qt6::Widgets
 )
 # Private: modules talk to EditorContext only and never see ADS.
-target_link_libraries(editor_core PRIVATE ads::qtadvanceddocking-qt6)
+target_link_libraries(editor_core PRIVATE ads::qtadvanceddocking-qt6 nlohmann_json::nlohmann_json)
 
 set_target_properties(editor_core PROPERTIES
     OUTPUT_NAME editor_core
