@@ -40,7 +40,7 @@ TEST(PlayMode, StopRestoresUnsavedEntitiesAndRemovesRuntimeChanges) {
     PlayFixture f;
     ASSERT_TRUE(f.host.Initialize());
     auto entity = f.host.GetScene().CreateEntity("Unsaved");
-    const std::string id(f.host.GetScene().GetId(entity));
+    const std::string id = f.host.GetScene().GetId(entity).ToString();
     f.host.GetScene().GetTransform(entity).position.x = 12;
     std::string error;
     for (int i = 0; i < 2; ++i) {

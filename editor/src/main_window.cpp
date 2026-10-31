@@ -373,7 +373,7 @@ void MainWindow::buildMenus() {
         (void)createLuaScriptInteractive(this, engine_, project_);
         });
 
-    file_menu->addSeparator();  
+    file_menu->addSeparator();
 
     file_menu->addAction(tr("E&xit"), this, &QWidget::close);
 
@@ -416,7 +416,7 @@ void MainWindow::playScene() {
     if (!engine_.IsInitialized() || engine_.IsPlaying()) return;
     edit_selection_.clear();
     for (const auto entity : context_->selection().entities())
-        edit_selection_.emplace_back(engine_.GetScene().GetId(entity));
+        edit_selection_.emplace_back(engine_.GetScene().GetId(entity).ToString());
     context_->sceneDocument().beginRuntime();
     std::string error;
     if (!engine_.PlayCurrentScene(project_.ContentDir(), project_.autoloads, error)) {
