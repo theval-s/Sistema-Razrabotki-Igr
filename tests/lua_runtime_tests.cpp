@@ -468,6 +468,32 @@ TEST(LuaInstances, DestroyFailureStillReleasesInstanceAndShutdownIsSafe) {
     EXPECT_EQ(logs.errors.size(), 2u);
 }
 
+TEST(ScriptSubsystem, UpdatesInstancesInCreationOrder) {
+    ScriptFixture fixture;
+    // Enough instances that a hash-ordered container would almost surely mix them up.
+    const auto desc = fixture.Write(R"(
+        function OnStart() counter.n = counter.n + 1; index = counter.n end
+        function OnUpdate(dt) order[#order + 1] = index end
+    )");
+    engine::ScriptSubsystem subsystem;
+    std::string error;
+    ASSERT_TRUE(subsystem.Initialize());
+    ASSERT_TRUE(subsystem.BeginPlay(fixture.root, error)) << error;
+    auto& runtime = subsystem.GetRuntime();
+    ASSERT_TRUE(runtime.ExecuteString("counter = {n = 0}; order = {}", "setup", error)) << error;
+    for (int i = 0; i < 32; ++i) {
+        engine::InstanceId id;
+        ASSERT_TRUE(runtime.CreateInstance(desc, id, error)) << error;
+        ASSERT_TRUE(runtime.StartInstance(id, error)) << error;
+    }
+    engine::FrameContext frame;
+    frame.deltaSeconds = 0.25;
+    subsystem.Update(frame);
+    EXPECT_TRUE(runtime.ExecuteString(
+        "assert(#order == 32); for i = 1, 32 do assert(order[i] == i, 'position ' .. i .. ': ' .. order[i]) end",
+        "check", error)) << error;
+}
+
 TEST(ScriptSubsystem, UpdatesInstancesAndSkipsFaultedOnesWithoutCallingGlobalUpdate) {
     ScriptFixture fixture;
     const auto failing = fixture.Write(R"(

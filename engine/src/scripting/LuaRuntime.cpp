@@ -16,12 +16,13 @@
 #include <string>
 #include <stdexcept>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include <engine/core/FileSystem.hpp>
+#include <engine/core/HandleMap.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/scene/Scene.hpp>
 
@@ -49,26 +50,36 @@ namespace engine {
             return false;
         }
 
-        template <typename Result>
-        bool CheckResult(Result& result, std::string& error, std::string_view context) {
+        /// lazy build a string
+        template <typename Context>
+        std::string Describe(const Context& context) {
+            if constexpr (std::is_invocable_v<const Context&>) {
+                return std::string(context());
+            } else {
+                return std::string(context);
+            }
+        }
+
+        template <typename Result, typename Context>
+        bool CheckResult(Result& result, std::string& error, const Context& context) {
             if (!result.valid()) {
                 sol::error luaError = result;
-                return SetError(error, std::string(context) + ": " + luaError.what());
+                return SetError(error, Describe(context) + ": " + luaError.what());
             }
             error.clear();
             return true;
         }
 
-        template <typename... Args>
+        template <typename Context, typename... Args>
         bool ProtectedCall(const sol::protected_function& callback, std::string& error,
-                           std::string_view context, Args&&... args) {
+                           const Context& context, Args&&... args) {
             try {
                 sol::protected_function_result result = callback(std::forward<Args>(args)...);
                 return CheckResult(result, error, context);
             } catch (const std::exception& exception) {
-                return SetError(error, std::string(context) + ": " + exception.what());
+                return SetError(error, Describe(context) + ": " + exception.what());
             } catch (...) {
-                return SetError(error, std::string(context) + ": unknown C++ callback exception");
+                return SetError(error, Describe(context) + ": unknown C++ callback exception");
             }
         }
 
@@ -149,7 +160,7 @@ namespace engine {
                     error.clear();
                     return true;
                 }
-                const std::string context = Context() + " [callback=" + std::string(name) + "]";
+                const auto context = [this, name] { return Context() + " [callback=" + std::string(name) + "]"; };
                 const bool clean = environmentCallbacks
                     ? (delta ? ProtectedCall(*callback, error, context, *delta)
                              : ProtectedCall(*callback, error, context))
@@ -166,7 +177,11 @@ namespace engine {
         LevelLoader levelLoader;
         // Declared after state so all Lua references are released first, including at destruction.
         sol::table autoloads;
-        std::unordered_map<std::uint64_t, std::unique_ptr<Instance>> instances;
+        // Boxed so a record stays put while Lua callbacks add instances and the map grows.
+        using Instances = HandleMap<std::unique_ptr<Instance>>;
+        Instances instances;
+        // UpdateInstances' list of what to update, kept to not reallocate every frame.
+        std::vector<Instances::Handle> updating;
         struct Module {
             sol::object value;
             sol::environment environment;
@@ -174,10 +189,24 @@ namespace engine {
         std::unordered_map<std::string, Module> modules;
         std::vector<std::string> loadingModules;
         std::filesystem::path moduleRoot;
-        std::unordered_set<std::uint64_t> destroyed;
         std::uint64_t session = 0;
-        std::uint64_t nextInstance = 1;
         bool shuttingDown = false;
+
+        [[nodiscard]] InstanceId Id(const Instances::Handle handle) const {
+            InstanceId id;
+            id.slot_ = handle.id;
+            id.generation_ = handle.generation;
+            id.session_ = session;
+            return id;
+        }
+        [[nodiscard]] static Instances::Handle Handle(const InstanceId id) {
+            return Instances::Handle(id.slot_, id.generation_);
+        }
+        /// The live instance `id` names, or null once it's destroyed. `id` must be of this session.
+        [[nodiscard]] Instance* Find(const InstanceId id) {
+            std::unique_ptr<Instance>* record = instances.TryGet(Handle(id));
+            return record != nullptr ? record->get() : nullptr;
+        }
 
         // No logging here: Lua's wrapper raises the returned error, and the outer
         // protected instance/compatibility call reports it once with its own context.
@@ -381,8 +410,6 @@ namespace engine {
             if (impl_->session == 0) {
                 throw std::runtime_error("Lua session token space exhausted");
             }
-            impl_->nextInstance = 1;
-
             error.clear();
 
             spdlog::info(
@@ -401,25 +428,23 @@ namespace engine {
     void LuaRuntime::Shutdown() noexcept {
         if (!impl_->state || impl_->shuttingDown) return;
         impl_->shuttingDown = true;
-        // Destroy callbacks run while the state and the instance's table are still alive.
-        while (!impl_->instances.empty()) {
-            InstanceId id;
-            id.value_ = impl_->instances.begin()->first;
-            id.session_ = impl_->session;
+        // Destroy callbacks run while the state and the instance's table are still alive. Newest
+        // first; CreateInstance refuses while shutting down, so this sees every instance.
+        const auto handles = impl_->instances.Handles();
+        for (auto it = handles.rbegin(); it != handles.rend(); ++it) {
             try {
                 std::string error;
-                (void)DestroyInstance(id, error);
+                (void)DestroyInstance(impl_->Id(*it), error);
             } catch (...) {
                 // Shutdown must release every Lua reference even if diagnostics fail.
-                impl_->instances.erase(id.value_);
+                impl_->instances.Remove(*it);
             }
         }
-        impl_->instances.clear();  // All callbacks, tables and environments die before state.
+        impl_->instances = {};  // All callbacks, tables and environments die before state.
         impl_->modules.clear();
         impl_->autoloads = sol::table{};
         impl_->loadingModules.clear();
         impl_->moduleRoot.clear();
-        impl_->destroyed.clear();
         impl_->session = 0;
         impl_->state.reset();
         impl_->shuttingDown = false;
@@ -513,23 +538,14 @@ namespace engine {
                 }
                 *callback = value.as<sol::protected_function>();
             }
-            InstanceId id;
-            if (impl_->nextInstance == std::numeric_limits<std::uint64_t>::max()) {
-                return record->Fail(error, "instance ID space exhausted");
-            }
-            id.value_ = impl_->nextInstance++;
-            id.session_ = impl_->session;
-            auto [entry, inserted] = impl_->instances.try_emplace(id.value_);
-            if (!inserted) return record->Fail(error, "instance ID space exhausted");
             // Publish the actual instance before OnStart, retaining its private locals/closures.
+            if (!desc.autoloadName.empty()) impl_->autoloads.raw_set(desc.autoloadName, record->table);
             try {
-                if (!desc.autoloadName.empty()) impl_->autoloads.raw_set(desc.autoloadName, record->table);
+                instance = impl_->Id(impl_->instances.Add(std::move(record)));
             } catch (...) {
-                impl_->instances.erase(entry);
+                if (!desc.autoloadName.empty()) impl_->autoloads.raw_set(desc.autoloadName, sol::nil);
                 throw;
             }
-            entry->second = std::move(record);
-            instance = id;
             error.clear();
             return true;
         } catch (const std::exception& exception) {
@@ -541,12 +557,11 @@ namespace engine {
         if (!IsInitialized() || instance.session_ != impl_->session || impl_->shuttingDown) {
             return SetError(error, "Invalid or stale script session", false);
         }
-        const auto found = impl_->instances.find(instance.value_);
-        if (found == impl_->instances.end()) {
-            SetError(error, "Invalid or stale script instance", false);
-            return false;
+        Impl::Instance* found = impl_->Find(instance);
+        if (found == nullptr) {
+            return SetError(error, "Invalid or stale script instance", false);
         }
-        auto& record = *found->second;
+        auto& record = *found;
         if (record.faulted) return SetError(error, record.failure, false);
         if (record.destroying) return SetError(error, "Cannot start a destroying instance", false);
         if (record.started) {
@@ -561,12 +576,11 @@ namespace engine {
         if (!IsInitialized() || instance.session_ != impl_->session || impl_->shuttingDown) {
             return SetError(error, "Invalid or stale script session", false);
         }
-        const auto found = impl_->instances.find(instance.value_);
-        if (found == impl_->instances.end()) {
-            SetError(error, "Invalid or stale script instance", false);
-            return false;
+        Impl::Instance* found = impl_->Find(instance);
+        if (found == nullptr) {
+            return SetError(error, "Invalid or stale script instance", false);
         }
-        auto& record = *found->second;
+        auto& record = *found;
         if (record.faulted) return SetError(error, record.failure, false);
         if (!record.started || record.destroying) {
             return SetError(error, "Cannot update an unstarted/destroying instance", false);
@@ -581,64 +595,61 @@ namespace engine {
         if (!IsInitialized() || instance.session_ != impl_->session) {
             return SetError(error, "Invalid or stale script session", false);
         }
-        const auto found = impl_->instances.find(instance.value_);
-        if (found == impl_->instances.end()) {
-            if (impl_->destroyed.contains(instance.value_)) {
-                error.clear();
-                return true;
-            }
-            SetError(error, "Invalid or stale script instance", false);
-            return false;
-        }
-        auto& record = *found->second;
-        if (record.destroying) {
+        // Only CreateInstance hands out IDs of this session, so one that's gone was destroyed:
+        // destroying it again succeeds.
+        Impl::Instance* found = impl_->Find(instance);
+        if (found == nullptr || found->destroying) {
             error.clear();
             return true;
         }
-        // Allocate the tombstone before invoking Lua; a repeated destroy never runs it again.
-        impl_->destroyed.insert(instance.value_);
+        auto& record = *found;
         record.destroying = true;
         const bool clean = !record.started || record.faulted || record.Invoke(record.destroy, "OnDestroy", error);
         if (!record.desc.autoloadName.empty()) impl_->autoloads.raw_set(record.desc.autoloadName, sol::nil);
-        impl_->instances.erase(found);
+        // By handle: OnDestroy may have added instances and moved the records' boxes around.
+        impl_->instances.Remove(Impl::Handle(instance));
         if (clean) error.clear();
         return clean;
     }
 
     void LuaRuntime::DestroyEntityInstances() noexcept {
-        // Re-find after each callback: destruction may invalidate other records or rehash the map.
+        // OnDestroy may destroy or create other instances: go round until a pass finds none left.
         // No ordering between entities is promised; all of them precede the autoload services.
-        while (impl_->state) {
-            const auto found = std::find_if(impl_->instances.begin(), impl_->instances.end(), [](const auto& entry) {
-                return entry.second->desc.autoloadName.empty() && !entry.second->destroying;
-            });
-            if (found == impl_->instances.end()) break;
-            InstanceId id;
-            id.value_ = found->first;
-            id.session_ = impl_->session;
-            try {
-                std::string error;
-                (void)DestroyInstance(id, error);
-            } catch (...) {
-                // Keep cleanup progressing even if diagnostic allocation fails.
-                impl_->instances.erase(id.value_);
+        for (bool destroyed = true; destroyed && impl_->state;) {
+            destroyed = false;
+            for (const auto handle : impl_->instances.Handles()) {
+                const std::unique_ptr<Impl::Instance>* record = impl_->instances.TryGet(handle);
+                if (record == nullptr || !(*record)->desc.autoloadName.empty() || (*record)->destroying) continue;
+                destroyed = true;
+                try {
+                    std::string error;
+                    (void)DestroyInstance(impl_->Id(handle), error);
+                } catch (...) {
+                    // Keep cleanup progressing even if diagnostic allocation fails.
+                    impl_->instances.Remove(handle);
+                }
             }
         }
     }
 
     bool LuaRuntime::UpdateInstances(double deltaSeconds, std::string& error) {
-        std::vector<InstanceId> ids;
-        for (const auto& [value, record] : impl_->instances) {
-            if (!record->started || record->faulted || record->destroying) continue;
-            InstanceId id;
-            id.value_ = value;
-            id.session_ = impl_->session;
-            ids.push_back(id);
-        }
+        // In creation order, except that a destroyed instance's slot is reused: autoloads, created
+        // first and never destroyed mid-session, always update in list order.
+        // A snapshot: callbacks may create or destroy instances. Instances created meanwhile wait
+        // for the next frame; UpdateInstance refuses ones destroyed meanwhile. Not reentrant: only
+        // ScriptSubsystem::Update calls this, never Lua.
+        auto& updating = impl_->updating;
+        impl_->instances.Handles(updating);
+        std::erase_if(updating, [this](const Impl::Instances::Handle handle) {
+            const auto& record = impl_->instances.Get(handle);
+            return !record->started || record->faulted || record->destroying;
+        });
         std::string firstError;
-        for (const auto id : ids) {
+        for (const auto handle : updating) {
             std::string failure;
-            if (!UpdateInstance(id, deltaSeconds, failure) && firstError.empty()) firstError = std::move(failure);
+            if (!UpdateInstance(impl_->Id(handle), deltaSeconds, failure) && firstError.empty()) {
+                firstError = std::move(failure);
+            }
         }
         error = std::move(firstError);
         return error.empty();

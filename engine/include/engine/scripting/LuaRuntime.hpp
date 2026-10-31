@@ -26,14 +26,16 @@ namespace engine {
         void SetPosition(DirectX::SimpleMath::Vector3 position) const;
     };
 
-    /// Transient handle: a local slot plus a unique runtime-session token. Never serialized.
+    /// Transient handle: a HandleMap slot and generation, plus the runtime session it belongs to
+    /// (every session starts a new map). Never serialized.
     class InstanceId final {
     public:
-        [[nodiscard]] bool IsValid() const noexcept { return value_ != 0 && session_ != 0; }
+        [[nodiscard]] bool IsValid() const noexcept { return session_ != 0; }
         [[nodiscard]] bool operator==(const InstanceId&) const noexcept = default;
     private:
         friend class LuaRuntime;
-        std::uint64_t value_ = 0;
+        std::uint32_t slot_ = 0;
+        std::int32_t generation_ = 0;
         std::uint64_t session_ = 0;
     };
 
