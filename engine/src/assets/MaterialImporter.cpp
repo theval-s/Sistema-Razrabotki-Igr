@@ -93,6 +93,16 @@ bool MaterialInstanceImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, Cpu
     return true;
 }
 
+MaterialParameters MaterialInstanceImporter::Inherit(const MaterialParameters& defaults,
+    const MaterialParameterOverrides& overrides, TextureHandle explicitTexture, BufferHandle customBuffer) {
+    MaterialParameters result = defaults;
+    result.customBuffer = customBuffer;
+    if (overrides.specularColor) result.parameters.specularColor = *overrides.specularColor;
+    if (overrides.shininess) result.parameters.shininess = *overrides.shininess;
+    if (overrides.albedoTexture) result.albedoTexture = explicitTexture;
+    return result;
+}
+
 bool MaterialInstanceImporter::UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
                                          GpuPayload& result, std::string& error) const {
     if (payload.kind != CpuPayload::Kind::MaterialInstance) {

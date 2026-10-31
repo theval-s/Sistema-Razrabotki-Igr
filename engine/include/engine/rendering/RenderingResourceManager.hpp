@@ -18,6 +18,10 @@ namespace engine {
 struct RenderingContext;
 
 struct ENGINE_API RenderingResourceManager {
+    struct MaterialInstanceUpdate {
+        MaterialInstanceHandle handle;
+        MaterialParameters parameters;
+    };
     void Initialize(ID3D11Device* device);
     TextureHandle CreateTexture(const TextureDesc& desc,
                                 std::span<const D3D11_SUBRESOURCE_DATA> data = {});
@@ -40,6 +44,9 @@ struct ENGINE_API RenderingResourceManager {
     /// Takes ownership of the shader handles on success; they must not be shared.
     MaterialHandle RegisterMaterial(const ShaderSet& shaders, const MaterialParameters& defaults);
     bool DestroyMaterial(MaterialHandle material);
+    /// Consumes a staged material and updates its inherited instances in one validated commit.
+    bool ReplaceMaterial(MaterialHandle live, MaterialHandle staged,
+                         std::span<const MaterialInstanceUpdate> inherited);
     [[nodiscard]] MaterialInstanceHandle GetDefaultMaterialInstance(MaterialHandle material) const;
     [[nodiscard]] MaterialInstanceHandle CreateMaterialInstance(MaterialHandle material);
     bool SetMaterialInstanceParameters(MaterialInstanceHandle instance, const MaterialParameters& parameters);

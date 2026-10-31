@@ -356,7 +356,16 @@ bool AssetOperations::updateMaterial(const QString& path, const engine::Material
         report(tr("Edit Material"), {fromUtf8(error)});
         return false;
     }
-    return updateFile(tr("Edit Material"), path, text, engine::CatalogAssetKind::Material);
+    if (!updateFile(tr("Edit Material"), path, text, engine::CatalogAssetKind::Material)) return false;
+    const std::string name = assetName(path).toStdString();
+    QStringList errors;
+    for (engine::AssetSystem* assets : {&context_.engine().GetAssets(), &context_.engine().GetSceneAssets()}) {
+        std::string error;
+        if (!assets->Reload(name, engine::AssetKind::Material, error))
+            errors << tr("File saved, but live reload failed: %1").arg(fromUtf8(error));
+    }
+    report(tr("Edit Material"), errors);
+    return errors.isEmpty();
 }
 
 bool AssetOperations::updateMaterialInstance(const QString& path,
@@ -371,7 +380,8 @@ bool AssetOperations::updateMaterialInstance(const QString& path,
     QStringList errors;
     for (engine::AssetSystem* assets : {&context_.engine().GetAssets(), &context_.engine().GetSceneAssets()}) {
         std::string error;
-        if (!assets->RefreshMaterialInstance(name, definition, error)) errors << fromUtf8(error);
+        if (!assets->Reload(name, engine::AssetKind::MaterialInstance, error))
+            errors << tr("File saved, but live reload failed: %1").arg(fromUtf8(error));
     }
     report(tr("Edit Material Instance"), errors);
     return errors.isEmpty();

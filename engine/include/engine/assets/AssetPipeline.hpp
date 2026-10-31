@@ -122,6 +122,9 @@ public:
 
 class MaterialInstanceImporter final : public IAssetImporter {
 public:
+    /// Rebuild inherited parameters without discarding authored overrides or runtime buffers.
+    static MaterialParameters Inherit(const MaterialParameters& defaults, const MaterialParameterOverrides& overrides,
+                                      TextureHandle explicitTexture, BufferHandle customBuffer);
     bool ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPayload& payload,
                  std::string& error) const override;
     bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,

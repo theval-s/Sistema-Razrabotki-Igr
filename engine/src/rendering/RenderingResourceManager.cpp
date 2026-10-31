@@ -217,6 +217,33 @@ bool RenderingResourceManager::SetMaterialInstanceParameters(const MaterialInsta
     return true;
 }
 
+bool RenderingResourceManager::ReplaceMaterial(const MaterialHandle live, const MaterialHandle staged,
+                                                std::span<const MaterialInstanceUpdate> inherited) {
+    auto* current = materials_.TryGet(live);
+    auto* replacement = materials_.TryGet(staged);
+    if (!current || !replacement || live == staged) return false;
+    for (const auto& update : inherited) {
+        const auto* instance = materialInstances_.TryGet(update.handle);
+        if (!instance || instance->material != live ||
+            (update.parameters.albedoTexture && !textures_.Contains(update.parameters.albedoTexture)) ||
+            (update.parameters.customBuffer && (!buffers_.Contains(update.parameters.customBuffer) ||
+                buffers_.Get(update.parameters.customBuffer).type != BufferType::Constant))) return false;
+    }
+    const auto oldShaders = current->shaders;
+    const auto stagedDefault = defaultInstances_.at(staged.id);
+    current->shaders = replacement->shaders;
+    current->defaultParameters = replacement->defaultParameters;
+    materialInstances_.Get(defaultInstances_.at(live.id)).parameters = current->defaultParameters;
+    for (const auto& update : inherited) materialInstances_.Get(update.handle).parameters = update.parameters;
+    materialInstances_.Remove(stagedDefault);
+    defaultInstances_.erase(staged.id);
+    materials_.Remove(staged);
+    shaders_.Remove(oldShaders.shadowPassVS);
+    shaders_.Remove(oldShaders.gBufferPassVS);
+    shaders_.Remove(oldShaders.gBufferPassPS);
+    return true;
+}
+
 bool RenderingResourceManager::UpdateMaterialInstance(const MaterialInstanceHandle handle, const MaterialHandle material,
                                                        const MaterialParameters& parameters) {
     auto* instance = materialInstances_.TryGet(handle);

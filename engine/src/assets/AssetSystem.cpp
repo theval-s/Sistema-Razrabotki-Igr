@@ -169,66 +169,105 @@ entt::resource<MaterialInstanceAsset> AssetSystem::LoadMaterialInstance(const st
     return LoadSync(RequestMaterialInstance(name));
 }
 
-bool AssetSystem::RefreshMaterialInstance(const std::string_view name,
-                                          const MaterialInstanceDefinition& definition, std::string& error) {
-    const auto handle = materialInstances_.Find(NormalizeAssetName(name, AssetKind::MaterialInstance));
-    auto* record = materialInstances_.Get(handle);
-    if (!record || record->state == AssetState::Unloaded || record->state == AssetState::Failed) {
-        error.clear();
-        return true;  // it will be loaded from the updated file when next requested
-    }
-    if (record->state == AssetState::Loading && !LoadSync(handle)) {
-        error = "could not finish loading the previous material instance";
+bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& error) {
+    error.clear();
+    if (kind != AssetKind::Material && kind != AssetKind::MaterialInstance) {
+        error = "reload is not supported for this asset type";
         return false;
     }
-    record = materialInstances_.Get(handle);
-    if (!record || record->state != AssetState::Ready) {
-        error = "material instance is no longer loaded";
-        return false;
-    }
-    auto* rendering = engine_.GetSubsystem<RenderingSubsystem>();
-    if (!rendering) {
-        error = "no rendering subsystem to refresh the material instance";
-        return false;
-    }
-    const auto parent = definition.version == 2 && definition.materialReference
-        ? LoadSync(RequestMaterial(*definition.materialReference)) : LoadMaterial(definition.material);
-    if (!parent) {
-        error = "cannot load the selected base material";
-        return false;
-    }
-    auto& resources = rendering->GetResourceManager();
-    const auto* base = resources.TryGetMaterial(parent->material);
-    if (!base) {
-        error = "selected base material is no longer available";
-        return false;
-    }
-    MaterialParameters parameters = base->defaultParameters;
-    // Custom buffers belong to the runtime caller, not to the authored JSON definition.
-    if (const auto* current = resources.TryGetMaterialInstance(record->value->instance)) {
-        parameters.customBuffer = current->parameters.customBuffer;
-    }
-    const auto& overrides = definition.parameters;
-    if (overrides.specularColor) parameters.parameters.specularColor = *overrides.specularColor;
-    if (overrides.shininess) parameters.parameters.shininess = *overrides.shininess;
-    if (overrides.albedoTexture) {
-        parameters.albedoTexture = {};  // explicit null clears the inherited texture
-        if (!overrides.albedoTexture->empty()) {
-            const auto texture = overrides.albedoReference
-                ? LoadSync(RequestTexture(*overrides.albedoReference)) : LoadTexture(*overrides.albedoTexture);
-            if (!texture) {
-                error = "cannot load the selected albedo texture";
-                return false;
-            }
-            parameters.albedoTexture = texture->texture;
+    const std::string normalized = NormalizeAssetName(name, kind);
+    // A never-requested asset has no live state to replace.
+    if (kind == AssetKind::Material && !materials_.Find(normalized)) return true;
+    if (kind == AssetKind::MaterialInstance && !materialInstances_.Find(normalized)) return true;
+    if (kind == AssetKind::Material) {
+        const auto handle = materials_.Find(normalized);
+        if (materials_.Get(handle)->state == AssetState::Loading && !LoadSync(handle)) {
+            error = "could not finish loading the previous material";
+            return false;
+        }
+    } else {
+        const auto handle = materialInstances_.Find(normalized);
+        if (materialInstances_.Get(handle)->state == AssetState::Loading && !LoadSync(handle)) {
+            error = "could not finish loading the previous material instance";
+            return false;
         }
     }
-    if (!resources.UpdateMaterialInstance(record->value->instance, parent->material, parameters)) {
-        error = "cannot update the loaded material instance";
+    const AssetDesc* desc = kind == AssetKind::Material
+        ? &materials_.Get(materials_.Find(normalized))->desc
+        : &materialInstances_.Get(materialInstances_.Find(normalized))->desc;
+    LoadJob job;
+    job.kind = kind;
+    job.name = normalized;
+    job.id = ToResourceID(normalized);
+    job.desc = desc;
+    if (auto* rendering = engine_.GetSubsystem<RenderingSubsystem>()) job.device = rendering->GetContext().GetDevice();
+    job.cpuOk = ImporterFor(kind).ReadCpu(*desc, job.device, job.payload, job.error);
+    if (job.cpuOk && ResolveDependencies(job, true) == DependencyState::Failed) job.cpuOk = false;
+    if (!job.cpuOk) {
+        error = job.error;
+        spdlog::error("AssetSystem: live reload failed for '{}': {}", normalized, error);
         return false;
     }
-    record->value->definition = definition;
-    error.clear();
+    if (!ReloadReady(job, error)) {
+        spdlog::error("AssetSystem: live reload failed for '{}': {}", normalized, error);
+        return false;
+    }
+    engine_.GetEvents().trigger(AssetLoadedEvent{job.id, job.name, job.kind});
+    return true;
+}
+
+bool AssetSystem::ReloadReady(LoadJob& job, std::string& error) {
+    auto* rendering = engine_.GetSubsystem<RenderingSubsystem>();
+    if (!rendering) { error = "no RenderingSubsystem to upload the result to"; return false; }
+    auto& resources = rendering->GetResourceManager();
+    auto transfer = MakeTransfer(*rendering);
+    transfer.material = job.resolvedMaterial;
+    transfer.materialParameters = job.resolvedParameters;
+    GpuPayload staged;
+    if (!ImporterFor(job.kind).UploadGpu(transfer, job.payload, staged, error)) return false;
+
+    if (job.kind == AssetKind::MaterialInstance) {
+        auto* record = materialInstances_.Get(materialInstances_.Find(job.name));
+        const auto* old = resources.TryGetMaterialInstance(record->value->instance);
+        if (!old) {
+            resources.DestroyMaterialInstance(staged.materialInstance);
+            error = "live material instance is no longer available";
+            return false;
+        }
+        auto parameters = job.resolvedParameters;
+        parameters.customBuffer = old->parameters.customBuffer;
+        const bool committed = resources.UpdateMaterialInstance(record->value->instance, job.resolvedMaterial, parameters);
+        resources.DestroyMaterialInstance(staged.materialInstance);
+        if (!committed) { error = "cannot update the loaded material instance"; return false; }
+        record->value->definition = std::move(job.payload.materialInstance);
+        return true;
+    }
+
+    auto* record = materials_.Get(materials_.Find(job.name));
+    const MaterialHandle live = record->value->material;
+    const auto* replacement = resources.TryGetMaterial(staged.material);
+    std::vector<RenderingResourceManager::MaterialInstanceUpdate> updates;
+    // Scan both registries only when a material changes; each instance retains its own GPU handle.
+    const auto gather = [&](AssetSystem& assets) {
+        assets.materialInstances_.ForEachReadyRecord([&](const auto& instanceRecord) {
+            const auto* instance = resources.TryGetMaterialInstance(instanceRecord.value->instance);
+            if (!instance || instance->material != live) return;
+            const auto& overrides = instanceRecord.value->definition.parameters;
+            const TextureHandle explicitTexture = overrides.albedoTexture && !overrides.albedoTexture->empty()
+                ? instance->parameters.albedoTexture : TextureHandle{};
+            updates.push_back({instanceRecord.value->instance,
+                MaterialInstanceImporter::Inherit(replacement->defaultParameters, overrides, explicitTexture,
+                                                   instance->parameters.customBuffer)});
+        });
+    };
+    gather(engine_.GetAssets());
+    gather(engine_.GetSceneAssets());
+    if (!resources.ReplaceMaterial(live, staged.material, updates)) {
+        resources.DestroyMaterial(staged.material);
+        error = "cannot replace the loaded material or its dependent instances";
+        return false;
+    }
+    record->value->definition = std::move(job.payload.material.definition);
     return true;
 }
 
