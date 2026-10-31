@@ -1,5 +1,49 @@
 # Scripting sessions and instances
 
+## Play current scene
+
+Use **Play Current Scene** on the toolbar (F5), **Pause** to suspend simulation,
+and **Stop** (Shift+F5) to return to editing. Play uses the current in-memory scene,
+including unsaved edits; it does not compile C++ or write the scene to disk.
+Autoloads start before native controllers. Stop restores the original scene,
+selection and unsaved-change status, even after visiting other levels. Authoring
+panels and scene/project file actions are disabled during Play. Closing the editor
+stops the game before offering to save the restored editing scene.
+
+During Play the scene camera drives rendering. When a level has no camera the
+renderer retains the last viewpoint (the editor viewpoint on initial Play), with
+a warning on initial startup. The editor viewpoint is restored on Stop. Escape
+releases viewport focus; right-click no longer captures the editor navigation
+cursor during gameplay.
+
+Lua can request a level change:
+
+```lua
+local ok, message = Scene.OpenLevel("Next")
+-- Also accepts "scenes/Next.scene.json" or "game/scenes/Next.scene.json".
+-- Short names resolve under game/scenes/; names are case-sensitive catalog keys.
+if not ok then Log.warning(message) end
+```
+
+The request validates a catalogued project Scene and its JSON before queueing it.
+It is applied after gameplay callbacks at the end of the next/current Engine tick;
+the calling script must not assume the new scene exists immediately. If multiple
+requests arrive in one tick, the last valid request wins. Invalid requests return
+false plus a diagnostic and keep the current scene. OpenLevel errors are already
+logged by the engine, so displaying the returned message is optional.
+
+Scene changes destroy entity-owned Lua instances before removing old entities,
+then load the new scene. Autoload instances and require cache survive across levels
+until Stop. The future ScriptComponent integration must create/start new entity
+instances after scene population; component attachment and Transform bindings are
+not implemented by Play mode itself. Unknown/unserializable authored components
+cause Play to fail before scene mutation rather than silently dropping them.
+
+Snapshots are authored data, not SaveGame files. In editor mode C++ controller
+definitions remain dormant until Play. Game time starts at zero on each Play;
+real editor time and rendering continue while paused. An ordinary standalone
+Engine keeps its existing lifecycle unless its host opts into SetEditorMode().
+
 ## Editor logging and autoload settings
 
 `Log.info("Hello world")`, `Log.warning(...)`, and `Log.error(...)` are registered

@@ -1,4 +1,6 @@
 #include <editor/autoload_dialog.hpp>
+#include <editor/scene_document.hpp>
+#include <editor/selection.hpp>
 
 #include <QApplication>
 #include <QPushButton>
@@ -92,6 +94,28 @@ TEST(AutoloadLogging, LuaUsesTheSharedDefaultLogger) {
     ASSERT_TRUE(runtime.Initialize(error)) << error;
     ASSERT_TRUE(runtime.ExecuteString("Log.info('Hello world')", "logging-test", error)) << error;
     EXPECT_EQ(std::count(messages.begin(), messages.end(), "[Lua] Hello world"), 1);
+}
+
+TEST(EditorPlayDocument, RuntimeChangesDoNotOverwriteOriginalDirtyStateOrSceneFile) {
+    engine::Engine engine;
+    engine::Project project;
+    editor::Selection selection(engine.GetScene());
+    editor::SceneDocument document(engine, project, selection);
+    document.markClean();
+    document.beginRuntime();
+    engine.GetScene().CreateEntity("Runtime spawn");
+    EXPECT_FALSE(document.isDirty());
+    std::string error;
+    EXPECT_FALSE(document.saveAs("must-not-write.scene.json", error));
+    EXPECT_FALSE(std::filesystem::exists("must-not-write.scene.json"));
+    document.endRuntime();
+    EXPECT_FALSE(document.isDirty());
+    document.markDirty();
+    document.beginRuntime();
+    engine.GetScene().Clear();
+    document.endRuntime();
+    EXPECT_TRUE(document.isDirty());
+    EXPECT_TRUE(document.filePath().empty());
 }
 
 }  // namespace

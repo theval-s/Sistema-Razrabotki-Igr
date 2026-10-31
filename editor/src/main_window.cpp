@@ -15,6 +15,8 @@
 #include <QStatusBar>
 #include <QString>
 #include <QTimer>
+#include <QToolBar>
+#include <QSignalBlocker>
 
 #include <algorithm>
 #include <cstring>
@@ -159,6 +161,7 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
 
 MainWindow::~MainWindow() {
     tick_timer_->stop();
+    stopScene();
     // The viewport outlives the engine (Qt deletes children after our members).
     viewport_->setInput(nullptr);
     // First, so nothing logs into the Log panel once it is gone.
@@ -169,6 +172,7 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    stopScene();
     if (!context_->sceneDocument().maybeSave(this)) {
         relaunch_project_.clear();
         event->ignore();
@@ -209,6 +213,7 @@ void MainWindow::restoreLayout() {
 }
 
 void MainWindow::startEngine() {
+    engine_.SetEditorMode();
     // The editor owns the loop: the engine only advances when we Tick() it.
     engine_.SetSurface(viewport_->surface());
     // The camera's aspect ratio follows the surface (RenderExtractionSubsystem); the renderer keeps
@@ -234,6 +239,7 @@ void MainWindow::startEngine() {
 
     tick_timer_->start(16);
     refreshStatus();
+    refreshPlayActions();
 }
 
 void MainWindow::openStartupScene() {
@@ -277,6 +283,7 @@ void MainWindow::refreshTitle() {
 }
 
 void MainWindow::adoptStartupScene() {
+    if (engine_.IsPlaying()) return;
     const std::filesystem::path& file = context_->sceneDocument().filePath();
     if (file.empty() || context_->sceneDocument().isDirty()) {
         return;
@@ -378,12 +385,69 @@ void MainWindow::buildMenus() {
     });
 
     auto* engine_menu = context_->menu(tr("&Engine"));
-    auto* pause_action = engine_menu->addAction(tr("&Pause simulation"));
-    pause_action->setCheckable(true);
-    connect(pause_action, &QAction::toggled, this, [this](bool paused) { engine_.SetPaused(paused); });
+    play_action_ = engine_menu->addAction(tr("Play Current Scene"), this, &MainWindow::playScene);
+    play_action_->setShortcut(QKeySequence(Qt::Key_F5));
+    pause_action_ = engine_menu->addAction(tr("Pause"));
+    pause_action_->setCheckable(true);
+    stop_action_ = engine_menu->addAction(tr("Stop"), this, &MainWindow::stopScene);
+    stop_action_->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F5));
+    connect(pause_action_, &QAction::toggled, this, [this](bool paused) { engine_.SetPaused(paused); });
+    for (auto* action : {play_action_, pause_action_, stop_action_}) {
+        action->setProperty("playControl", true);
+        context_->toolBar()->addAction(action);
+    }
+    refreshPlayActions();
 
     // Filled by EditorContext::addPanel().
     context_->menu(tr("&View"));
+}
+
+void MainWindow::refreshPlayActions() {
+    if (!play_action_) return;
+    const bool playing = engine_.IsPlaying();
+    play_action_->setEnabled(engine_.IsInitialized() && !playing);
+    stop_action_->setEnabled(playing);
+    pause_action_->setEnabled(playing);
+    const QSignalBlocker blocker(pause_action_);
+    pause_action_->setChecked(playing && engine_.IsPaused());
+}
+
+void MainWindow::playScene() {
+    if (!engine_.IsInitialized() || engine_.IsPlaying()) return;
+    edit_selection_.clear();
+    for (const auto entity : context_->selection().entities())
+        edit_selection_.emplace_back(engine_.GetScene().GetId(entity));
+    context_->sceneDocument().beginRuntime();
+    std::string error;
+    if (!engine_.PlayCurrentScene(project_.ContentDir(), project_.autoloads, error)) {
+        context_->sceneDocument().endRuntime();
+        std::vector<entt::entity> restored;
+        for (const auto& id : edit_selection_) restored.push_back(engine_.GetScene().FindById(id));
+        context_->selection().setEntities(restored);
+        QMessageBox::warning(this, tr("Play"), toQString(std::string_view(error)));
+        return;
+    }
+    context_->selection().clear();
+    camera_->SetNavigationEnabled(false);
+    viewport_->setPlaying(true);
+    viewport_->setFocus();
+    if (engine_.GetScene().GetActiveCamera() == entt::null)
+        spdlog::warn("Play: no game camera; using the frozen editor viewpoint");
+    context_->setAuthoringEnabled(false);
+    refreshPlayActions();
+}
+
+void MainWindow::stopScene() {
+    if (!engine_.IsPlaying()) return;
+    engine_.StopPlay();
+    viewport_->setPlaying(false);
+    camera_->SetNavigationEnabled(true);
+    context_->sceneDocument().endRuntime();
+    std::vector<entt::entity> selection;
+    for (const auto& id : edit_selection_) selection.push_back(engine_.GetScene().FindById(id));
+    context_->selection().setEntities(selection);
+    context_->setAuthoringEnabled(true);
+    refreshPlayActions();
 }
 
 void MainWindow::editAutoloads() {

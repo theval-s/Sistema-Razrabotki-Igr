@@ -146,6 +146,7 @@ namespace engine {
             }
         };
         std::unique_ptr<sol::state> state;
+        LevelLoader levelLoader;
         // Declared after state so all Lua references are released first, including at destruction.
         std::unordered_map<std::uint64_t, std::unique_ptr<Instance>> instances;
         struct Module {
@@ -313,6 +314,13 @@ namespace engine {
             globals["loadfile"] = sol::nil;
 
             RegisterLog(*impl_->state);
+            sol::table scene = impl_->state->create_named_table("Scene");
+            scene.set_function("OpenLevel", [runtime = impl_.get()](const std::string& name) {
+                std::string error;
+                const bool ok = runtime->levelLoader && runtime->levelLoader(name, error);
+                if (!runtime->levelLoader) error = "Scene.OpenLevel is unavailable outside a game session";
+                return std::make_tuple(ok, error);
+            });
 
             // Do not open package: no native searchers, loadlib, or mutable search paths.
             const sol::object loader = sol::make_object(*impl_->state,
@@ -391,6 +399,10 @@ namespace engine {
         impl_->shuttingDown = false;
 
         spdlog::info("Lua Runtime shutdown");
+    }
+
+    void LuaRuntime::SetLevelLoader(LevelLoader loader) {
+        impl_->levelLoader = std::move(loader);
     }
 
     bool LuaRuntime::IsInitialized() const noexcept {

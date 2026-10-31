@@ -18,6 +18,7 @@
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/scene/SceneDocument.hpp>
 #include <engine/scene/GameDocument.hpp>
+#include <engine/scripting/ScriptSubsystem.hpp>
 
 namespace engine {
 
@@ -72,6 +73,15 @@ struct Engine::Impl {
     AssetReference sceneReference;
     bool hasSceneReference = false;
     bool deferControllerActivation = false;
+    bool editorMode = false;
+    bool transitioning = false;
+    bool inCallbacks = false;
+    struct PlaySnapshot {
+        SceneDocument scene, baseline;
+        AssetReference reference;
+        bool hasReference = false;
+    };
+    std::optional<PlaySnapshot> playSnapshot;
     std::optional<std::filesystem::path> queuedScene;
     enki::TaskScheduler scheduler;
     // Kernel state, so it is reachable before any subsystem is registered.
@@ -181,6 +191,7 @@ void Engine::Shutdown() {
         return;
     }
     spdlog::info("Engine shutting down");
+    StopPlay();
 
     impl_->scene.SetControllersActive(false);
     impl_->scene.Clear();
@@ -220,7 +231,7 @@ void Engine::Tick() {
     frame.paused = impl_->paused;
     frame.realDeltaSeconds = realDelta;
     frame.realTimeSeconds += realDelta;
-    frame.deltaSeconds = impl_->paused ? 0.0 : realDelta;
+    frame.deltaSeconds = (impl_->paused || (impl_->editorMode && !IsPlaying())) ? 0.0 : realDelta;
     frame.simulationTimeSeconds += frame.deltaSeconds;
 
     // Deliver events queued during the previous frame (or from outside Tick).
@@ -228,6 +239,7 @@ void Engine::Tick() {
 
     // Copy: a subsystem reacting to the frame must not see it change under it.
     const FrameContext current = frame;
+    impl_->inCallbacks = true;
     // Finished background loads become usable before anything can ask for them this frame.
     impl_->assets->Update(current);
     impl_->sceneAssets->Update(current);
@@ -235,6 +247,7 @@ void Engine::Tick() {
         impl_->subsystems[i].subsystem->Update(current);
     }
     impl_->scene.UpdateControllers(current.deltaSeconds);
+    impl_->inCallbacks = false;
     if (impl_->queuedScene) {
         const auto file = std::move(*impl_->queuedScene);
         impl_->queuedScene.reset();
@@ -318,8 +331,111 @@ Scene& Engine::GetScene() noexcept {
     return impl_->scene;
 }
 
+void Engine::SetEditorMode() {
+    if (IsPlaying()) return;
+    impl_->editorMode = true;
+    impl_->paused = true;
+    impl_->scene.SetControllerInstantiationEnabled(false);
+}
+
+bool Engine::IsPlaying() const noexcept { return impl_->playSnapshot.has_value(); }
+
+bool Engine::PlayCurrentScene(const std::filesystem::path& root,
+                             std::span<const AutoloadDefinition> autoloads, std::string& error) {
+    if (!IsInitialized() || !impl_->editorMode || IsPlaying() || impl_->transitioning || impl_->inCallbacks) {
+        error = "Play requires an initialized editor in Edit mode";
+        return false;
+    }
+    auto* scripting = GetSubsystem<ScriptSubsystem>();
+    if (!scripting) { error = "ScriptSubsystem is not registered"; return false; }
+    Impl::PlaySnapshot snapshot;
+    if (!CaptureSceneDocument(impl_->scene, *impl_->sceneAssets, snapshot.scene, error)) return false;
+    snapshot.baseline = impl_->sceneBaseline;
+    snapshot.reference = impl_->sceneReference;
+    snapshot.hasReference = impl_->hasSceneReference;
+    impl_->playSnapshot = std::move(snapshot);
+    impl_->transitioning = true;
+    impl_->queuedScene.reset();
+    CommitScene(impl_->playSnapshot->scene);
+    scripting->GetRuntime().SetLevelLoader([this](std::string_view name, std::string& failure) {
+        return RequestOpenLevel(name, failure);
+    });
+    if (!scripting->BeginPlay(root, autoloads, error)) {
+        impl_->transitioning = false;
+        StopPlay();
+        return false;
+    }
+    impl_->scene.SetControllerInstantiationEnabled(true);
+    impl_->scene.SetControllersActive(true);
+    impl_->frame.simulationTimeSeconds = 0;
+    impl_->lastTickTime = std::chrono::steady_clock::now();
+    impl_->transitioning = false;
+    SetPaused(false);
+    error.clear();
+    return true;
+}
+
+void Engine::StopPlay() {
+    if (!impl_->playSnapshot || impl_->transitioning || impl_->inCallbacks) return;
+    impl_->transitioning = true;
+    impl_->queuedScene.reset();
+    if (auto* scripting = GetSubsystem<ScriptSubsystem>()) {
+        scripting->EndPlay();
+        scripting->GetRuntime().SetLevelLoader({});
+    }
+    CommitScene(impl_->playSnapshot->scene);
+    impl_->sceneBaseline = impl_->playSnapshot->baseline;
+    impl_->sceneReference = impl_->playSnapshot->reference;
+    impl_->hasSceneReference = impl_->playSnapshot->hasReference;
+    impl_->playSnapshot.reset();
+    impl_->queuedScene.reset();
+    impl_->transitioning = false;
+    impl_->frame.simulationTimeSeconds = 0;
+    SetPaused(true);
+}
+
+bool Engine::RequestOpenLevel(std::string_view name, std::string& error) {
+    auto fail = [&](std::string message) { error = std::move(message); spdlog::error("OpenLevel: {}", error); return false; };
+    if (!IsPlaying()) return fail("OpenLevel requires a play session");
+    std::string logical(name);
+    if (logical.empty() || logical.find('\\') != std::string::npos || logical.find(':') != std::string::npos)
+        return fail("Use a project scene name or game/scenes/name.scene.json");
+    for (const auto& part : FromUtf8(logical))
+        if (part == ".." || part == ".") return fail("Scene traversal is not allowed");
+    if (!logical.starts_with("game/")) logical = (logical.find('/') == std::string::npos ? "game/scenes/" : "game/") + logical;
+    if (!logical.ends_with(".scene.json")) logical += ".scene.json";
+    const auto* entry = impl_->assets->GetCatalog().FindPath(logical);
+    if (!entry || entry->metadata.kind != CatalogAssetKind::Scene) return fail("Scene not found: " + logical);
+    std::error_code ec;
+    const auto* scripting = GetSubsystem<ScriptSubsystem>();
+    if (!scripting || scripting->GetRoot().empty()) return fail("Scripting session is not ready");
+    const auto relative = std::filesystem::relative(entry->source, scripting->GetRoot(), ec);
+    if (ec || relative.empty() || relative.is_absolute()) return fail("Scene is outside project content");
+    for (const auto& part : relative) if (part == "..") return fail("Scene is outside project content");
+    std::string text;
+    SceneDocument checked;
+    if (!ReadTextFile(entry->source, text, error) || !ParseSceneDocument(text, checked, error)) return fail(error);
+    impl_->queuedScene = entry->source;
+    error.clear();
+    return true;
+}
+
+void Engine::CommitScene(const SceneDocument& document) {
+    if (auto* scripting = GetSubsystem<ScriptSubsystem>()) scripting->GetRuntime().ClearEntityInstances();
+    if (auto* rendering = GetSubsystem<RenderingSubsystem>()) rendering->GetWorld().sceneItems.clear();
+    impl_->scene.SetControllerInstantiationEnabled(false);
+    impl_->scene.Clear();
+    impl_->sceneAssets->UnloadAll();
+    PopulateScene(document, *impl_->sceneAssets, impl_->scene);
+    impl_->sceneBaseline = document;
+    if (!impl_->editorMode || (IsPlaying() && !impl_->transitioning)) {
+        impl_->scene.SetControllerInstantiationEnabled(true);
+        if (!impl_->deferControllerActivation) impl_->scene.SetControllersActive(true);
+    }
+}
+
 bool Engine::LoadScene(const std::filesystem::path& file, std::string& error) {
-    if (impl_->scene.IsInControllerCallback()) {
+    if (impl_->scene.IsInControllerCallback() || impl_->inCallbacks) {
         impl_->queuedScene = file;
         error.clear();
         return true;
@@ -338,18 +454,12 @@ bool Engine::LoadScene(const std::filesystem::path& file, std::string& error) {
             diagnostics += entity.name + " (" + entity.id.ToString() + "): " + detail + "\n";
     }
 
-    if (auto* rendering = GetSubsystem<RenderingSubsystem>()) rendering->GetWorld().sceneItems.clear();
-    impl_->scene.SetControllersActive(false);
-    impl_->scene.Clear();
-    impl_->sceneAssets->UnloadAll();
-    PopulateScene(document, *impl_->sceneAssets, impl_->scene);
-    impl_->sceneBaseline = document;
+    CommitScene(document);
     if (const auto* entry = impl_->sceneAssets->GetCatalog().FindPath(AssetPathResolver::ToName(absolute));
         entry && entry->metadata.kind == CatalogAssetKind::Scene) {
         impl_->sceneReference = {entry->metadata.id, entry->path};
         impl_->hasSceneReference = true;
     } else impl_->hasSceneReference = false;
-    if (!impl_->deferControllerActivation) impl_->scene.SetControllersActive(true);
     error = std::move(diagnostics);
     return true;
 }

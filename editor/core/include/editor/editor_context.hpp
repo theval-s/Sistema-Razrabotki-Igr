@@ -69,6 +69,7 @@ public:
     /// Call after restoring a saved layout: docks the panels it didn't know about (e.g. from
     /// a newly added module) at their default area. ADS leaves those hidden and unplaced.
     void placeNewPanels();
+    void setAuthoringEnabled(bool enabled);
 
 private:
     struct Panel {

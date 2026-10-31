@@ -27,6 +27,8 @@ class TaskScheduler;  // include <TaskScheduler.h> to use it
 namespace engine {
 
 class AssetSystem;
+struct SceneDocument;
+struct AutoloadDefinition;
 struct AssetReference;
 
 [[nodiscard]] ENGINE_API std::string_view version() noexcept;
@@ -109,6 +111,13 @@ public:
     /// While paused FrameContext::deltaSeconds is 0, but Update/Render still run.
     ENGINE_API void SetPaused(bool paused);
     [[nodiscard]] ENGINE_API bool IsPaused() const noexcept;
+    ENGINE_API void SetEditorMode();
+    [[nodiscard]] ENGINE_API bool IsPlaying() const noexcept;
+    [[nodiscard]] ENGINE_API bool PlayCurrentScene(const std::filesystem::path& root,
+        std::span<const AutoloadDefinition> autoloads, std::string& error);
+    ENGINE_API void StopPlay();
+    /// Validate now, replace the scene after callbacks at the end of Tick.
+    [[nodiscard]] ENGINE_API bool RequestOpenLevel(std::string_view name, std::string& error);
 
     // --- Output surface --------------------------------------------------------
     ENGINE_API void SetSurface(const NativeSurface& surface);
@@ -159,6 +168,7 @@ public:
 
     
 private:
+    void CommitScene(const SceneDocument& document);
     ENGINE_API Subsystem* RegisterSubsystem(entt::id_type type, std::string_view typeName,
                                             std::unique_ptr<Subsystem> subsystem);
     [[nodiscard]] ENGINE_API Subsystem* FindSubsystem(entt::id_type type, std::string_view typeName) const noexcept;

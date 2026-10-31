@@ -36,7 +36,7 @@ if(SRI_BUILD_EDITOR)
     add_test(NAME autoload_dialog_tests COMMAND autoload_dialog_tests)
 endif()
 
-add_executable(lua_runtime_tests lua_runtime_tests.cpp autoload_session_tests.cpp)
+add_executable(lua_runtime_tests lua_runtime_tests.cpp autoload_session_tests.cpp play_mode_tests.cpp)
 target_link_libraries(lua_runtime_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(lua_runtime_tests)
 set_target_properties(lua_runtime_tests PROPERTIES FOLDER tests)

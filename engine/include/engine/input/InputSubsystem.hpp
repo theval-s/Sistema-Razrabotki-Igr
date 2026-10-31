@@ -96,6 +96,7 @@ public:
     /// Releases every key and button, e.g. when the window loses focus and would
     /// never deliver the release events.
     void OnFocusLost();
+    void Reset() { pending_ = {}; current_ = {}; }
 
     // --- Readers: state of the current frame ------------------------------------
     [[nodiscard]] bool IsDown(Key key) const { return current_.keysDown.test(Index(key)); }

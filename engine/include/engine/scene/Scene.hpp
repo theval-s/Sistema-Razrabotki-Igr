@@ -88,6 +88,7 @@ public:
     [[nodiscard]] std::optional<StateValue> CaptureControllerGameState(entt::entity entity, std::string& error) const;
     [[nodiscard]] bool RestoreControllerGameState(entt::entity entity, const StateValue& state, std::string& error);
     void SetControllersActive(bool active);
+    void SetControllerInstantiationEnabled(bool enabled);
     void UpdateControllers(double deltaSeconds);
     [[nodiscard]] bool IsInControllerCallback() const noexcept { return inControllerCallback_; }
     enum class LifecycleEvent { ComponentRemoving, EntityDestroying };
@@ -236,6 +237,7 @@ private:
     std::unordered_map<std::size_t, LifecycleHandler> lifecycleObservers_;
     std::size_t nextLifecycleObserver_ = 0;
     bool controllersActive_ = false;
+    bool controllerInstantiationEnabled_ = true;
     bool inControllerCallback_ = false;
     std::size_t destructionDepth_ = 0;
     std::optional<EntityUuid> activeCameraId_;

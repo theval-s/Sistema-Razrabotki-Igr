@@ -53,6 +53,17 @@ EditorContext::~EditorContext() {
     }
 }
 
+void EditorContext::setAuthoringEnabled(bool enabled) {
+    for (const auto& panel : panels_)
+        if (panel.dock && panel.dock->objectName() != QStringLiteral("LogDock"))
+            if (auto* widget = panel.dock->widget()) widget->setEnabled(enabled);
+    for (const auto& title : {QObject::tr("&File"), QObject::tr("&Project"), QObject::tr("&Scene")})
+        menu(title)->setEnabled(enabled);
+    if (tool_bar_)
+        for (auto* action : tool_bar_->actions())
+            if (!action->property("playControl").toBool()) action->setEnabled(enabled);
+}
+
 engine::Engine& EditorContext::engine() noexcept {
     return engine_;
 }

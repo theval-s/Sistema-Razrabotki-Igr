@@ -105,6 +105,7 @@ void EditorCameraSubsystem::TakeSceneCamera() {
 }
 
 void EditorCameraSubsystem::Update(const engine::FrameContext& frame) {
+    if (!navigation_enabled_) return;
     if (reset_pending_) {
         reset_pending_ = false;
         TakeSceneCamera();
@@ -141,6 +142,7 @@ void EditorCameraSubsystem::Update(const engine::FrameContext& frame) {
 }
 
 void EditorCameraSubsystem::LateUpdate(const engine::FrameContext&) {
+    if (!navigation_enabled_) return;
     // The aspect ratio was already set from the surface by RenderExtractionSubsystem.
     engine::FPSCamera& camera = rendering_->GetWorld().camera;
     camera.position = position_;

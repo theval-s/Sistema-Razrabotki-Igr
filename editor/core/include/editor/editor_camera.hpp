@@ -35,6 +35,7 @@ public:
     /// viewpoint when the scene has none. Call after a scene was opened.
     void ResetToSceneCamera();
     void SetInputActive(bool active);
+    void SetNavigationEnabled(bool enabled) { navigation_enabled_ = enabled; }
 
     /// The viewpoint, in world space.
     [[nodiscard]] DirectX::SimpleMath::Vector3 GetPosition() const noexcept;
@@ -57,6 +58,7 @@ private:
     /// Units per second.
     float speed_ = 5.0f;
     bool reset_pending_ = true;
+    bool navigation_enabled_ = true;
 };
 
 }  // namespace editor

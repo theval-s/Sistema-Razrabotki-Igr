@@ -108,6 +108,7 @@ QString SceneDocument::displayName() const {
 }
 
 bool SceneDocument::isDirty() const noexcept {
+    if (runtime_) return runtime_dirty_;
     return marked_dirty_ || engine_.GetScene().GetRevision() != clean_revision_;
 }
 
@@ -117,7 +118,16 @@ void SceneDocument::markDirty() {
 }
 
 void SceneDocument::markClean() {
+    if (runtime_) return;
     setClean(file_);
+}
+
+void SceneDocument::beginRuntime() { runtime_dirty_ = isDirty(); runtime_ = true; }
+void SceneDocument::endRuntime() {
+    runtime_ = false;
+    clean_revision_ = engine_.GetScene().GetRevision();
+    marked_dirty_ = runtime_dirty_;
+    checkState();
 }
 
 void SceneDocument::relocate(const std::filesystem::path& file) {
@@ -126,6 +136,7 @@ void SceneDocument::relocate(const std::filesystem::path& file) {
 }
 
 bool SceneDocument::open(const std::filesystem::path& file, std::string& error) {
+    if (runtime_) { error = "Stop Play before opening an editor scene"; return false; }
     const std::filesystem::path target = engine::AssetPathResolver::ToAbsolute(file);
     std::string diagnostics;
     if (!engine_.LoadScene(target, diagnostics)) {
@@ -143,6 +154,7 @@ bool SceneDocument::open(const std::filesystem::path& file, std::string& error) 
 }
 
 bool SceneDocument::create(const std::filesystem::path& file, std::string& error) {
+    if (runtime_) { error = "Stop Play before creating a scene"; return false; }
     const std::filesystem::path target = withSceneSuffix(engine::AssetPathResolver::ToAbsolute(file));
     std::string text;
     if (!engine::SerializeSceneDocument(defaultScene(engine_.GetSceneAssets().GetCatalog()), text, error) ||
@@ -169,6 +181,7 @@ bool SceneDocument::save(std::string& error) {
 }
 
 bool SceneDocument::saveAs(const std::filesystem::path& file, std::string& error) {
+    if (runtime_) { error = "Stop Play before saving the editor scene"; return false; }
     const std::filesystem::path target = withSceneSuffix(engine::AssetPathResolver::ToAbsolute(file));
     if (!engine_.SaveScene(target, error)) {
         return false;

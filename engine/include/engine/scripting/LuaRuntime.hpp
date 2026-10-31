@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <functional>
 #include <string>
 #include <string_view>
 
@@ -51,6 +52,9 @@ namespace engine {
         void Shutdown() noexcept;
 
         [[nodiscard]] bool IsInitialized() const noexcept;
+        using LevelLoader = std::function<bool(std::string_view, std::string&)>;
+        void SetLevelLoader(LevelLoader loader);
+        void ClearEntityInstances() noexcept { DestroyEntityInstances(); }
 
         /// Executes the file anew in a per-instance environment; it must return a table.
         /// Table literals, including nested defaults, are created separately for every instance.

@@ -85,6 +85,15 @@ void ViewportWidget::setCamera(EditorCameraSubsystem* camera) {
     if (camera_ && hasFocus()) camera_->SetInputActive(true);
 }
 
+void ViewportWidget::setPlaying(bool playing) {
+    releaseCursor();
+    last_cursor_.reset();
+    playing_ = playing;
+    if (input_) {
+        input_->Reset();
+    }
+}
+
 QPaintEngine* ViewportWidget::paintEngine() const {
     return nullptr;
 }
@@ -96,6 +105,7 @@ void ViewportWidget::resizeEvent(QResizeEvent* event) {
 }
 
 void ViewportWidget::keyPressEvent(QKeyEvent* event) {
+    if (playing_ && event->key() == Qt::Key_Escape) { releaseCursor(); clearFocus(); event->accept(); return; }
     if (input_ != nullptr && !event->isAutoRepeat()) {
         input_->OnKey(toEngineKey(event->key()), true);
         const auto scan = event->nativeScanCode();
@@ -119,7 +129,7 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
     // Clicking the viewport is how it gets the keyboard, so WASD works right away.
     setFocus(Qt::MouseFocusReason);
     last_cursor_ = event->globalPosition().toPoint();
-    if (event->button() == Qt::RightButton) {
+    if (!playing_ && event->button() == Qt::RightButton) {
         cursor_pinned_ = true;
         setCursor(Qt::BlankCursor);
     }
