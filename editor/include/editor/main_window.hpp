@@ -2,8 +2,12 @@
 
 #include <QMainWindow>
 #include <QString>
+#include <QPointF>
 
 #include <memory>
+#include <vector>
+#include <entt/entity/entity.hpp>
+#include <SimpleMath.h>
 
 #include <engine/engine.hpp>
 #include <engine/project/Project.hpp>
@@ -55,6 +59,7 @@ private:
     void adoptStartupScene();
     void restoreLayout();
     void refreshStatus();
+    void pickViewport(QPointF position, bool toggle);
     void appendLog(const QString& level, const QString& text);
     /// Closes the editor and starts a new one on `project_file`: assets are cached by
     /// name, so another project's game/... names can't be loaded into this engine.
@@ -73,6 +78,11 @@ private:
     QPlainTextEdit* log_view_ = nullptr;
     QLabel* status_label_ = nullptr;
     QTimer* tick_timer_ = nullptr;
+    QPointF last_pick_position_{};
+    DirectX::SimpleMath::Matrix last_pick_view_projection_{};
+    std::vector<entt::entity> last_pick_hits_;
+    entt::entity last_picked_ = entt::null;
+    bool has_last_pick_ = false;
     /// Set by switchProject(): started once the layout is saved.
     QString relaunch_project_;
 };

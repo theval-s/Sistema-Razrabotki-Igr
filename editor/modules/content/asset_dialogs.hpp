@@ -16,6 +16,7 @@ class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QTimer;
 
 namespace editor {
 class AssetPicker;
@@ -104,6 +105,8 @@ private:
     const engine::AssetCatalog& catalog_;
     editor::AssetPicker* material_ = nullptr;
     editor::AssetPicker* albedo_ = nullptr;
+    QTimer* pending_albedo_timer_ = nullptr;
+    QString pending_albedo_;
     QCheckBox* override_specular_ = nullptr;
     ColorButton* specular_ = nullptr;
     QCheckBox* override_shininess_ = nullptr;

@@ -15,6 +15,9 @@
 #include <QString>
 #include <QTimer>
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -34,6 +37,7 @@
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/rendering/RenderExtractionSubsystem.hpp>
+#include <engine/scene/SceneQueries.hpp>
 
 #include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
@@ -42,10 +46,40 @@
 #include <editor/project_dialog.hpp>
 #include <editor/scene_document.hpp>
 #include <editor/viewport_widget.hpp>
+#include <editor/selection.hpp>
 
 namespace editor {
 
 namespace {
+
+// Runs after scene extraction and the editor camera, before RenderingSubsystem::Render.
+class SelectionRenderSubsystem final : public engine::Subsystem {
+public:
+    explicit SelectionRenderSubsystem(const Selection& selection) : selection_(selection) {}
+    std::string_view GetName() const override { return "SelectionRenderSubsystem"; }
+    void LateUpdate(const engine::FrameContext&) override {
+        auto& world = GetEngine().GetSubsystem<engine::RenderingSubsystem>()->GetWorld();
+        world.selectedSceneItems.clear();
+        auto& assets = GetEngine().GetSceneAssets();
+        const auto& scene = GetEngine().GetScene();
+        for (const auto entity : selection_.entities()) {
+            if (const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity)) {
+                const auto mesh = assets.Peek(renderer->mesh);
+                const auto material = assets.Peek(renderer->materialInstance);
+                if (mesh && material) {
+                    const auto override = GetEngine().GetEntityMaterialOverride(entity);
+                    world.selectedSceneItems.push_back({scene.GetWorldMatrix(entity), mesh->mesh,
+                                                        override ? override : material->instance});
+                }
+            }
+        }
+    }
+    void Shutdown() override {
+        GetEngine().GetSubsystem<engine::RenderingSubsystem>()->GetWorld().selectedSceneItems.clear();
+    }
+private:
+    const Selection& selection_;
+};
 
 QString toQString(const std::string_view text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -75,6 +109,7 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     // central widget: always there, never floated, so its HWND (and swap chain) stays put.
     dock_manager_ = new ads::CDockManager(this);
     viewport_ = new ViewportWidget;
+    connect(viewport_, &ViewportWidget::pickRequested, this, &MainWindow::pickViewport);
     auto* viewport_dock = new ads::CDockWidget(dock_manager_, tr("Viewport"));
     viewport_dock->setObjectName(QStringLiteral("Viewport"));
     viewport_dock->setWidget(viewport_, ads::CDockWidget::ForceNoScrollArea);
@@ -87,6 +122,7 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
         adoptStartupScene();
     });
     connect(&document, &SceneDocument::opened, this, [this] {
+        has_last_pick_ = false;
         if (camera_ != nullptr) {
             camera_->ResetToSceneCamera();
         }
@@ -177,6 +213,7 @@ void MainWindow::startEngine() {
     engine_.AddSubsystem<engine::RenderingSubsystem>();
     engine_.AddSubsystem<engine::RenderExtractionSubsystem>();
     camera_ = engine_.AddSubsystem<EditorCameraSubsystem>();
+    engine_.AddSubsystem<SelectionRenderSubsystem>(context_->selection());
 
     // On failure keep the window up so the Log dock shows why, but don't tick.
     if (!engine_.Initialize()) {
@@ -254,6 +291,49 @@ void MainWindow::adoptStartupScene() {
 void MainWindow::tickEngine() {
     engine_.Tick();
     refreshStatus();
+}
+
+void MainWindow::pickViewport(const QPointF position, const bool toggle) {
+    if (!engine_.IsInitialized() || camera_ == nullptr || viewport_->width() <= 0 || viewport_->height() <= 0) return;
+    const auto& camera = engine_.GetSubsystem<engine::RenderingSubsystem>()->GetWorld().camera;
+    const auto view_projection = camera.GetViewMatrix() * camera.GetProjectionMatrix();
+    const auto inverse = view_projection.Invert();
+    const float x = static_cast<float>(2.0 * position.x() / viewport_->width() - 1.0);
+    const float y = static_cast<float>(1.0 - 2.0 * position.y() / viewport_->height());
+    // Reverse-Z: near is 1, far is 0. Qt's local coordinates are normalized against
+    // its logical size, which cancels the physical-pixel scaling of the swap chain.
+    const auto near_point = DirectX::SimpleMath::Vector3::Transform({x, y, 1.0f}, inverse);
+    const auto far_point = DirectX::SimpleMath::Vector3::Transform({x, y, 0.0f}, inverse);
+    std::vector<entt::entity> hits;
+    for (const auto& hit : engine::RaycastAll(engine_.GetScene(), engine_.GetSceneAssets(),
+                                              near_point, far_point - near_point, camera.farPlane)) {
+        // The general scene query also returns authored Bounds without a drawable mesh.
+        const auto* renderer = engine_.GetScene().TryGetComponent<engine::MeshRenderer>(hit.entity);
+        if (renderer && engine_.GetSceneAssets().Peek(renderer->mesh) &&
+            engine_.GetSceneAssets().Peek(renderer->materialInstance)) hits.push_back(hit.entity);
+    }
+
+    auto& selection = context_->selection();
+    const bool same_position = std::abs(position.x() - last_pick_position_.x()) <= 3.0 &&
+                               std::abs(position.y() - last_pick_position_.y()) <= 3.0;
+    const bool same_camera = std::memcmp(&view_projection, &last_pick_view_projection_, sizeof(view_projection)) == 0;
+    const bool cycle = has_last_pick_ && same_position && same_camera && hits == last_pick_hits_ &&
+                       (toggle || selection.primary() == last_picked_);
+    std::size_t index = 0;
+    if (cycle) {
+        const auto previous = std::find(hits.begin(), hits.end(), last_picked_);
+        if (previous != hits.end()) index = (static_cast<std::size_t>(previous - hits.begin()) + 1) % hits.size();
+    }
+    last_pick_position_ = position;
+    last_pick_view_projection_ = view_projection;
+    last_pick_hits_ = hits;
+    last_picked_ = hits.empty() ? entt::null : hits[index];
+    has_last_pick_ = !hits.empty();
+    if (toggle) {
+        if (last_picked_ != entt::null) selection.toggle(last_picked_);
+    } else {
+        selection.select(last_picked_);
+    }
 }
 
 void MainWindow::buildMenus() {

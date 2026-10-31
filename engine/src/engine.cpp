@@ -561,6 +561,10 @@ MaterialInstanceHandle Engine::GetEntityMaterialOverride(entt::entity entity) co
     return impl_->sceneRuntime.Find(entity);
 }
 
+void Engine::ClearEntityMaterialOverride(entt::entity entity) {
+    impl_->sceneRuntime.Release(entity, GetSubsystem<RenderingSubsystem>());
+}
+
 AssetSystem& Engine::GetAssets() noexcept {
     return *impl_->assets;
 }

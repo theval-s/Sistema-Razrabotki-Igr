@@ -129,6 +129,8 @@ struct RenderingResources {
     ConstantBuffer<LightBufferData> lightCBuffer;
 
     TextureHandle shadowTexture;
+    // R = visible selected pixels, G = selected pixels behind scene depth.
+    TextureHandle selectionMask;
     GBuffer gBuffer;
     
     TextureHandle defaultAlbedoTexture_{};

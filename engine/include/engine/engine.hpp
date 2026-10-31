@@ -141,6 +141,8 @@ public:
         AssetHandle<TextureAsset> texture, std::string& error);
     /// Transient clone owned by the active scene runtime; empty if none exists.
     [[nodiscard]] ENGINE_API MaterialInstanceHandle GetEntityMaterialOverride(entt::entity entity) const;
+    /// Discards the transient clone so the entity uses its authored material instance again.
+    ENGINE_API void ClearEntityMaterialOverride(entt::entity entity);
     /// Meshes, textures and shaders by name. Kernel state rather than a subsystem: it
     /// exists from construction, is ready as soon as Initialize() has started the
     /// scheduler, and is pumped once per Tick before the subsystems update.

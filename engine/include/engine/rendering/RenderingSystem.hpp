@@ -9,6 +9,7 @@
 #include <engine/rendering/passes/GBufferPass.hpp>
 #include <engine/rendering/passes/LightPass.hpp>
 #include <engine/rendering/passes/PresentPass.hpp>
+#include <engine/rendering/passes/SelectionMaskPass.hpp>
 #include <engine/rendering/RenderingContext.hpp>
 #include <engine/rendering/passes/RenderPass.hpp>
 #include <engine/rendering/passes/ShadowPass.hpp>

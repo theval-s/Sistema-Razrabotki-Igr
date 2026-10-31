@@ -39,6 +39,8 @@ struct RenderWorld {
     // Scene extraction replaces only this list. Host-owned procedural draw
     // items may coexist without being claimed by the active scene asset scope.
     std::vector<RenderItem> sceneItems;
+    // Supplied by an editor host; empty in games. Uses the same mesh/material as sceneItems.
+    std::vector<RenderItem> selectedSceneItems;
     // Rebuilt from scene light components by RenderExtractionSubsystem.
     std::vector<LightInfo> lights;
     LightInfo directionalLight; //as for now only one dir light allowed

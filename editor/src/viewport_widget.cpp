@@ -110,6 +110,9 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
         cursor_pinned_ = true;
         setCursor(Qt::BlankCursor);
     }
+    if (event->button() == Qt::LeftButton && !cursor_pinned_) {
+        emit pickRequested(event->position(), event->modifiers() & Qt::ControlModifier);
+    }
     if (const auto button = toEngineButton(event->button()); input_ != nullptr && button) {
         input_->OnMouseButton(*button, true);
     }

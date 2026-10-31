@@ -17,6 +17,8 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QToolButton>
+#include <QTimer>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -293,6 +295,24 @@ MaterialInstanceDialog::MaterialInstanceDialog(const engine::AssetCatalog& catal
     form()->addRow(tr("Material"), material_);
     albedo_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Texture, tr("(the material's)"));
     form()->addRow(tr("Albedo texture"), albedo_);
+    pending_albedo_timer_ = new QTimer(this);
+    pending_albedo_timer_->setInterval(100);
+    connect(pending_albedo_timer_, &QTimer::timeout, this, [this] {
+        // The catalog rescan may still be pending while an imported texture is loading.
+        // Keep the dialog open rather than saving an instance without its intended override.
+        const QSignalBlocker blocker(albedo_);
+        albedo_->reload();
+        if (albedo_->selectPath(pending_albedo_)) {
+            pending_albedo_.clear();
+            pending_albedo_timer_->stop();
+            validate();
+        }
+    });
+    connect(albedo_, &QComboBox::currentIndexChanged, this, [this] {
+        pending_albedo_.clear();
+        pending_albedo_timer_->stop();
+        validate();
+    });
 
     // Unchecked parameters come from the material, and show its values.
     override_specular_ = new QCheckBox(tr("Specular colour"));
@@ -315,7 +335,12 @@ MaterialInstanceDialog::MaterialInstanceDialog(const engine::AssetCatalog& catal
 }
 
 void MaterialInstanceDialog::setAlbedo(const QString& path) {
-    albedo_->selectPath(path);
+    albedo_->reload();
+    if (!albedo_->selectPath(path)) {
+        pending_albedo_ = path;
+        pending_albedo_timer_->start();
+    }
+    validate();
 }
 
 engine::MaterialInstanceDefinition MaterialInstanceDialog::definition() const {
@@ -342,7 +367,9 @@ QString MaterialInstanceDialog::problem() const {
     if (QString problem = NewAssetDialog::problem(); !problem.isEmpty()) {
         return problem;
     }
-    return material_->reference() ? QString() : tr("Choose a material.");
+    if (!material_->reference()) return tr("Choose a material.");
+    if (!pending_albedo_.isEmpty()) return tr("Waiting for the new texture to appear in the asset catalog.");
+    return {};
 }
 
 void MaterialInstanceDialog::showInherited() {
