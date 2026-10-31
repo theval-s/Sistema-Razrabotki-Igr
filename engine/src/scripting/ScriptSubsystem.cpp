@@ -205,6 +205,7 @@ void ScriptSubsystem::ReconcileSceneScripts() {
         record.lifetime = std::make_shared<int>(0);
         ScriptInstanceDesc desc{entry->source, record.asset, scene_->GetId(entity).ToString()};
         desc.owner = ScriptEntityHandle{scene_, entity, record.lifetime};
+        desc.properties = component.properties;
         std::string error;
         record.created = runtime_.CreateInstance(desc, record.instance, error);
         if (record.created) start.push_back(record.instance);

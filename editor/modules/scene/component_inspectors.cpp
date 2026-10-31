@@ -11,6 +11,15 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
+#include <QFormLayout>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QCheckBox>
+#include <QDoubleSpinBox>
+#include <QApplication>
+#include <chrono>
+#include <limits>
+#include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
 
 #include <algorithm>
@@ -278,6 +287,99 @@ private:
     const engine::AssetCatalog& catalog_;
 };
 
+class ScriptPropertiesPanel final : public QWidget {
+    editor::EditorContext& context_;
+    entt::entity entity_;
+    QFormLayout* layout_ = new QFormLayout(this);
+    std::string shown_;
+    std::chrono::steady_clock::time_point nextScan_{};
+    engine::AssetUuid cachedId_;
+    std::filesystem::path cachedPath_;
+    std::filesystem::file_time_type cachedTime_{};
+    std::uintmax_t cachedSize_ = 0;
+    engine::ScriptPropertyMap defaults_;
+    std::string diagnostic_;
+    std::size_t schemaRevision_ = 0;
+public:
+    ScriptPropertiesPanel(editor::EditorContext& context, entt::entity entity) : context_(context), entity_(entity) {}
+    void refresh() {
+        auto* component = context_.scene().TryGetComponent<engine::ScriptComponent>(entity_);
+        if (!component) return;
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= nextScan_ || cachedId_ != component->script.id) {
+            nextScan_ = now + std::chrono::milliseconds(500);
+            const auto* entry = context_.engine().GetAssets().GetCatalog().Find(component->script.id, engine::CatalogAssetKind::Script);
+            std::error_code ec;
+            const auto time = entry ? std::filesystem::last_write_time(entry->source, ec) : std::filesystem::file_time_type{};
+            const auto size = entry && !ec ? std::filesystem::file_size(entry->source, ec) : 0;
+            const auto path = entry ? entry->source : std::filesystem::path{};
+            if (cachedId_ != component->script.id || path != cachedPath_ || time != cachedTime_ || size != cachedSize_) {
+                cachedId_ = component->script.id; cachedPath_ = path; cachedTime_ = time; cachedSize_ = size;
+                defaults_.clear(); diagnostic_.clear(); ++schemaRevision_;
+                std::string source;
+                if (!entry) diagnostic_ = component->script.id.IsValid() ? "Script asset is missing" : "Choose a script to edit its properties";
+                else if (engine::ReadTextFile(path, source, diagnostic_))
+                    (void)engine::ReadScriptProperties(source, defaults_, diagnostic_);
+            }
+        }
+        std::string overrides, error;
+        (void)engine::SerializeStateValue(engine::StateValue(component->properties), overrides, error);
+        const auto key = component->script.id.ToString() + std::to_string(schemaRevision_) + overrides;
+        if (key == shown_) return;
+        if (const auto* focus = QApplication::focusWidget(); focus && isAncestorOf(focus) &&
+            (qobject_cast<const QLineEdit*>(focus) || qobject_cast<const QDoubleSpinBox*>(focus))) return;
+        shown_ = key;
+        while (auto* item = layout_->takeAt(0)) {
+            if (auto* widget = item->widget()) { widget->hide(); widget->deleteLater(); }
+            delete item;
+        }
+        if (!diagnostic_.empty()) {
+            auto* message = new QLabel(QString::fromStdString(diagnostic_)); message->setWordWrap(true); layout_->addRow(message);
+        }
+        auto rows = defaults_;
+        for (const auto& [name, value] : component->properties) rows.try_emplace(name, value);
+        for (const auto& [name, defaultValue] : rows) {
+            const auto definition = defaults_.find(name);
+            const auto saved = component->properties.find(name);
+            const bool overridden = saved != component->properties.end();
+            const bool compatible = definition != defaults_.end() &&
+                (!overridden || engine::CompatibleScriptProperty(definition->second, saved->second));
+            const auto& value = overridden && compatible ? saved->second : defaultValue;
+            auto* row = new QWidget;
+            auto* line = new QHBoxLayout(row); line->setContentsMargins(0, 0, 0, 0);
+            const auto commit = [this, name](engine::StateValue changed) {
+                if (auto* current = context_.scene().TryGetComponent<engine::ScriptComponent>(entity_)) {
+                    current->properties[name] = std::move(changed); context_.sceneDocument().markDirty();
+                }
+            };
+            if (!compatible || !diagnostic_.empty()) {
+                line->addWidget(new QLabel(tr("Unused or incompatible override")));
+            } else if (const auto* text = std::get_if<std::string>(&value.value)) {
+                auto* edit = new QLineEdit(QString::fromStdString(*text)); line->addWidget(edit);
+                QObject::connect(edit, &QLineEdit::textEdited, edit, [commit](const QString& changed) {
+                    commit(changed.toStdString());
+                });
+            } else if (const auto* boolean = std::get_if<bool>(&value.value)) {
+                auto* edit = new QCheckBox; edit->setChecked(*boolean); line->addWidget(edit);
+                QObject::connect(edit, &QCheckBox::toggled, edit, [commit](bool changed) { commit(changed); });
+            } else {
+                auto* edit = new QDoubleSpinBox;
+                edit->setRange(std::numeric_limits<double>::lowest(), std::numeric_limits<double>::max()); edit->setDecimals(6);
+                edit->setValue(value.Number()); line->addWidget(edit);
+                QObject::connect(edit, &QDoubleSpinBox::valueChanged, edit, [commit](double changed) { commit(changed); });
+            }
+            auto* reset = new QPushButton(tr("Reset")); reset->setEnabled(overridden); line->addWidget(reset);
+            QObject::connect(reset, &QPushButton::clicked, reset, [this, name] {
+                if (auto* current = context_.scene().TryGetComponent<engine::ScriptComponent>(entity_)) {
+                    current->properties.erase(name); context_.sceneDocument().markDirty();
+                }
+                clearFocus(); setFocus();
+            });
+            layout_->addRow(QString::fromStdString(name) + (overridden ? tr(" (override)") : tr(" (default)")), row);
+        }
+    }
+};
+
 void buildScript(PropertyForm& form, editor::EditorContext& context, entt::entity entity) {
     auto& scene = context.scene();
     auto& catalog = context.engine().GetAssets().GetCatalog();
@@ -285,7 +387,10 @@ void buildScript(PropertyForm& form, editor::EditorContext& context, entt::entit
     auto* picker = new ScriptPicker(catalog);
     QObject::connect(picker, &QComboBox::currentIndexChanged, picker, [&context, &scene, entity, picker] {
         if (auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity)) {
-            component->script = picker->reference().value_or(engine::AssetReference{});
+            const auto chosen = picker->reference().value_or(engine::AssetReference{});
+            if (chosen.id == component->script.id) return;
+            component->script = chosen;
+            component->properties.clear();
             context.sceneDocument().markDirty();
         }
     });
@@ -310,6 +415,8 @@ void buildScript(PropertyForm& form, editor::EditorContext& context, entt::entit
         const auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity);
         open->setEnabled(component && catalog.Find(component->script.id, engine::CatalogAssetKind::Script));
     });
+    auto* properties = new ScriptPropertiesPanel(context, entity);
+    form.addRow(QObject::tr("Properties"), properties, [properties] { properties->refresh(); });
 }
 
 /// Default-constructed, through Scene: it counts as a structural change, so the scene is dirty.

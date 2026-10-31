@@ -455,6 +455,9 @@ namespace engine {
                 return record->Fail(error, message);
             }
             // Execute a fresh chunk for every object: table literals (including nested
+            ScriptPropertyMap defaults;
+            if (!ValidateScriptProperties(desc.properties, error)) return record->Fail(error, error);
+            if (!ReadScriptProperties(source, defaults, error)) return record->Fail(error, error);
             // defaults) and closures belong to this instance, never a shared prototype.
             record->environment = sol::environment(*impl_->state, sol::create, impl_->state->globals());
             record->environment["_G"] = record->environment;
@@ -481,6 +484,23 @@ namespace engine {
                 record->table = result.get<sol::table>();
             } else {
                 return record->Fail(error, "script must return nothing (top-level format) or one instance table");
+            }
+            if (!defaults.empty() || !desc.properties.empty()) {
+                sol::table properties = impl_->state->create_table();
+                for (const auto& [name, value] : defaults) {
+                    const auto override = desc.properties.find(name);
+                    const auto& chosen = override != desc.properties.end() && CompatibleScriptProperty(value, override->second)
+                        ? override->second : value;
+                    if (const auto* text = std::get_if<std::string>(&chosen.value)) properties[name] = *text;
+                    else if (const auto* boolean = std::get_if<bool>(&chosen.value)) properties[name] = *boolean;
+                    else properties[name] = chosen.Number();
+                }
+                for (const auto& [name, value] : desc.properties) {
+                    const auto definition = defaults.find(name);
+                    if (definition == defaults.end() || !CompatibleScriptProperty(definition->second, value))
+                        spdlog::warn("[Lua] {}: unused or incompatible property '{}'", record->Context(), name);
+                }
+                record->table["Properties"] = properties;
             }
             for (const auto& [name, callback] : {
                 std::pair{"OnStart", &record->start}, std::pair{"OnUpdate", &record->update},

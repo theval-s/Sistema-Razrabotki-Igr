@@ -118,6 +118,60 @@ TEST(LuaRuntime, InitializesAndShutsDownWithoutRendering) {
     EXPECT_FALSE(runtime.IsInitialized());
 }
 
+TEST(ScriptProperties, ReadsLiteralDefaultsWithoutExecutingGameplayAndRejectsComputedValues) {
+    engine::ScriptPropertyMap values;
+    std::string error;
+    ASSERT_TRUE(engine::ReadScriptProperties(R"(
+        error('must never execute in the inspector')
+        -- Properties = { fake = 1 }
+        local ignored = [==[ Properties = { fake = 2 } ]==]
+        Properties = { horseName = "Star\nRunner", speed = -2.5e1, racing = true, note = [[hello]], }
+        function OnStart() Properties.speed = 7 end
+    )", values, error)) << error;
+    EXPECT_EQ(values.size(), 4u);
+    EXPECT_EQ(values.at("horseName").String(), "Star\nRunner");
+    EXPECT_EQ(values.at("speed").Number(), -25);
+    EXPECT_TRUE(values.at("racing").Boolean());
+    for (const auto* source : {"Properties = { speed = getSpeed() }", "Properties = { speed = 1 + 2 }",
+        "Properties = { data = {} }", "Properties = { x = 1, x = 2 }", "local Properties = {}",
+        "Properties = { x = 1e999 }"}) EXPECT_FALSE(engine::ReadScriptProperties(source, values, error)) << source;
+    ASSERT_TRUE(engine::ReadScriptProperties("function OnStart() local Properties = {} end", values, error));
+    EXPECT_TRUE(values.empty());
+}
+
+TEST(ScriptProperties, AppliesIndependentOverridesBeforeStartAndPreservesPrivateRuntimeChanges) {
+    ScriptFixture fixture;
+    auto first = fixture.Write(R"(
+        Properties = { horseName = "Default", speed = 2, racing = true }
+        function OnStart()
+            Log.info(Properties.horseName)
+            assert(Properties.speed == 2 and Properties.racing == true)
+        end
+        function OnUpdate(dt) Properties.horseName = 'changed' end
+    )");
+    first.properties = {{"horseName", "First"}, {"speed", "wrong type"}, {"removed", true}};
+    auto second = first;
+    second.properties = {{"horseName", "Second"}};
+    engine::LuaRuntime runtime;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(fixture.root, error));
+    LogCapture logs;
+    engine::InstanceId a, b;
+    ASSERT_TRUE(runtime.CreateInstance(first, a, error)) << error;
+    ASSERT_TRUE(runtime.CreateInstance(second, b, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(a, error)) << error;
+    ASSERT_TRUE(runtime.UpdateInstance(a, 0.1, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(b, error)) << error;
+    EXPECT_NE(std::find(logs.messages.begin(), logs.messages.end(), "[Lua] First"), logs.messages.end());
+    EXPECT_NE(std::find(logs.messages.begin(), logs.messages.end(), "[Lua] Second"), logs.messages.end());
+    EXPECT_EQ(first.properties.at("horseName").String(), "First");
+    first.properties.erase("horseName"); // The Inspector's Reset operation.
+    engine::InstanceId reset;
+    ASSERT_TRUE(runtime.CreateInstance(first, reset, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(reset, error)) << error;
+    EXPECT_NE(std::find(logs.messages.begin(), logs.messages.end(), "[Lua] Default"), logs.messages.end());
+}
+
 TEST(LuaTopLevel, InstancesHavePrivateFieldsClosuresAndExactCallbackArguments) {
     ScriptFixture fixture;
     const auto desc = fixture.Write(R"(

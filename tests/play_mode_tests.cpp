@@ -276,4 +276,48 @@ TEST(ScriptComponents, BrokenAndMissingAttachmentsDoNotStopHealthyObjects) {
     EXPECT_FLOAT_EQ(scene.GetTransform(scene.FindFirstByName("Broken")).position.x, -1);
     f.host.StopPlay();
 }
+
+TEST(ScriptComponents, PropertyOverridesSurvivePlayStopAndSceneSwitch) {
+    PlayFixture f;
+    std::string error;
+    const auto file = f.root / "Horse.lua";
+    const engine::AssetMetadata meta{engine::NewUuid(), engine::CatalogAssetKind::Script};
+    ASSERT_TRUE(engine::CreateNewFile(file, R"(
+        Properties = { horseName = "Horse", speed = 2 }
+        function OnStart() Log.info(Properties.horseName) end
+        function OnUpdate(dt)
+            local p = entity:GetPosition()
+            p.x = p.x + Properties.speed * dt
+            entity:SetPosition(p)
+            Properties.horseName = 'runtime only'
+        end
+    )", error));
+    ASSERT_TRUE(engine::WriteAssetMetadata(file, meta, error));
+    engine::SceneDocument next;
+    engine::SceneEntityDefinition horse; horse.id = engine::NewUuid(); horse.name = "NextHorse";
+    horse.script = engine::ScriptComponent{{meta.id, "game/Horse.lua"}, true, {{"speed", 7}, {"horseName", "Next"}}};
+    next.entities.push_back(horse);
+    std::string text;
+    ASSERT_TRUE(engine::SerializeSceneDocument(next, text, error));
+    const auto level = f.root / "scenes/Next.scene.json";
+    ASSERT_TRUE(engine::CreateNewFile(level, text, error));
+    ASSERT_TRUE(engine::WriteAssetMetadata(level, {engine::NewUuid(), engine::CatalogAssetKind::Scene}, error));
+    ASSERT_TRUE(f.host.Initialize());
+    auto& scene = f.host.GetScene();
+    scene.AddComponent<engine::ScriptComponent>(scene.CreateEntity("Original"),
+        engine::ScriptComponent{{meta.id, "game/Horse.lua"}, true, {{"speed", 3}, {"horseName", "Original name"}}});
+    ASSERT_TRUE(f.host.PlayCurrentScene(f.root, {}, error)) << error;
+    engine::FrameContext frame; frame.deltaSeconds = 1;
+    f.scripting->Update(frame);
+    EXPECT_FLOAT_EQ(scene.GetTransform(scene.FindFirstByName("Original")).position.x, 3);
+    ASSERT_TRUE(f.host.RequestOpenLevel("Next", error));
+    f.host.Tick();
+    f.scripting->Update(frame);
+    EXPECT_FLOAT_EQ(scene.GetTransform(scene.FindFirstByName("NextHorse")).position.x, 7);
+    f.host.StopPlay();
+    const auto* restored = scene.TryGetComponent<engine::ScriptComponent>(scene.FindFirstByName("Original"));
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(restored->properties.at("horseName").String(), "Original name");
+    EXPECT_EQ(restored->properties.at("speed").Number(), 3);
+}
 } // namespace

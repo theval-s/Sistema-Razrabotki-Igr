@@ -51,6 +51,11 @@ function Entity:SetPosition(position) end
 ---@type Entity
 entity = nil
 
+---Per-instance exposed settings. Declare literal defaults in your script's Properties table.
+---The Inspector applies saved overrides before OnStart. Use values inside callbacks.
+---@type table<string, string|number|boolean>
+Properties = nil
+
 Scene = {}
 ---Queues a scene change after gameplay callbacks. Autoloads survive the change.
 ---@param name string Scene name or project scene path.

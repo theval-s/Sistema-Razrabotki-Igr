@@ -91,7 +91,8 @@ TEST(SceneDocument, ScriptSlotsRoundTripEmptyDisabledAndMissingAssets) {
     scene.AddComponent<engine::ScriptComponent>(empty);
     const auto assigned = scene.CreateEntity("Missing script");
     const engine::AssetReference reference{engine::NewUuid(), "game/deleted.lua"};
-    scene.AddComponent<engine::ScriptComponent>(assigned, engine::ScriptComponent{reference, false});
+    scene.AddComponent<engine::ScriptComponent>(assigned, engine::ScriptComponent{reference, false,
+        {{"horseName", "Runner"}, {"speed", 3.5}, {"racing", true}}});
     engine::SceneDocument captured, parsed;
     std::string text, error;
     ASSERT_TRUE(engine::CaptureSceneDocument(scene, host.GetSceneAssets(), captured, error)) << error;
@@ -107,6 +108,9 @@ TEST(SceneDocument, ScriptSlotsRoundTripEmptyDisabledAndMissingAssets) {
     EXPECT_EQ(missing->script.id, reference.id);
     EXPECT_EQ(missing->script.path, reference.path);
     EXPECT_FALSE(missing->enabled);
+    EXPECT_EQ(missing->properties.at("horseName").String(), "Runner");
+    EXPECT_EQ(missing->properties.at("speed").Number(), 3.5);
+    EXPECT_TRUE(missing->properties.at("racing").Boolean());
     const auto enabled = text.find("\"enabled\": false");
     ASSERT_NE(enabled, std::string::npos);
     text.replace(enabled, std::string("\"enabled\": false").size(), "\"enabled\": 1");

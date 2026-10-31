@@ -53,8 +53,12 @@ library path into `.luarc.json`. **Project → Refresh Lua Definitions** regener
 them on demand. These are tooling files outside `content/`; never require them.
 Generated files are replaced on refresh, so keep your own annotations elsewhere.
 
-The engine definitions describe only implemented bindings: Log, Vector3, Entity
-and Scene.OpenLevel. Existing LuaLS settings and library paths are retained. A
+The engine definitions describe only implemented bindings: Log, Vector3, Entity,
+Scene.OpenLevel and the per-instance Properties table. LuaLS recognizes Properties
+and can infer field suggestions from your literal defaults. New scripts include a
+commented example. After updating the editor, use Refresh Lua Definitions to update
+existing projects; existing script source files are left unchanged.
+Existing LuaLS settings and library paths are retained. A
 malformed `.luarc.json` is left intact and reported; if you use `.luarc.jsonc`, add
 `.sri/lua` to `workspace.library` yourself (the editor leaves comments untouched).
 The automatic setup assumes VS Code opens the project root, not just `content/`
@@ -151,6 +155,48 @@ only that instance while the session and other scripts continue.
 
 ### GameObject scripts
 
+#### Exposed properties
+
+Declare one top-level literal table (without `local`) to expose fields:
+
+```lua
+Properties = {
+    horseName = "Horse",
+    speed = 2,
+    canRace = true
+}
+
+function OnStart()
+    Log.info(Properties.horseName)
+end
+
+function OnUpdate(dt)
+    if not Properties.canRace then return end
+    local position = entity:GetPosition()
+    position.x = position.x + Properties.speed * dt
+    entity:SetPosition(position)
+end
+```
+
+Select each horse and edit its Script → Properties fields. The scene stores only
+that object's overrides. Reset removes an override and uses the current script
+default. Strings, finite numbers and booleans are supported; fields use identifier
+names. Nested tables, computed defaults and returned-table property declarations
+are not exposed in this first version. Ordinary legacy scripts remain supported.
+
+Defaults are read without running gameplay code in Edit mode. Saving the Lua file
+refreshes the displayed schema within about half a second when the editor is active.
+Text/number edits in progress are left alone until focus leaves the field.
+Unknown or type-incompatible overrides remain saved and are shown for cleanup;
+the runtime ignores them with a warning and uses the current default when present.
+Selecting a different script clears overrides from the old script.
+
+Every runtime instance receives a fresh Properties table. Overrides apply after
+the file executes and before OnStart: read configurable values inside callbacks,
+not into top-level locals. Changes made during Play are runtime-only; Stop restores
+authored values. Editing is unavailable during Play, and source changes require a
+new Play session. This does not implement hot reload or autoload property overrides.
+
 Select a GameObject, choose **Add Component → Script**, and choose an imported Lua
 asset in the Script picker (or drag one from the Content Browser onto the picker).
 Each object has at most one Script component. Use **Open script** to open the file
@@ -186,8 +232,8 @@ only that attachment and is logged once; other objects continue. Removing an
 attachment destroys its instance while the owner still exists. Native changes to
 the asset/enabled flag are reconciled before the next scripting update; re-enabling
 creates a fresh instance. OnDestroy follows the existing fault policy below.
-Stop restores the original attachments and transforms. Script Properties in the
-Inspector and general ECS get/add/has bindings remain separate work.
+Stop restores the original attachments, properties and transforms. General ECS
+get/add/has bindings remain separate work.
 
 `ScriptSubsystem::Initialize()` prepares the subsystem without creating a Lua state.
 After initialization, `BeginPlay(contentRoot, error)` starts a fresh Lua runtime;
@@ -242,8 +288,8 @@ Fields, nested tables, local variables and function closures are private to each
 instance. Names such as Log, Scene and require are inherited from the engine API.
 Top-level callbacks receive no self argument; OnUpdate receives only dt in seconds.
 Declare lifecycle functions without `local` so the engine can find them. A top-level
-Properties table can describe future Inspector fields; Inspector integration is
-still a separate feature. Callback lookup uses only the instance's own fields, so
+Properties table declares exposed Inspector fields as described above.
+Callback lookup uses only the instance's own fields, so
 missing functions never fall back to another script's or the runtime's callbacks.
 
 For backward compatibility, scripts may still return one table:

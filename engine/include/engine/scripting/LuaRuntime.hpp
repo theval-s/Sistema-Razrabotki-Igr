@@ -3,6 +3,7 @@
 
 #include <engine/engine_export.hpp>
 #include <engine/assets/AssetCatalog.hpp>
+#include <engine/scripting/ScriptProperties.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -44,6 +45,7 @@ namespace engine {
         // Empty for entity-owned instances. Autoloads set this and leave entityId empty.
         std::string autoloadName{};
         std::optional<ScriptEntityHandle> owner{};
+        ScriptPropertyMap properties;
     };
 
     class ENGINE_API LuaRuntime final {

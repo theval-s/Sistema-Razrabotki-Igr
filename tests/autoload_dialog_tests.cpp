@@ -97,6 +97,8 @@ TEST(LuaDefinitions, GeneratesApiAndNamesAndMergesSettingsWithoutLosingUserOptio
     ASSERT_TRUE(engine::ReadTextFile(project.Root() / ".sri/lua/engine.d.lua", definitions, error));
     EXPECT_NE(definitions.find("function Log.info(message)"), std::string::npos);
     EXPECT_NE(definitions.find("function Entity:SetPosition(position)"), std::string::npos);
+    EXPECT_NE(definitions.find("Properties = nil"), std::string::npos);
+    EXPECT_NE(definitions.find("---@type table<string, string|number|boolean>"), std::string::npos);
     ASSERT_TRUE(engine::ReadTextFile(project.Root() / ".luarc.json", config, error));
     auto object = QJsonDocument::fromJson(QByteArray::fromStdString(config)).object();
     const auto libraries = object.value("workspace.library").toArray();

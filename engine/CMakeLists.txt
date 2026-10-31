@@ -53,11 +53,13 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/window.hpp
     include/engine/scripting/LuaRuntime.hpp
     include/engine/scripting/ScriptComponent.hpp
+    include/engine/scripting/ScriptProperties.hpp
     include/engine/scripting/AutoloadDefinition.hpp
     include/engine/scripting/ScriptSubsystem.hpp
 )
 
 set(ENGINE_SOURCES
+    src/scripting/ScriptProperties.cpp
     src/core/HandleMap.cpp
     src/core/ResourceID.cpp
     src/core/Uuid.cpp
