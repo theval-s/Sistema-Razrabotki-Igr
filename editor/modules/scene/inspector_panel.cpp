@@ -120,7 +120,7 @@ void InspectorPanel::refresh() {
     if (!name_->hasFocus()) {
         name_->setText(QString::fromStdString(scene.GetName(entity_)));
     }
-    const std::string_view id = scene.GetId(entity_);
+    const std::string id = scene.GetId(entity_).ToString();
     id_->setText(QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size())));
 
     // Components come and go without the entity changing: rebuild when they do.
