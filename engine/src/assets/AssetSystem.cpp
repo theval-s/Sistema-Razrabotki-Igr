@@ -169,6 +169,69 @@ entt::resource<MaterialInstanceAsset> AssetSystem::LoadMaterialInstance(const st
     return LoadSync(RequestMaterialInstance(name));
 }
 
+bool AssetSystem::RefreshMaterialInstance(const std::string_view name,
+                                          const MaterialInstanceDefinition& definition, std::string& error) {
+    const auto handle = materialInstances_.Find(NormalizeAssetName(name, AssetKind::MaterialInstance));
+    auto* record = materialInstances_.Get(handle);
+    if (!record || record->state == AssetState::Unloaded || record->state == AssetState::Failed) {
+        error.clear();
+        return true;  // it will be loaded from the updated file when next requested
+    }
+    if (record->state == AssetState::Loading && !LoadSync(handle)) {
+        error = "could not finish loading the previous material instance";
+        return false;
+    }
+    record = materialInstances_.Get(handle);
+    if (!record || record->state != AssetState::Ready) {
+        error = "material instance is no longer loaded";
+        return false;
+    }
+    auto* rendering = engine_.GetSubsystem<RenderingSubsystem>();
+    if (!rendering) {
+        error = "no rendering subsystem to refresh the material instance";
+        return false;
+    }
+    const auto parent = definition.version == 2 && definition.materialReference
+        ? LoadSync(RequestMaterial(*definition.materialReference)) : LoadMaterial(definition.material);
+    if (!parent) {
+        error = "cannot load the selected base material";
+        return false;
+    }
+    auto& resources = rendering->GetResourceManager();
+    const auto* base = resources.TryGetMaterial(parent->material);
+    if (!base) {
+        error = "selected base material is no longer available";
+        return false;
+    }
+    MaterialParameters parameters = base->defaultParameters;
+    // Custom buffers belong to the runtime caller, not to the authored JSON definition.
+    if (const auto* current = resources.TryGetMaterialInstance(record->value->instance)) {
+        parameters.customBuffer = current->parameters.customBuffer;
+    }
+    const auto& overrides = definition.parameters;
+    if (overrides.specularColor) parameters.parameters.specularColor = *overrides.specularColor;
+    if (overrides.shininess) parameters.parameters.shininess = *overrides.shininess;
+    if (overrides.albedoTexture) {
+        parameters.albedoTexture = {};  // explicit null clears the inherited texture
+        if (!overrides.albedoTexture->empty()) {
+            const auto texture = overrides.albedoReference
+                ? LoadSync(RequestTexture(*overrides.albedoReference)) : LoadTexture(*overrides.albedoTexture);
+            if (!texture) {
+                error = "cannot load the selected albedo texture";
+                return false;
+            }
+            parameters.albedoTexture = texture->texture;
+        }
+    }
+    if (!resources.UpdateMaterialInstance(record->value->instance, parent->material, parameters)) {
+        error = "cannot update the loaded material instance";
+        return false;
+    }
+    record->value->definition = definition;
+    error.clear();
+    return true;
+}
+
 std::string AssetSystem::NormalizeAssetName(std::string_view name, AssetKind kind) {
     auto normalized = NormalizeName(name);
     if (!normalized.empty() && (kind == AssetKind::Material || kind == AssetKind::MaterialInstance) &&

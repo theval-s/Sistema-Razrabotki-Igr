@@ -3,12 +3,15 @@
 #include <QDialog>
 #include <QString>
 
+#include <optional>
+
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/MaterialDefinition.hpp>
 
 #include "asset_operations.hpp"
 
 class QCheckBox;
+class QComboBox;
 class QDialogButtonBox;
 class QDoubleSpinBox;
 class QFormLayout;
@@ -38,7 +41,7 @@ class NewAssetDialog : public QDialog {
 public:
     /// The asset goes to `folder`/<name>`suffix`. Folder because I said so :P
     NewAssetDialog(const QString& title, const QString& folder, const QString& suffix, const QString& name,
-                   QWidget* parent);
+                   QWidget* parent, bool editing = false);
 
     [[nodiscard]] QString name() const;
     /// Where the new asset goes.
@@ -50,11 +53,13 @@ protected:
     [[nodiscard]] virtual QString problem() const;
     /// Checks problem() again. Subclasses call it once their fields exist and whenever one changes.
     void validate();
+    [[nodiscard]] bool editing() const { return editing_; }
     void setVisible(bool visible) override;
 
 private:
     QString folder_;
     QString suffix_;
+    bool editing_ = false;
     QLineEdit* name_ = nullptr;
     QFormLayout* form_ = nullptr;
     QLabel* problem_ = nullptr;
@@ -89,7 +94,9 @@ class MaterialInstanceDialog : public NewAssetDialog {
 
 public:
     MaterialInstanceDialog(const engine::AssetCatalog& catalog, const QString& folder, const QString& name,
-                           QWidget* parent);
+                           QWidget* parent, bool editing = false);
+
+    void load(const engine::MaterialInstanceDefinition& definition);
 
     /// Preselects the albedo texture by catalog path.
     void setAlbedo(const QString& path);
@@ -105,12 +112,16 @@ private:
     const engine::AssetCatalog& catalog_;
     editor::AssetPicker* material_ = nullptr;
     editor::AssetPicker* albedo_ = nullptr;
+    QComboBox* albedo_mode_ = nullptr;
     QTimer* pending_albedo_timer_ = nullptr;
     QString pending_albedo_;
     QCheckBox* override_specular_ = nullptr;
     ColorButton* specular_ = nullptr;
     QCheckBox* override_shininess_ = nullptr;
     QDoubleSpinBox* shininess_ = nullptr;
+    int version_ = 2;
+    std::optional<float> loaded_shininess_;
+    double displayed_shininess_ = 0;
 };
 
 /// A base material: an optional shader with the hooks it implements, and default parameters.
@@ -119,7 +130,9 @@ class MaterialDialog : public NewAssetDialog {
 
 public:
     MaterialDialog(const engine::AssetCatalog& catalog, const QString& folder, const QString& name,
-                   QWidget* parent);
+                    QWidget* parent, bool editing = false);
+
+    void load(const engine::MaterialDefinition& definition);
 
     [[nodiscard]] engine::MaterialDefinition definition() const;
 
@@ -132,8 +145,14 @@ private:
     QCheckBox* gbuffer_ps_ = nullptr;
     QCheckBox* shadow_vs_ = nullptr;
     editor::AssetPicker* albedo_ = nullptr;
+    QComboBox* albedo_mode_ = nullptr;
+    QCheckBox* override_specular_ = nullptr;
     ColorButton* specular_ = nullptr;
+    QCheckBox* override_shininess_ = nullptr;
     QDoubleSpinBox* shininess_ = nullptr;
+    int version_ = 2;
+    std::optional<float> loaded_shininess_;
+    double displayed_shininess_ = 0;
 };
 
 }  // namespace content

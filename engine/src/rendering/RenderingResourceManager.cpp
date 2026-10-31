@@ -217,6 +217,22 @@ bool RenderingResourceManager::SetMaterialInstanceParameters(const MaterialInsta
     return true;
 }
 
+bool RenderingResourceManager::UpdateMaterialInstance(const MaterialInstanceHandle handle, const MaterialHandle material,
+                                                       const MaterialParameters& parameters) {
+    auto* instance = materialInstances_.TryGet(handle);
+    if (!instance || !materials_.Contains(material) || defaultInstances_.at(instance->material.id) == handle ||
+        (parameters.albedoTexture && !textures_.Contains(parameters.albedoTexture)) ||
+        (parameters.customBuffer && (!buffers_.Contains(parameters.customBuffer) ||
+            buffers_.Get(parameters.customBuffer).type != BufferType::Constant))) return false;
+    if (instance->material != material) {
+        --materials_.Get(instance->material).instanceCount;
+        ++materials_.Get(material).instanceCount;
+        instance->material = material;
+    }
+    instance->parameters = parameters;
+    return true;
+}
+
 bool RenderingResourceManager::DestroyMaterialInstance(const MaterialInstanceHandle handle) {
     auto* instance = materialInstances_.TryGet(handle);
     if (!instance || defaultInstances_.at(instance->material.id) == handle) return false;

@@ -43,6 +43,9 @@ struct ENGINE_API RenderingResourceManager {
     [[nodiscard]] MaterialInstanceHandle GetDefaultMaterialInstance(MaterialHandle material) const;
     [[nodiscard]] MaterialInstanceHandle CreateMaterialInstance(MaterialHandle material);
     bool SetMaterialInstanceParameters(MaterialInstanceHandle instance, const MaterialParameters& parameters);
+    /// Changes an authored instance without replacing its handle (scene renderers retain that handle).
+    bool UpdateMaterialInstance(MaterialInstanceHandle instance, MaterialHandle material,
+                                const MaterialParameters& parameters);
     bool DestroyMaterialInstance(MaterialInstanceHandle instance);
     [[nodiscard]] const Material* TryGetMaterial(MaterialHandle material) const;
     [[nodiscard]] const MaterialInstance* TryGetMaterialInstance(MaterialInstanceHandle instance) const;

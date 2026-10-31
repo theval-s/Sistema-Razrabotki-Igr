@@ -66,6 +66,10 @@ public:
     /// JSON names are exe-relative. Extensionless names gain .material.json / .material-instance.json.
     entt::resource<MaterialAsset> LoadMaterial(std::string_view name);
     entt::resource<MaterialInstanceAsset> LoadMaterialInstance(std::string_view name);
+    /// Updates an already loaded authored instance in place; unloaded instances read the saved file on demand.
+    /// Does not change the asset's handle or any scene renderer referencing it.
+    bool RefreshMaterialInstance(std::string_view name, const MaterialInstanceDefinition& definition,
+                                 std::string& error);
     /// Names use game/... or engine/...; each stage/entry point/define set is a separate asset.
     entt::resource<ShaderAsset> LoadShader(std::string_view name, ShaderType stage,
                                           ShaderCompileOptions options = {});

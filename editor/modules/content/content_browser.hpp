@@ -71,8 +71,9 @@ private:
     void navigate(std::size_t root, const QString& folder);
     /// Goes up from the shown folder until one exists, after it was deleted or moved.
     void leaveMissingFolder();
-    /// Double-click / Enter: enters folders, opens scenes, hands anything else to the system.
+    /// Double-click / Enter: enters folders, opens scenes, edits materials, opens other files.
     void activate(const QModelIndex& index);
+    void editMaterial(const QString& path, engine::CatalogAssetKind kind);
     void rebuildBreadcrumb();
     void applyViewMode();
     void applyFilters();

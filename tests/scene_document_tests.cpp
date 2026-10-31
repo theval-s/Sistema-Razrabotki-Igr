@@ -237,15 +237,15 @@ TEST(SceneDocument, LocalLightsRoundTripAndValidateSpotAngles) {
     ASSERT_TRUE(engine::ParseSceneDocument(json, decoded, error)) << error;
     engine::Scene restored;
     engine::PopulateScene(decoded, host.GetSceneAssets(), restored);
-    const auto* restoredPoint = restored.TryGetComponent<engine::PointLight>(restored.FindById(scene.GetId(point)));
-    const auto* restoredSpot = restored.TryGetComponent<engine::SpotLight>(restored.FindById(scene.GetId(spot)));
+    const auto* restoredPoint = restored.TryGetComponent<engine::PointLight>(restored.FindById(scene.GetId(point).ToString()));
+    const auto* restoredSpot = restored.TryGetComponent<engine::SpotLight>(restored.FindById(scene.GetId(spot).ToString()));
     ASSERT_NE(restoredPoint, nullptr);
     ASSERT_NE(restoredSpot, nullptr);
     EXPECT_FLOAT_EQ(restoredPoint->range, 4.0f);
     EXPECT_FLOAT_EQ(restoredPoint->color.y, 0.4f);
     EXPECT_FLOAT_EQ(restoredSpot->innerHalfAngle, 0.2f);
     EXPECT_FLOAT_EQ(restoredSpot->outerHalfAngle, 0.5f);
-    EXPECT_FLOAT_EQ(restored.GetTransform(restored.FindById(scene.GetId(spot))).position.y, 2.0f);
+    EXPECT_FLOAT_EQ(restored.GetTransform(restored.FindById(scene.GetId(spot).ToString())).position.y, 2.0f);
 
     decoded.entities[1].spotLight->innerHalfAngle = 0.5f;
     EXPECT_FALSE(engine::SerializeSceneDocument(decoded, json, error));
