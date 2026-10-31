@@ -210,7 +210,7 @@ private:
     /// Deletes the selected entities, and with them their children.
     void deleteSelected() {
         engine::Scene& scene = context_.scene();
-        // A copy: the selection drops entities as they go.
+        // A copy: the selection can change under a span while entities go.
         const std::vector<entt::entity> entities(context_.selection().entities().begin(),
                                                  context_.selection().entities().end());
         for (const entt::entity entity : entities) {
