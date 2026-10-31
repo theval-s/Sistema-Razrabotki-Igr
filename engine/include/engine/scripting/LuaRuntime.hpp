@@ -56,9 +56,11 @@ namespace engine {
         void SetLevelLoader(LevelLoader loader);
         void ClearEntityInstances() noexcept { DestroyEntityInstances(); }
 
-        /// Executes the file anew in a per-instance environment; it must return a table.
+        /// Executes the file anew in a per-instance environment. Top-level scripts return nothing
+        /// and define OnStart(), OnUpdate(dt), OnDestroy(). Returned-table scripts remain supported
+        /// with their original callbacks receiving self.
         /// Table literals, including nested defaults, are created separately for every instance.
-        /// Optional callbacks: OnStart(self), OnUpdate(self, deltaSeconds), OnDestroy(self).
+        /// All three lifecycle callbacks are optional in either format.
         /// Output is unchanged on failure. Does not start the instance.
         bool CreateInstance(const ScriptInstanceDesc& desc, InstanceId& instance, std::string& error);
         /// Starts once; a repeated successful start does not invoke OnStart again.

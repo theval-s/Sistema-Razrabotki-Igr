@@ -72,25 +72,23 @@ namespace editor {
         const engine::AssetMetadata metadata{
             engine::NewUuid(), engine::CatalogAssetKind::Script };
 
-        constexpr std::string_view ScriptTemplate = R"(-- This behavior table is created separately for each object.
+        constexpr std::string_view ScriptTemplate = R"(-- Fields and functions belong to this script instance.
 -- require is for modules shared throughout the current Play session.
 -- local settings = require("shared.settings")
 
-return {
-    elapsed = 0.0,
+elapsed = 0.0
 
-    OnStart = function(self)
-        -- Initialize this object's behavior.
-    end,
+function OnStart()
+    -- Initialize this object's behavior.
+end
 
-    OnUpdate = function(self, deltaSeconds)
-        self.elapsed = self.elapsed + deltaSeconds
-    end,
+function OnUpdate(deltaSeconds)
+    elapsed = elapsed + deltaSeconds
+end
 
-    OnDestroy = function(self)
-        -- Release this object's gameplay resources.
-    end
-}
+function OnDestroy()
+    -- Release this object's gameplay resources.
+end
 )";
 
         if (!engine::CreateNewFile(target, ScriptTemplate, error)) {

@@ -66,9 +66,10 @@ TEST(PlayMode, LuaOpenLevelIsDeferredAndAutoloadStateSurvivesAcrossScenes) {
     const auto source = f.root / "Game.lua";
     ASSERT_TRUE(engine::CreateNewFile(source, R"(
         local shared = require('shared')
-        return {
-            OnStart = function(self) shared.starts = shared.starts + 1; assert(Scene.OpenLevel('Next')) end
-        }
+        function OnStart()
+            shared.starts = shared.starts + 1
+            assert(Scene.OpenLevel('Next'))
+        end
     )", error));
     ASSERT_TRUE(engine::CreateNewFile(f.root / "shared.lua", "return {starts = 0}", error));
     const engine::AssetMetadata meta{engine::NewUuid(), engine::CatalogAssetKind::Script};

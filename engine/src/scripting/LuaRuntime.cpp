@@ -112,6 +112,7 @@ namespace engine {
             sol::table table;
             std::optional<sol::protected_function> start, update, destroy;
             bool started = false;
+            bool environmentCallbacks = false;
             bool faulted = false;
             bool destroying = false;
             std::string failure;
@@ -135,9 +136,11 @@ namespace engine {
                     return true;
                 }
                 const std::string context = Context() + " [callback=" + std::string(name) + "]";
-                const bool clean = delta
-                    ? ProtectedCall(*callback, error, context, table, *delta)
-                    : ProtectedCall(*callback, error, context, table);
+                const bool clean = environmentCallbacks
+                    ? (delta ? ProtectedCall(*callback, error, context, *delta)
+                             : ProtectedCall(*callback, error, context))
+                    : (delta ? ProtectedCall(*callback, error, context, table, *delta)
+                             : ProtectedCall(*callback, error, context, table));
                 if (!clean) {
                     faulted = true;
                     failure = error;
@@ -444,14 +447,19 @@ namespace engine {
                 record->failure = error;
                 return false;
             }
-            if (result.return_count() != 1 || result.get_type() != sol::type::table) {
-                return record->Fail(error, "script must return one instance table");
+            if (result.return_count() == 0) {
+                record->environmentCallbacks = true;
+                record->table = record->environment;
+            } else if (result.return_count() == 1 && result.get_type() == sol::type::table) {
+                record->table = result.get<sol::table>();
+            } else {
+                return record->Fail(error, "script must return nothing (top-level format) or one instance table");
             }
-            record->table = result.get<sol::table>();
             for (const auto& [name, callback] : {
                 std::pair{"OnStart", &record->start}, std::pair{"OnUpdate", &record->update},
                 std::pair{"OnDestroy", &record->destroy}}) {
-                sol::object value = record->table.get<sol::object>(name);
+                sol::object value = record->environmentCallbacks
+                    ? record->table.raw_get<sol::object>(name) : record->table.get<sol::object>(name);
                 if (value.get_type() == sol::type::nil) continue;
                 if (value.get_type() != sol::type::function) {
                     return record->Fail(error, std::string(name) + " must be a function or nil");

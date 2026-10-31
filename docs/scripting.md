@@ -120,14 +120,43 @@ is a diagnostic hint, never a fallback source. The runtime does not resolve asse
 
 `CreateInstance(desc, id, error)` accepts an absolute source path, the asset UUID,
 and an entity ID for diagnostics. It executes the file in a fresh environment and
-retains its returned table. The chunk runs separately for every instance, so table
+retains its environment or returned table. The chunk runs separately for every instance, so table
 literals, including nested defaults, are created anew rather than shallow-copied.
 An instance ID is opaque and transient. It combines a local slot and a unique
 session token: slots may be reused after Stop, but old handles cannot address the
 new session or a different runtime. Failed creation releases its temporary record
 and leaves the output ID unchanged; no failed creation is scheduled for gameplay.
 
-Scripts return one table with optional callbacks:
+New scripts use top-level instance fields and functions, with no return wrapper:
+
+```lua
+health = 100
+elapsed = 0
+local damage = 10 -- private to this execution of the script
+
+function OnStart()
+    health = health - damage
+    Log.info("Hello world")
+end
+
+function OnUpdate(dt)
+    elapsed = elapsed + dt
+end
+
+function OnDestroy()
+    Log.info("Stopped")
+end
+```
+
+Fields, nested tables, local variables and function closures are private to each
+instance. Names such as Log, Scene and require are inherited from the engine API.
+Top-level callbacks receive no self argument; OnUpdate receives only dt in seconds.
+Declare lifecycle functions without `local` so the engine can find them. A top-level
+Properties table can describe future Inspector fields; Inspector integration is
+still a separate feature. Callback lookup uses only the instance's own fields, so
+missing functions never fall back to another script's or the runtime's callbacks.
+
+For backward compatibility, scripts may still return one table:
 
 ```lua
 return {
@@ -145,8 +174,11 @@ return {
 
 Callbacks are captured as protected functions at creation. Missing/nil callbacks
 are allowed; other non-function values fail creation with the field name in the
-error. C++ passes the instance table explicitly as `self`, followed by simulation
-delta seconds for OnUpdate. The names are OnStart, OnUpdate, and OnDestroy; the
+error. For the returned-table format only, C++ passes the instance table explicitly
+as `self`, followed by simulation delta seconds for OnUpdate. A script must either
+return no values or return exactly one table; explicit nil, scalar and multiple
+returns are rejected. Shared require modules retain their existing return rules.
+The names are OnStart, OnUpdate, and OnDestroy; the
 unprefixed Start/Update/Destroy fields are not instance callbacks.
 
 `StartInstance` invokes OnStart at most once; repeating a successful start is a
@@ -213,7 +245,7 @@ first (so healthy OnDestroy callbacks can still require modules), then releases
 the module cache before destroying the Lua state. A new Play loads fresh modules.
 Behavior chunks still execute independently per instance, including nested defaults.
 
-New scripts created by the editor return a behavior table with initial fields and
+New scripts created by the editor declare top-level instance fields and functions
 OnStart/OnUpdate/OnDestroy, plus a commented shared-module require example.
 
 Stage 06 will use Scene::AddLifecycleObserver for ComponentRemoving and

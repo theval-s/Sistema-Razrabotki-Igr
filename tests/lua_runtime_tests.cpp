@@ -118,6 +118,101 @@ TEST(LuaRuntime, InitializesAndShutsDownWithoutRendering) {
     EXPECT_FALSE(runtime.IsInitialized());
 }
 
+TEST(LuaTopLevel, InstancesHavePrivateFieldsClosuresAndExactCallbackArguments) {
+    ScriptFixture fixture;
+    const auto desc = fixture.Write(R"(
+        elapsed = 0
+        nested = {count = 0}
+        Properties = {speed = 5}
+        local privateCount = 0
+        function OnStart(...)
+            assert(select('#', ...) == 0)
+            assert(elapsed == 0 and nested.count == 0 and privateCount == 0)
+            stats.starts = stats.starts + 1
+        end
+        function OnUpdate(dt, ...)
+            assert(select('#', ...) == 0 and dt == 0.25)
+            elapsed = elapsed + dt
+            privateCount = privateCount + 1
+            nested.count = nested.count + 1
+            assert(elapsed == 0.25 and privateCount == 1 and nested.count == 1)
+            stats.updates = stats.updates + 1
+        end
+        function OnDestroy(...)
+            assert(select('#', ...) == 0)
+            stats.destroys = stats.destroys + 1
+        end
+    )");
+    engine::LuaRuntime runtime;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(error));
+    ASSERT_TRUE(runtime.ExecuteString("stats = {starts=0, updates=0, destroys=0}", "setup", error));
+    engine::InstanceId first, second;
+    ASSERT_TRUE(runtime.CreateInstance(desc, first, error)) << error;
+    ASSERT_TRUE(runtime.CreateInstance(desc, second, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(first, error)) << error;
+    ASSERT_TRUE(runtime.UpdateInstance(first, 0.25, error)) << error;
+    ASSERT_TRUE(runtime.StartInstance(second, error)) << error;
+    ASSERT_TRUE(runtime.UpdateInstance(second, 0.25, error)) << error;
+    ASSERT_TRUE(runtime.DestroyInstance(first, error)) << error;
+    ASSERT_TRUE(runtime.DestroyInstance(second, error)) << error;
+    EXPECT_TRUE(runtime.ExecuteString(
+        "assert(stats.starts == 2 and stats.updates == 2 and stats.destroys == 2); assert(elapsed == nil and nested == nil and Properties == nil)",
+        "check", error)) << error;
+}
+
+TEST(LuaTopLevel, MissingCallbacksDoNotInheritRuntimeGlobalCallbacks) {
+    ScriptFixture fixture;
+    const auto desc = fixture.Write("local temporary = 42");
+    engine::LuaRuntime runtime;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(error));
+    ASSERT_TRUE(runtime.ExecuteString(R"(
+        function OnStart() error('inherited callback') end
+        function OnUpdate() error('inherited callback') end
+        function OnDestroy() error('inherited callback') end
+    )", "setup", error));
+    engine::InstanceId id;
+    ASSERT_TRUE(runtime.CreateInstance(desc, id, error)) << error;
+    EXPECT_TRUE(runtime.StartInstance(id, error)) << error;
+    EXPECT_TRUE(runtime.UpdateInstance(id, 0.25, error)) << error;
+    EXPECT_TRUE(runtime.DestroyInstance(id, error)) << error;
+}
+
+TEST(LuaTopLevel, RejectsInvalidCallbackAndReturnFormats) {
+    ScriptFixture fixture;
+    engine::LuaRuntime runtime;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(error));
+    const std::vector<std::string> sources{"OnStart = 42", "OnUpdate = false", "OnDestroy = 'bad'", "return nil", "return {}, {}"};
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+        const auto desc = fixture.Write(sources[i], ("bad" + std::to_string(i) + ".lua").c_str());
+        engine::InstanceId id;
+        EXPECT_FALSE(runtime.CreateInstance(desc, id, error));
+        EXPECT_FALSE(id.IsValid());
+    }
+}
+
+TEST(LuaTopLevel, RequireKeepsSharedModuleSemanticsAndErrorsFaultOnlyOneInstance) {
+    ScriptFixture fixture;
+    fixture.File("shared.lua", "return {count=0}");
+    const auto desc = fixture.Write(R"(
+        local shared = require('shared')
+        function OnStart() shared.count = shared.count + 1 end
+        function OnUpdate(dt) error('top-level update failure') end
+    )");
+    engine::LuaRuntime runtime;
+    std::string error;
+    ASSERT_TRUE(runtime.Initialize(fixture.root, error));
+    engine::InstanceId first, second;
+    ASSERT_TRUE(runtime.CreateInstance(desc, first, error));
+    ASSERT_TRUE(runtime.CreateInstance(desc, second, error));
+    ASSERT_TRUE(runtime.StartInstance(first, error));
+    EXPECT_FALSE(runtime.UpdateInstance(first, 0.25, error));
+    ASSERT_TRUE(runtime.StartInstance(second, error));
+    EXPECT_TRUE(runtime.ExecuteString("assert(require('shared').count == 2)", "shared-check", error)) << error;
+}
+
 TEST(ScriptSubsystem, ShutdownAndReinitializeStartAFreshSession) {
     ScriptFixture fixture;
     engine::ScriptSubsystem subsystem;
