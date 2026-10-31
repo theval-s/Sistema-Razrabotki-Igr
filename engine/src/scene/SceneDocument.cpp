@@ -94,7 +94,8 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         if (!script.at("script").is_null()) value.script = Reference(script.at("script"));
         value.enabled = script.at("enabled").get<bool>();
         if (script.contains("properties")) {
-            StateValue propertyData; std::string error;
+            StateValue propertyData;
+            std::string error;
             if (!script.at("properties").is_object() || !ParseStateValue(script.at("properties").dump(), propertyData, error))
                 throw std::invalid_argument("Script properties must be an object: " + error);
             value.properties = propertyData.Fields();

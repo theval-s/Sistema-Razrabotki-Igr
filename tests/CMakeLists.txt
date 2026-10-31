@@ -4,6 +4,7 @@ add_executable(input_tests input_tests.cpp)
 target_link_libraries(input_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(input_tests)
 set_target_properties(input_tests PROPERTIES FOLDER tests)
+
 add_executable(project_tests project_tests.cpp)
 target_link_libraries(project_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(project_tests)

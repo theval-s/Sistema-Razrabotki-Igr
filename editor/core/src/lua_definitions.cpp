@@ -130,7 +130,10 @@ bool refreshLuaDefinitions(const engine::Project& project, std::string& error) {
         if (!FindSetting(config, "runtime.version")) config["runtime.version"] = "Lua 5.4";
         if (!FindSetting(config, "runtime.path")) config["runtime.path"] = {"content/?.lua", "content/?/init.lua"};
         // Preserve the file byte-for-byte when it already contains the required settings.
-        if (!original.empty() && nlohmann::json::parse(original) == config) { error.clear(); return true; }
+        if (!original.empty() && nlohmann::json::parse(original) == config) {
+            error.clear();
+            return true;
+        }
         if (!WriteChanged(configPath, config.dump(2) + '\n', error)) return false;
         error.clear();
         return true;

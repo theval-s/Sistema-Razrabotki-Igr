@@ -414,9 +414,14 @@ void buildScript(PropertyForm& form, editor::EditorContext& context, entt::entit
     });
     form.addRow(QObject::tr("Script"), picker, [&scene, entity, picker] {
         const auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity);
-        if (!component || picker->hasFocus() || picker->lineEdit()->hasFocus() || picker->view()->isVisible()) return;
+        if (!component || picker->hasFocus() || picker->lineEdit()->hasFocus() || picker->view()->isVisible()) {
+            return;
+        }
         const QSignalBlocker blocker(picker);
-        if (!component->script.id.IsValid()) { picker->setCurrentIndex(0); return; }
+        if (!component->script.id.IsValid()) {
+            picker->setCurrentIndex(0);  // "None"
+            return;
+        }
         if (!picker->selectId(component->script.id)) {
             picker->setCurrentIndex(-1);
             picker->lineEdit()->setPlaceholderText(QObject::tr("%1 (missing)").arg(

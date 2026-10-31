@@ -70,6 +70,15 @@ namespace engine {
             return true;
         }
 
+        /// extracted helper, NOTE: rethink about exceptions
+        template <typename Result>
+        void ThrowIfFailed(Result& result) {
+            if (!result.valid()) {
+                sol::error failure = result;
+                throw failure;
+            }
+        }
+
         template <typename Context, typename... Args>
         bool ProtectedCall(const sol::protected_function& callback, std::string& error,
                            const Context& context, Args&&... args) {
@@ -397,13 +406,13 @@ namespace engine {
                     end
                 end
             )", "require wrapper");
-            if (!wrapper.valid()) { sol::error failure = wrapper; throw failure; }
+            ThrowIfFailed(wrapper);
             sol::protected_function wrapperChunk = wrapper;
             sol::protected_function_result factoryResult = wrapperChunk();
-            if (!factoryResult.valid()) { sol::error failure = factoryResult; throw failure; }
+            ThrowIfFailed(factoryResult);
             sol::protected_function factory = factoryResult.get<sol::protected_function>();
             sol::protected_function_result requireResult = factory(loader, globals["error"]);
-            if (!requireResult.valid()) { sol::error failure = requireResult; throw failure; }
+            ThrowIfFailed(requireResult);
             globals["require"] = requireResult.get<sol::protected_function>();
 
             impl_->session = AllocateSession();

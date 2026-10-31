@@ -351,7 +351,10 @@ bool Scene::RestoreControllerGameState(entt::entity entity, const StateValue& st
 
 void Scene::SetControllerInstantiationEnabled(bool enabled) {
     controllerInstantiationEnabled_ = enabled;
-    if (!enabled) { SetControllersActive(false); return; }
+    if (!enabled) {
+        SetControllersActive(false);
+        return;
+    }
     std::vector<std::pair<entt::entity, ControllerDefinition>> pending;
     for (const auto& [entity, slot] : controllers_)
         if (!slot.instance) pending.emplace_back(entity, slot.definition);

@@ -182,7 +182,10 @@ void AutoloadDialog::addScript() {
             return;
         }
         auto updated = definitions();
-        if (std::any_of(updated.begin(), updated.end(), [&](const auto& value) { return value.script.id == entry->metadata.id; })) {
+        const bool listed = std::any_of(updated.begin(), updated.end(), [&](const auto& value) {
+            return value.script.id == entry->metadata.id;
+        });
+        if (listed) {
             QMessageBox::warning(this, tr("Autoload"), tr("This script is already in the autoload list."));
             return;
         }

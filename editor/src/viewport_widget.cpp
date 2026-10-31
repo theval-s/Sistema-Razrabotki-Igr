@@ -105,7 +105,13 @@ void ViewportWidget::resizeEvent(QResizeEvent* event) {
 }
 
 void ViewportWidget::keyPressEvent(QKeyEvent* event) {
-    if (playing_ && event->key() == Qt::Key_Escape) { releaseCursor(); clearFocus(); event->accept(); return; }
+    // During Play, Escape hands the keyboard back to the editor instead of going to the game.
+    if (playing_ && event->key() == Qt::Key_Escape) {
+        releaseCursor();
+        clearFocus();
+        event->accept();
+        return;
+    }
     if (input_ != nullptr && !event->isAutoRepeat()) {
         input_->OnKey(toEngineKey(event->key()), true);
         const auto scan = event->nativeScanCode();

@@ -347,7 +347,10 @@ bool Engine::PlayCurrentScene(const std::filesystem::path& root,
         return false;
     }
     auto* scripting = GetSubsystem<ScriptSubsystem>();
-    if (!scripting) { error = "ScriptSubsystem is not registered"; return false; }
+    if (!scripting) {
+        error = "ScriptSubsystem is not registered";
+        return false;
+    }
     Impl::PlaySnapshot snapshot;
     if (!CaptureSceneDocument(impl_->scene, *impl_->sceneAssets, snapshot.scene, error)) return false;
     snapshot.baseline = impl_->sceneBaseline;
@@ -396,7 +399,11 @@ void Engine::StopPlay() {
 }
 
 bool Engine::RequestOpenLevel(std::string_view name, std::string& error) {
-    auto fail = [&](std::string message) { error = std::move(message); spdlog::error("OpenLevel: {}", error); return false; };
+    auto fail = [&](std::string message) {
+        error = std::move(message);
+        spdlog::error("OpenLevel: {}", error);
+        return false;
+    };
     if (!IsPlaying()) return fail("OpenLevel requires a play session");
     std::string logical(name);
     if (logical.empty() || logical.find('\\') != std::string::npos || logical.find(':') != std::string::npos)
