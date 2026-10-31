@@ -3,17 +3,21 @@
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
+#include <QStatusBar>
 #include <QToolBar>
 
 #include <algorithm>
+#include <utility>
 
 #include <DockAreaWidget.h>
 #include <DockManager.h>
 #include <DockWidget.h>
 
 #include <engine/engine.hpp>
+#include <engine/project/Project.hpp>
 
 #include <editor/editor_camera.hpp>
+#include <editor/play_session.hpp>
 #include <editor/scene_document.hpp>
 
 namespace editor {
@@ -37,10 +41,14 @@ ads::DockWidgetArea toAdsArea(const Qt::DockWidgetArea area) {
 
 
 /// Context to pass to Modules instead of passing the whole editor to them
-EditorContext::EditorContext(engine::Engine& engine, const engine::Project& project, QMainWindow& window,
+EditorContext::EditorContext(engine::Engine& engine, engine::Project& project, QMainWindow& window,
                              ads::CDockManager& dock_manager)
     : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager), selection_(engine.GetScene()),
-      scene_document_(std::make_unique<SceneDocument>(engine, project, selection_)) {}
+      scene_document_(std::make_unique<SceneDocument>(engine, project, selection_)),
+      play_session_(std::make_unique<PlaySession>(engine, project, selection_, *scene_document_)) {
+    QObject::connect(play_session_.get(), &PlaySession::playingChanged, play_session_.get(),
+                     [this](const bool playing) { setAuthoringEnabled(!playing); });
+}
 
 EditorContext::~EditorContext() {
     // Panels would otherwise die with the dock manager, after the engine they show.
@@ -72,6 +80,12 @@ const engine::Project& EditorContext::project() const noexcept {
     return project_;
 }
 
+bool EditorContext::updateProject(engine::Project project, std::string& error) {
+    if (!project.Save(error)) return false;
+    project_ = std::move(project);
+    return true;
+}
+
 engine::Scene& EditorContext::scene() noexcept {
     return engine_.GetScene();
 }
@@ -82,6 +96,10 @@ Selection& EditorContext::selection() noexcept {
 
 SceneDocument& EditorContext::sceneDocument() noexcept {
     return *scene_document_;
+}
+
+PlaySession& EditorContext::playSession() noexcept {
+    return *play_session_;
 }
 
 EditorCameraSubsystem* EditorContext::camera() noexcept {
@@ -105,6 +123,14 @@ QToolBar* EditorContext::toolBar() {
         tool_bar_->setObjectName(QStringLiteral("MainToolBar"));
     }
     return tool_bar_;
+}
+
+QWidget* EditorContext::mainWindow() noexcept {
+    return &window_;
+}
+
+void EditorContext::showStatus(const QString& message, const int timeout_ms) {
+    window_.statusBar()->showMessage(message, timeout_ms);
 }
 
 void EditorContext::addPanel(const QString& id, const QString& title, QWidget* widget,

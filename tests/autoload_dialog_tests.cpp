@@ -1,4 +1,4 @@
-#include <editor/autoload_dialog.hpp>
+#include "autoload_dialog.hpp"
 #include <editor/scene_document.hpp>
 #include <editor/selection.hpp>
 #include <editor/lua_definitions.hpp>

@@ -20,7 +20,6 @@ qt_standard_project_setup()
 add_subdirectory(core)
 
 qt_add_executable(editor
-    src/autoload_dialog.cpp
     src/main.cpp
     src/light_lines.cpp
     src/main_window.cpp
@@ -28,7 +27,6 @@ qt_add_executable(editor
     src/project_dialog.cpp
     src/viewport_widget.cpp
     include/editor/light_lines.hpp
-    include/editor/autoload_dialog.hpp
     include/editor/main_window.hpp
     include/editor/module_loader.hpp
     include/editor/project_dialog.hpp
@@ -130,6 +128,7 @@ endfunction()
 
 add_subdirectory(modules/scene)
 add_subdirectory(modules/content)
+add_subdirectory(modules/scripting)
 
 # --- Install / deploy ------------------------------------------------------
 

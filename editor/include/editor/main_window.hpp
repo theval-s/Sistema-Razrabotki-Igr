@@ -8,7 +8,6 @@
 #include <vector>
 #include <entt/entity/entity.hpp>
 #include <SimpleMath.h>
-#include <string>
 
 #include <engine/engine.hpp>
 #include <engine/project/Project.hpp>
@@ -20,7 +19,6 @@ class CDockManager;
 class QLabel;
 class QPlainTextEdit;
 class QTimer;
-class QAction;
 
 namespace spdlog::sinks {
 class sink;
@@ -52,10 +50,6 @@ private slots:
 private:
     void buildMenus();
     void buildLogDock();
-    void editAutoloads();
-    void playScene();
-    void stopScene();
-    void refreshPlayActions();
     /// Opens the project's startup scene, or builds an untitled one if it has none.
     void openStartupScene();
     void setupDefaultScene();
@@ -91,10 +85,6 @@ private:
     bool has_last_pick_ = false;
     /// Set by switchProject(): started once the layout is saved.
     QString relaunch_project_;
-    QAction* play_action_ = nullptr;
-    QAction* stop_action_ = nullptr;
-    QAction* pause_action_ = nullptr;
-    std::vector<std::string> edit_selection_;
 };
 
 }  // namespace editor

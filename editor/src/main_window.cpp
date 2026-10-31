@@ -15,8 +15,6 @@
 #include <QStatusBar>
 #include <QString>
 #include <QTimer>
-#include <QToolBar>
-#include <QSignalBlocker>
 
 #include <algorithm>
 #include <cstring>
@@ -47,12 +45,11 @@
 #include <editor/light_lines.hpp>
 #include <editor/module_loader.hpp>
 #include <editor/paths.hpp>
+#include <editor/play_session.hpp>
 #include <editor/project_dialog.hpp>
-#include <editor/lua_definitions.hpp>
 #include <editor/scene_document.hpp>
 #include <editor/viewport_widget.hpp>
 #include <editor/selection.hpp>
-#include <editor/autoload_dialog.hpp>
 
 namespace editor {
 
@@ -137,6 +134,10 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
             camera_->ResetToSceneCamera();
         }
     });
+    connect(&context_->playSession(), &PlaySession::playingChanged, this, [this](const bool playing) {
+        viewport_->setPlaying(playing);
+        if (playing) viewport_->setFocus();
+    });
     refreshTitle();
     buildMenus();
     buildLogDock();  // before modules and engine init, so their startup messages show up
@@ -161,7 +162,7 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
 
 MainWindow::~MainWindow() {
     tick_timer_->stop();
-    stopScene();
+    context_->playSession().stop();
     // The viewport outlives the engine (Qt deletes children after our members).
     viewport_->setInput(nullptr);
     // First, so nothing logs into the Log panel once it is gone.
@@ -172,7 +173,7 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
-    stopScene();
+    context_->playSession().stop();
     if (!context_->sceneDocument().maybeSave(this)) {
         relaunch_project_.clear();
         event->ignore();
@@ -235,13 +236,10 @@ void MainWindow::startEngine() {
         return;
     }
     viewport_->setCamera(camera_);
-    std::string luaDefinitionsError;
-    if (!refreshLuaDefinitions(project_, luaDefinitionsError)) spdlog::warn("{}", luaDefinitionsError);
     openStartupScene();
 
     tick_timer_->start(16);
     refreshStatus();
-    refreshPlayActions();
 }
 
 void MainWindow::openStartupScene() {
@@ -285,7 +283,7 @@ void MainWindow::refreshTitle() {
 }
 
 void MainWindow::adoptStartupScene() {
-    if (engine_.IsPlaying()) return;
+    if (context_->playSession().isPlaying()) return;
     const std::filesystem::path& file = context_->sceneDocument().filePath();
     if (file.empty() || context_->sceneDocument().isDirty()) {
         return;
@@ -300,10 +298,10 @@ void MainWindow::adoptStartupScene() {
     if (!name.starts_with("game/")) {
         return;  // outside the project's content
     }
-    project_.startupScene = name;
-    if (std::string error; !project_.Save(error)) {
+    engine::Project updated = project_;
+    updated.startupScene = name;
+    if (std::string error; !context_->updateProject(std::move(updated), error)) {
         spdlog::warn("Could not remember {} as the startup scene: {}", name, error);
-        project_.startupScene.clear();
     }
 }
 
@@ -373,108 +371,9 @@ void MainWindow::buildMenus() {
 
     file_menu->addAction(tr("E&xit"), this, &QWidget::close);
 
-    auto* project_menu = context_->menu(tr("&Project"));
-    auto* autoload_action = project_menu->addAction(tr("&Autoload..."), this, &MainWindow::editAutoloads);
-    project_menu->addAction(tr("Refresh Lua Definitions"), this, [this] {
-        std::string error;
-        if (!refreshLuaDefinitions(project_, error)) {
-            QMessageBox::warning(this, tr("Lua completion"), toQString(std::string_view(error)));
-            return;
-        }
-        statusBar()->showMessage(tr("Lua definitions updated. Open the project folder in VS Code for completion."), 6000);
-    });
-    connect(project_menu, &QMenu::aboutToShow, this, [this, autoload_action] {
-        const auto* scripts = engine_.GetSubsystem<engine::ScriptSubsystem>();
-        autoload_action->setEnabled(engine_.IsInitialized() && (!scripts || !scripts->IsPlaying()));
-    });
-
-    auto* engine_menu = context_->menu(tr("&Engine"));
-    play_action_ = engine_menu->addAction(tr("Play Current Scene"), this, &MainWindow::playScene);
-    play_action_->setShortcut(QKeySequence(Qt::Key_F5));
-    pause_action_ = engine_menu->addAction(tr("Pause"));
-    pause_action_->setCheckable(true);
-    stop_action_ = engine_menu->addAction(tr("Stop"), this, &MainWindow::stopScene);
-    stop_action_->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F5));
-    connect(pause_action_, &QAction::toggled, this, [this](bool paused) { engine_.SetPaused(paused); });
-    for (auto* action : {play_action_, pause_action_, stop_action_}) {
-        action->setProperty("playControl", true);
-        context_->toolBar()->addAction(action);
-    }
-    refreshPlayActions();
-
-    // Filled by EditorContext::addPanel().
-    context_->menu(tr("&View"));
-}
-
-void MainWindow::refreshPlayActions() {
-    if (!play_action_) return;
-    const bool playing = engine_.IsPlaying();
-    play_action_->setEnabled(engine_.IsInitialized() && !playing);
-    stop_action_->setEnabled(playing);
-    pause_action_->setEnabled(playing);
-    const QSignalBlocker blocker(pause_action_);
-    pause_action_->setChecked(playing && engine_.IsPaused());
-}
-
-void MainWindow::playScene() {
-    if (!engine_.IsInitialized() || engine_.IsPlaying()) return;
-    edit_selection_.clear();
-    for (const auto entity : context_->selection().entities())
-        edit_selection_.emplace_back(engine_.GetScene().GetId(entity).ToString());
-    context_->sceneDocument().beginRuntime();
-    std::string error;
-    if (!engine_.PlayCurrentScene(project_.ContentDir(), project_.autoloads, error)) {
-        context_->sceneDocument().endRuntime();
-        std::vector<entt::entity> restored;
-        for (const auto& id : edit_selection_) restored.push_back(engine_.GetScene().FindById(id));
-        context_->selection().setEntities(restored);
-        QMessageBox::warning(this, tr("Play"), toQString(std::string_view(error)));
-        return;
-    }
-    context_->selection().clear();
-    camera_->SetNavigationEnabled(false);
-    viewport_->setPlaying(true);
-    viewport_->setFocus();
-    if (engine_.GetScene().GetActiveCamera() == entt::null)
-        spdlog::warn("Play: no game camera; using the frozen editor viewpoint");
-    context_->setAuthoringEnabled(false);
-    refreshPlayActions();
-}
-
-void MainWindow::stopScene() {
-    if (!engine_.IsPlaying()) return;
-    engine_.StopPlay();
-    viewport_->setPlaying(false);
-    camera_->SetNavigationEnabled(true);
-    context_->sceneDocument().endRuntime();
-    std::vector<entt::entity> selection;
-    for (const auto& id : edit_selection_) selection.push_back(engine_.GetScene().FindById(id));
-    context_->selection().setEntities(selection);
-    context_->setAuthoringEnabled(true);
-    refreshPlayActions();
-}
-
-void MainWindow::editAutoloads() {
-    const auto* scripts = engine_.GetSubsystem<engine::ScriptSubsystem>();
-    if (!engine_.IsInitialized() || (scripts && scripts->IsPlaying())) return;
-    AutoloadDialog dialog(engine_, project_, this);
-    while (dialog.exec() == QDialog::Accepted) {
-        scripts = engine_.GetSubsystem<engine::ScriptSubsystem>();
-        if (scripts && scripts->IsPlaying()) return;
-        // Work from the current project: a scene operation may have adopted a startup scene.
-        engine::Project updated = project_;
-        updated.autoloads = dialog.definitions();
-        std::string error;
-        if (!updated.Save(error)) {
-            QMessageBox::warning(this, tr("Autoload"), toQString(std::string_view(error)));
-            continue;
-        }
-        project_ = std::move(updated);
-        if (!refreshLuaDefinitions(project_, error)) {
-            spdlog::warn("{}", error);
-            QMessageBox::warning(this, tr("Lua completion"), toQString(std::string_view(error)));
-        }
-        return;
+    // The menu bar's order. Modules fill Project and Engine, EditorContext::addPanel() fills View.
+    for (const QString& title : {tr("&Project"), tr("&Engine"), tr("&View")}) {
+        context_->menu(title);
     }
 }
 

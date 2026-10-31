@@ -21,10 +21,10 @@ if(SRI_BUILD_EDITOR)
     find_package(spdlog CONFIG REQUIRED)
     add_executable(autoload_dialog_tests
         autoload_dialog_tests.cpp
-        ../editor/src/autoload_dialog.cpp
-        ../editor/include/editor/autoload_dialog.hpp
+        ../editor/modules/scripting/autoload_dialog.cpp
+        ../editor/modules/scripting/autoload_dialog.hpp
     )
-    target_include_directories(autoload_dialog_tests PRIVATE ../editor/include)
+    target_include_directories(autoload_dialog_tests PRIVATE ../editor/modules/scripting)
     target_link_libraries(autoload_dialog_tests PRIVATE editor_core Engine::Engine GTest::gtest
         Qt6::Widgets spdlog::spdlog)
     set_project_warnings(autoload_dialog_tests)

@@ -1,4 +1,4 @@
-#include <editor/autoload_dialog.hpp>
+#include "autoload_dialog.hpp"
 
 #include <QAbstractItemView>
 #include <QDialogButtonBox>
