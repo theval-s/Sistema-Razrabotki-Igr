@@ -54,6 +54,14 @@ Already cloned without submodules:
 git submodule update --init --recursive
 ```
 
+Don't clone shallow (`--depth`, `--shallow-submodules`): vcpkg needs its full history to install
+the versions pinned in `vcpkg.json` `overrides`. Otherwise configuring fails with
+"failed to unpack tree object ... vcpkg was cloned as a shallow repository". To fix a shallow clone:
+
+```
+git -C external/vcpkg fetch --unshallow
+```
+
 ## 2. vcpkg
 
 Even with vcpkg as submodule, you should run its bootstrap.
