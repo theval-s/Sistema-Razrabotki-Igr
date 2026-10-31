@@ -7,6 +7,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenuBar>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QProcess>
@@ -37,12 +38,14 @@
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/rendering/RenderExtractionSubsystem.hpp>
 #include <engine/scene/SceneQueries.hpp>
+#include <engine/scripting/ScriptSubsystem.hpp>
 
 #include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
 #include <editor/light_lines.hpp>
 #include <editor/module_loader.hpp>
 #include <editor/paths.hpp>
+#include <editor/play_session.hpp>
 #include <editor/project_dialog.hpp>
 #include <editor/scene_document.hpp>
 #include <editor/viewport_widget.hpp>
@@ -131,6 +134,10 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
             camera_->ResetToSceneCamera();
         }
     });
+    connect(&context_->playSession(), &PlaySession::playingChanged, this, [this](const bool playing) {
+        viewport_->setPlaying(playing);
+        if (playing) viewport_->setFocus();
+    });
     refreshTitle();
     buildMenus();
     buildLogDock();  // before modules and engine init, so their startup messages show up
@@ -155,6 +162,7 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
 
 MainWindow::~MainWindow() {
     tick_timer_->stop();
+    context_->playSession().stop();
     // The viewport outlives the engine (Qt deletes children after our members).
     viewport_->setInput(nullptr);
     // First, so nothing logs into the Log panel once it is gone.
@@ -165,6 +173,7 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    context_->playSession().stop();
     if (!context_->sceneDocument().maybeSave(this)) {
         relaunch_project_.clear();
         event->ignore();
@@ -205,6 +214,7 @@ void MainWindow::restoreLayout() {
 }
 
 void MainWindow::startEngine() {
+    engine_.SetEditorMode();
     // The editor owns the loop: the engine only advances when we Tick() it.
     engine_.SetSurface(viewport_->surface());
     // The camera's aspect ratio follows the surface (RenderExtractionSubsystem); the renderer keeps
@@ -214,6 +224,7 @@ void MainWindow::startEngine() {
     // Input first, so it's latched before anything reads it; the editor camera last, so it
     // replaces the scene camera that RenderExtractionSubsystem copied into the RenderWorld.
     viewport_->setInput(engine_.AddSubsystem<engine::InputSubsystem>());
+    engine_.AddSubsystem<engine::ScriptSubsystem>();
     engine_.AddSubsystem<engine::RenderingSubsystem>();
     engine_.AddSubsystem<engine::RenderExtractionSubsystem>();
     camera_ = engine_.AddSubsystem<EditorCameraSubsystem>();
@@ -272,6 +283,7 @@ void MainWindow::refreshTitle() {
 }
 
 void MainWindow::adoptStartupScene() {
+    if (context_->playSession().isPlaying()) return;
     const std::filesystem::path& file = context_->sceneDocument().filePath();
     if (file.empty() || context_->sceneDocument().isDirty()) {
         return;
@@ -286,10 +298,10 @@ void MainWindow::adoptStartupScene() {
     if (!name.starts_with("game/")) {
         return;  // outside the project's content
     }
-    project_.startupScene = name;
-    if (std::string error; !project_.Save(error)) {
+    engine::Project updated = project_;
+    updated.startupScene = name;
+    if (std::string error; !context_->updateProject(std::move(updated), error)) {
         spdlog::warn("Could not remember {} as the startup scene: {}", name, error);
-        project_.startupScene.clear();
     }
 }
 
@@ -356,15 +368,15 @@ void MainWindow::buildMenus() {
     file_menu->addAction(tr("Save Scene &As..."), QKeySequence::SaveAs, this,
                          [this, &document] { document.saveInteractive(this, true); });
     file_menu->addSeparator();
+
     file_menu->addAction(tr("E&xit"), this, &QWidget::close);
+    // Scenes and projects can't be opened or saved while the scene is a running copy.
+    connect(&context_->playSession(), &PlaySession::playingChanged, file_menu, &QWidget::setDisabled);
 
-    auto* engine_menu = context_->menu(tr("&Engine"));
-    auto* pause_action = engine_menu->addAction(tr("&Pause simulation"));
-    pause_action->setCheckable(true);
-    connect(pause_action, &QAction::toggled, this, [this](bool paused) { engine_.SetPaused(paused); });
-
-    // Filled by EditorContext::addPanel().
-    context_->menu(tr("&View"));
+    // The menu bar's order. Modules fill Project and Engine, EditorContext::addPanel() fills View.
+    for (const QString& title : {tr("&Project"), tr("&Engine"), tr("&View")}) {
+        context_->menu(title);
+    }
 }
 
 void MainWindow::buildLogDock() {

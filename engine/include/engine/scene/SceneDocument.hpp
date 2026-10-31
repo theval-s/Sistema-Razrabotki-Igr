@@ -1,4 +1,5 @@
 #pragma once
+#include <engine/scripting/ScriptComponent.hpp>
 
 #include <optional>
 #include <string>
@@ -37,6 +38,7 @@ struct SceneEntityDefinition {
     std::optional<ControllerDefinition> controller;
     std::optional<Bounds> bounds;
     std::optional<GamePersistence> persistence;
+    std::optional<ScriptComponent> script;
 };
 
 struct SceneDocument {

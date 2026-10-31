@@ -84,6 +84,39 @@ TEST(StateValue, MissingFieldsAndWrongTypesHaveDefaults) {
     EXPECT_EQ(engine::StateValue{-1}.Unsigned(), 0u);
 }
 
+TEST(SceneDocument, ScriptSlotsRoundTripEmptyDisabledAndMissingAssets) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    const auto empty = scene.CreateEntity("Empty script slot");
+    scene.AddComponent<engine::ScriptComponent>(empty);
+    const auto assigned = scene.CreateEntity("Missing script");
+    const engine::AssetReference reference{engine::NewUuid(), "game/deleted.lua"};
+    scene.AddComponent<engine::ScriptComponent>(assigned, engine::ScriptComponent{reference, false,
+        {{"horseName", "Runner"}, {"speed", 3.5}, {"racing", true}}});
+    engine::SceneDocument captured, parsed;
+    std::string text, error;
+    ASSERT_TRUE(engine::CaptureSceneDocument(scene, host.GetSceneAssets(), captured, error)) << error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(captured, text, error)) << error;
+    ASSERT_TRUE(engine::ParseSceneDocument(text, parsed, error)) << error;
+    engine::Scene restored;
+    engine::PopulateScene(parsed, host.GetSceneAssets(), restored);
+    const auto* emptySlot = restored.TryGetComponent<engine::ScriptComponent>(restored.FindFirstByName("Empty script slot"));
+    ASSERT_NE(emptySlot, nullptr);
+    EXPECT_FALSE(emptySlot->script.id.IsValid());
+    const auto* missing = restored.TryGetComponent<engine::ScriptComponent>(restored.FindFirstByName("Missing script"));
+    ASSERT_NE(missing, nullptr);
+    EXPECT_EQ(missing->script.id, reference.id);
+    EXPECT_EQ(missing->script.path, reference.path);
+    EXPECT_FALSE(missing->enabled);
+    EXPECT_EQ(missing->properties.at("horseName").String(), "Runner");
+    EXPECT_EQ(missing->properties.at("speed").Number(), 3.5);
+    EXPECT_TRUE(missing->properties.at("racing").Boolean());
+    const auto enabled = text.find("\"enabled\": false");
+    ASSERT_NE(enabled, std::string::npos);
+    text.replace(enabled, std::string("\"enabled\": false").size(), "\"enabled\": 1");
+    EXPECT_FALSE(engine::ParseSceneDocument(text, parsed, error));
+}
+
 TEST(SceneDocument, ControllerCommandsFlushInFifoOrderWithoutReentry) {
     engine::Scene scene;
     std::vector<std::string> events;

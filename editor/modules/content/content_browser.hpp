@@ -114,6 +114,7 @@ private:
     /// `albedo`: a texture file to preselect.
     void newMaterialInstance(const QString& albedo = {});
     void newScene();
+    void newScript();
 
     editor::EditorContext& context_;
     AssetOperations operations_;

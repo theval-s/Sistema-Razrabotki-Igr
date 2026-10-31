@@ -1,42 +1,48 @@
 #include <QAction>
+#include <QEvent>
+#include <QKeySequence>
 #include <QMenu>
 #include <QSignalBlocker>
 #include <QTimer>
-#include <QToolBar>
+#include <QToolButton>
 #include <QTreeWidget>
+#include <QVBoxLayout>
 
 #include <cstdint>
-#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
-#include <engine/assets/AssetSystem.hpp>
-#include <engine/engine.hpp>
-#include <engine/rendering/RenderComponents.hpp>
+#include <SimpleMath.h>
 
+#include <engine/scene/Scene.hpp>
+
+#include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
 #include <editor/editor_module.hpp>
+#include <editor/menu_button.hpp>
+#include <editor/play_session.hpp>
 #include <editor/selection.hpp>
 
+#include "component_inspectors.hpp"
 #include "inspector_panel.hpp"
 
 namespace {
 
 /// Lists the scene's entities as a tree, rebuilt whenever the scene's revision changes.
 /// Its selection mirrors the editor's Selection both ways; the current item is the primary.
-class HierarchyPanel : public QTreeWidget {
+class HierarchyTree : public QTreeWidget {
 public:
-    HierarchyPanel(engine::Scene& scene, editor::Selection& selection) : scene_(scene), selection_(selection) {
+    HierarchyTree(engine::Scene& scene, editor::Selection& selection) : scene_(scene), selection_(selection) {
         setHeaderHidden(true);
         setSelectionMode(QAbstractItemView::ExtendedSelection);
         // A click changes the selection before the current item, so both push.
-        connect(this, &QTreeWidget::itemSelectionChanged, this, &HierarchyPanel::pushSelection);
-        connect(this, &QTreeWidget::currentItemChanged, this, &HierarchyPanel::pushSelection);
-        connect(&selection_, &editor::Selection::changed, this, &HierarchyPanel::showSelection);
+        connect(this, &QTreeWidget::itemSelectionChanged, this, &HierarchyTree::pushSelection);
+        connect(this, &QTreeWidget::currentItemChanged, this, &HierarchyTree::pushSelection);
+        connect(&selection_, &editor::Selection::changed, this, &HierarchyTree::showSelection);
         // Scene has no change signal, only a revision counter: poll it.
         auto* timer = new QTimer(this);
-        connect(timer, &QTimer::timeout, this, &HierarchyPanel::refresh);
+        connect(timer, &QTimer::timeout, this, &HierarchyTree::refresh);
         timer->start(200);
         rebuild();
     }
@@ -128,6 +134,105 @@ private:
     bool pushing_ = false;
 };
 
+/// The hierarchy tree, with an Add button floating in its bottom-right corner. Right-clicking the
+/// tree opens the same menu, plus Delete when it was on an entity. New entities go in front of the
+/// viewport camera, at the root, and become the selection.
+class HierarchyPanel : public QWidget {
+public:
+    explicit HierarchyPanel(editor::EditorContext& context) : context_(context) {
+        tree_ = new HierarchyTree(context.scene(), context.selection());
+        auto* layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->addWidget(tree_);
+
+        auto* menu = new QMenu(this);
+        menu->addAction(QObject::tr("Empty Entity"), this, [this] { addEmpty(); });
+        menu->addAction(QObject::tr("Cube"), this, [this] { addCube(); });
+
+        delete_ = new QAction(QObject::tr("Delete"), this);
+        delete_->setShortcut(QKeySequence::Delete);
+        delete_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        addAction(delete_);
+        connect(delete_, &QAction::triggered, this, [this] { deleteSelected(); });
+
+        // Pressing the right button on an entity has already selected it, as with the left one.
+        tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(tree_, &QWidget::customContextMenuRequested, this, [this, menu](const QPoint& position) {
+            QMenu context_menu;
+            if (tree_->itemAt(position) != nullptr) {
+                context_menu.addAction(delete_);
+                context_menu.addSeparator();
+            }
+            context_menu.addActions(menu->actions());
+            context_menu.exec(tree_->viewport()->mapToGlobal(position));
+        });
+
+        // On the tree but not its viewport, which would scroll it along with the items.
+        add_ = editor::makeMenuButton(QObject::tr("Add"), menu);
+        add_->setParent(tree_);
+        add_->adjustSize();
+        add_->raise();
+        // The viewport shrinks when a scroll bar shows up, without the panel resizing.
+        tree_->viewport()->installEventFilter(this);
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched == tree_->viewport() && event->type() == QEvent::Resize) {
+            placeAddButton();
+        }
+        return QWidget::eventFilter(watched, event);
+    }
+
+private:
+    entt::entity createAtSpawnPoint(const std::string_view name) {
+        engine::Scene& scene = context_.scene();
+        const entt::entity entity = scene.CreateEntity(name);
+        if (const editor::EditorCameraSubsystem* camera = context_.camera()) {
+            scene.GetTransform(entity).position = camera->GetSpawnPoint();
+        }
+        return entity;
+    }
+
+    void addEmpty() {
+        context_.selection().select(createAtSpawnPoint("Entity"));
+    }
+
+    void addCube() {
+        const entt::entity cube = createAtSpawnPoint("Cube");
+        // The built-in cube is one unit wide around its origin: lift it onto the ground.
+        context_.scene().GetTransform(cube).position += DirectX::SimpleMath::Vector3{0.0f, 0.5f, 0.0f};
+        // Asynchronous: the cube shows up once the mesh is loaded (immediately after the first one).
+        addMeshRenderer(context_, cube);
+        context_.selection().select(cube);
+    }
+
+    /// Deletes the selected entities, and with them their children.
+    void deleteSelected() {
+        engine::Scene& scene = context_.scene();
+        // A copy: the selection can change under a span while entities go.
+        const std::vector<entt::entity> entities(context_.selection().entities().begin(),
+                                                 context_.selection().entities().end());
+        for (const entt::entity entity : entities) {
+            if (scene.IsValid(entity)) {  // not already gone with its parent
+                scene.DestroyEntity(entity);
+            }
+        }
+        context_.selection().clear();
+    }
+
+    void placeAddButton() {
+        constexpr int Margin = 6;
+        const QRect area = tree_->viewport()->geometry();
+        add_->move(area.x() + area.width() - add_->width() - Margin, area.y() + area.height() - add_->height() - Margin);
+    }
+
+    editor::EditorContext& context_;
+    HierarchyTree* tree_ = nullptr;
+    QToolButton* add_ = nullptr;
+    QAction* delete_ = nullptr;
+};
+
 class SceneModule final : public editor::IEditorModule {
 public:
     [[nodiscard]] std::string_view name() const override {
@@ -135,35 +240,17 @@ public:
     }
 
     void startup(editor::EditorContext& context) override {
-        context_ = &context;
-        auto* hierarchy = new HierarchyPanel(context.scene(), context.selection());
+        auto* hierarchy = new HierarchyPanel(context);
         context.addPanel(QStringLiteral("HierarchyPanel"), QObject::tr("Hierarchy"), hierarchy, Qt::LeftDockWidgetArea);
 
         auto* inspector = new InspectorPanel(context);
         context.addPanel(QStringLiteral("InspectorPanel"), QObject::tr("Inspector"), inspector, Qt::RightDockWidgetArea);
 
-        auto* add_cube = context.menu(QObject::tr("&Scene"))->addAction(QObject::tr("Add &Cube"));
-        context.toolBar()->addAction(add_cube);
-        QObject::connect(add_cube, &QAction::triggered, add_cube, [this] { addCube(); });
+        // Edits during play would land in the running copy, which Stop throws away.
+        const editor::PlaySession* session = &context.playSession();
+        QObject::connect(session, &editor::PlaySession::playingChanged, hierarchy, &QWidget::setDisabled);
+        QObject::connect(session, &editor::PlaySession::playingChanged, inspector, &QWidget::setDisabled);
     }
-
-private:
-    void addCube() {
-        engine::Scene& scene = context_->scene();
-        const int index = cube_count_++;
-        const entt::entity cube = scene.CreateEntity("Cube " + std::to_string(index + 1));
-        // Rows of five in front of the camera, so new cubes don't overlap.
-        scene.GetTransform(cube).position = DirectX::SimpleMath::Vector3{
-            static_cast<float>(index % 5 - 2) * 1.5f, 0.5f, -static_cast<float>(index / 5) * 1.5f};
-        // Asynchronous: the cube shows up once the mesh is loaded (immediately after the first one).
-        scene.AddComponent<engine::MeshRenderer>(cube,
-            context_->engine().GetSceneAssets().RequestMesh(engine::BuiltinAssets::CubeMesh),
-            context_->engine().GetSceneAssets().RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance));
-        context_->selection().select(cube);
-    }
-
-    editor::EditorContext* context_ = nullptr;
-    int cube_count_ = 0;
 };
 
 }  // namespace

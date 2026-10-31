@@ -48,6 +48,8 @@ void CopyFileAsset(const std::filesystem::path& from, const std::filesystem::pat
 
 }  // namespace
 
+
+
 bool MoveAsset(const std::filesystem::path& from, const std::filesystem::path& to, std::string& error) {
     std::error_code ec;
     const auto status = std::filesystem::status(from, ec);

@@ -217,7 +217,7 @@ void Scene::AttachController(entt::entity entity, ControllerDefinition definitio
     (void)inserted;
     auto& slot = it->second;
     std::string error;
-    if (ValidateController(slot.definition, error)) {
+    if (controllerInstantiationEnabled_ && ValidateController(slot.definition, error)) {
         try {
             slot.instance = controllerTypes_.at(slot.definition.type).create();
             if (slot.instance) {
@@ -347,6 +347,18 @@ bool Scene::RestoreControllerGameState(entt::entity entity, const StateValue& st
     if (!it->second.instance) { pendingGameStates_[entity] = state; error = "controller is unavailable; state retained"; return true; }
     try { it->second.instance->LoadGameState(state); error.clear(); return true; }
     catch (const std::exception& e) { error = e.what(); return false; }
+}
+
+void Scene::SetControllerInstantiationEnabled(bool enabled) {
+    controllerInstantiationEnabled_ = enabled;
+    if (!enabled) {
+        SetControllersActive(false);
+        return;
+    }
+    std::vector<std::pair<entt::entity, ControllerDefinition>> pending;
+    for (const auto& [entity, slot] : controllers_)
+        if (!slot.instance) pending.emplace_back(entity, slot.definition);
+    for (auto& [entity, definition] : pending) AttachController(entity, std::move(definition));
 }
 
 void Scene::SetControllersActive(bool active) {

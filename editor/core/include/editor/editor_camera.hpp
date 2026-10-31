@@ -35,6 +35,7 @@ public:
     /// viewpoint when the scene has none. Call after a scene was opened.
     void ResetToSceneCamera();
     void SetInputActive(bool active);
+    void SetNavigationEnabled(bool enabled) { navigation_enabled_ = enabled; }
 
     /// The viewpoint, in world space.
     [[nodiscard]] DirectX::SimpleMath::Vector3 GetPosition() const noexcept;
@@ -42,6 +43,9 @@ public:
     [[nodiscard]] DirectX::SimpleMath::Vector3 GetForward() const noexcept;
     /// Unit vector to the view's right, kept horizontal.
     [[nodiscard]] DirectX::SimpleMath::Vector3 GetRight() const noexcept;
+    /// Where new entities go: the ground (y = 0) where the view meets it nearby, else a few
+    /// units ahead.
+    [[nodiscard]] DirectX::SimpleMath::Vector3 GetSpawnPoint() const noexcept;
 
 private:
     void TakeSceneCamera();
@@ -57,6 +61,7 @@ private:
     /// Units per second.
     float speed_ = 5.0f;
     bool reset_pending_ = true;
+    bool navigation_enabled_ = true;
 };
 
 }  // namespace editor

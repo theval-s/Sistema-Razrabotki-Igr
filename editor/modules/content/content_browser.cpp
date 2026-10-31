@@ -52,6 +52,7 @@
 
 #include <editor/asset_icons.hpp>
 #include <editor/editor_context.hpp>
+#include <editor/menu_button.hpp>
 #include <editor/paths.hpp>
 #include <editor/scene_document.hpp>
 
@@ -71,6 +72,7 @@ constexpr engine::CatalogAssetKind FilterKinds[] = {
     engine::CatalogAssetKind::Scene,    engine::CatalogAssetKind::Mesh,
     engine::CatalogAssetKind::Texture,  engine::CatalogAssetKind::Material,
     engine::CatalogAssetKind::MaterialInstance, engine::CatalogAssetKind::Shader,
+    engine::CatalogAssetKind::Script,
 };
 
 /// Files dragged in from outside the editor are copied, whatever the drag proposed: reporting
@@ -264,9 +266,7 @@ QWidget* ContentBrowser::buildTopBar() {
     import_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     import_button_->setAutoRaise(true);
     layout->addWidget(import_button_);
-    new_button_ = new QToolButton;
-    new_button_->setText(tr("New"));
-    new_button_->setPopupMode(QToolButton::InstantPopup);
+    new_button_ = editor::makeMenuButton(tr("New"));
     new_button_->setAutoRaise(true);
     layout->addWidget(new_button_);
     add_separator();
@@ -408,6 +408,8 @@ void ContentBrowser::buildActions() {
                          [this] { newMaterialInstance(); });
     new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::Scene), tr("Scene..."), this,
                          &ContentBrowser::newScene);
+    new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::Script), tr("Script..."), this,
+                         &ContentBrowser::newScript);
     new_button_->setMenu(new_menu_.get());
 }
 
@@ -918,6 +920,14 @@ void ContentBrowser::newScene() {
     NewAssetDialog dialog(tr("New Scene"), folder_, QStringLiteral(".scene.json"), tr("New Scene"), window());
     if (dialog.exec() == QDialog::Accepted &&
         context_.sceneDocument().createInteractive(window(), editor::toPath(dialog.path()))) {
+        select({dialog.path()});
+    }
+}
+
+void ContentBrowser::newScript() {
+    // No spaces by default: require() names map onto file names.
+    NewAssetDialog dialog(tr("New Script"), folder_, QStringLiteral(".lua"), QStringLiteral("NewScript"), window());
+    if (dialog.exec() == QDialog::Accepted && operations_.createScript(dialog.path())) {
         select({dialog.path()});
     }
 }

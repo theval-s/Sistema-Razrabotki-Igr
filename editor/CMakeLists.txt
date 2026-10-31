@@ -128,6 +128,7 @@ endfunction()
 
 add_subdirectory(modules/scene)
 add_subdirectory(modules/content)
+add_subdirectory(modules/scripting)
 
 # --- Install / deploy ------------------------------------------------------
 

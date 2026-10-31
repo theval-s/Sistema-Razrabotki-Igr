@@ -6,6 +6,9 @@
 
 namespace editor {
 
+/// Drag-and-drop format of asset files dragged from the Content Browser: absolute paths, one per line.
+inline const QString AssetPathsMimeType = QStringLiteral("application/x-sri-asset-paths");
+
 [[nodiscard]] inline std::filesystem::path toPath(const QString& path) {
     return std::filesystem::path(path.toStdWString());
 }

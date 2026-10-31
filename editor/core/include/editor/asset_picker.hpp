@@ -9,13 +9,17 @@
 
 #include <editor/editor_core_export.hpp>
 
+class QDragEnterEvent;
+class QDropEvent;
+class QMimeData;
 class QWidget;
 
 namespace editor {
 
 /// Chooses an asset of one kind from the catalog, listed by path. Typing filters the list.
 /// The list is read again from the catalog each time it drops down, so assets imported meanwhile
-/// show up; `catalog` must outlive the picker.
+/// show up; `catalog` must outlive the picker. An asset of its kind dragged from the Content
+/// Browser can be dropped on it, which counts as the user's choice.
 class EDITOR_CORE_API AssetPicker : public QComboBox {
     Q_OBJECT
 
@@ -37,8 +41,14 @@ public:
 
     void showPopup() override;
 
+protected:
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
+
 private:
     void populate();
+    /// The catalog entry of the single asset of our kind in a drag, or null.
+    [[nodiscard]] const engine::CatalogEntry* droppedEntry(const QMimeData* mime) const;
 
     const engine::AssetCatalog& catalog_;
     engine::CatalogAssetKind kind_;

@@ -18,7 +18,7 @@ struct AssetReference {
     std::string path; // diagnostic hint only; never used as a fallback lookup key
 };
 
-enum class CatalogAssetKind { Mesh, Texture, Shader, Material, MaterialInstance, Scene };
+enum class CatalogAssetKind { Mesh, Texture, Shader, Material, MaterialInstance, Scene, Script };
 
 struct AssetMetadata {
     AssetUuid id;

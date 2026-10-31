@@ -4,7 +4,6 @@
 #include <QFileInfo>
 #include <QString>
 
-#include <utility>
 #include <vector>
 
 #include <SimpleMath.h>
@@ -26,10 +25,6 @@ namespace {
 
 using DirectX::SimpleMath::Vector3;
 
-/// how far from camera pov
-constexpr float SpawnDistance = 5.0f;
-/// Farthest point on the ground (y = 0) that new entities are put on.
-constexpr float MaxGroundDistance = 20.0f;
 /// Between entities added together.
 constexpr float Spacing = 1.5f;
 
@@ -55,23 +50,6 @@ QString entityName(const engine::CatalogEntry& mesh) {
     const QFileInfo file(editor::toQString(mesh.source));
     const QString stem = splitAssetName(file.fileName(), false).first;
     return stem.compare(QLatin1String("model"), Qt::CaseInsensitive) == 0 ? file.dir().dirName() : stem;
-}
-
-/// Just some distance from POV or on the ground
-std::pair<Vector3, Vector3> spawnPoint(editor::EditorContext& context) {
-    const editor::EditorCameraSubsystem* camera = context.camera();
-    if (camera == nullptr) {
-        return {Vector3::Zero, Vector3::Right};
-    }
-    const Vector3 position = camera->GetPosition();
-    const Vector3 forward = camera->GetForward();
-    if (forward.y < 0.0f) {
-        const float distance = -position.y / forward.y;
-        if (distance > 0.0f && distance <= MaxGroundDistance) {
-            return {position + forward * distance, camera->GetRight()};
-        }
-    }
-    return {position + forward * SpawnDistance, camera->GetRight()};
 }
 
 }  // namespace
@@ -104,7 +82,9 @@ int addToScene(editor::EditorContext& context, const QStringList& paths) {
         return 0;
     }
 
-    const auto [center, right] = spawnPoint(context);
+    const editor::EditorCameraSubsystem* camera = context.camera();
+    const Vector3 center = camera != nullptr ? camera->GetSpawnPoint() : Vector3::Zero;
+    const Vector3 right = camera != nullptr ? camera->GetRight() : Vector3::Right;
     engine::Scene& scene = context.scene();
     std::vector<entt::entity> added;
     for (std::size_t i = 0; i < meshes.size(); ++i) {

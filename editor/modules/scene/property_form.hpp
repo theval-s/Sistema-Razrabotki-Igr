@@ -42,6 +42,8 @@ public:
     void addText(const QString& label, std::function<QString()> text);
     /// Any other widget, which edits on its own; `refresh` is called by refresh().
     void addRow(const QString& label, QWidget* widget, std::function<void()> refresh);
+    /// Same, without a label: the widget spans both columns.
+    void addRow(QWidget* widget, std::function<void()> refresh);
 
     /// Scene -> fields.
     void refresh();

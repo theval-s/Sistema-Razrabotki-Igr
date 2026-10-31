@@ -3,8 +3,10 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <engine/engine_export.hpp>
+#include <engine/scripting/AutoloadDefinition.hpp>
 
 namespace engine {
 
@@ -15,6 +17,7 @@ struct Project {
     std::filesystem::path file;
     std::string name;
     std::string startupScene;
+    std::vector<AutoloadDefinition> autoloads;
 
     [[nodiscard]] ENGINE_API std::filesystem::path Root() const;
     [[nodiscard]] ENGINE_API std::filesystem::path ContentDir() const;

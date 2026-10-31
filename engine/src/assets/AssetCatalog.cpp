@@ -26,6 +26,7 @@ std::string_view KindName(CatalogAssetKind kind) {
     case CatalogAssetKind::Material: return "material";
     case CatalogAssetKind::MaterialInstance: return "materialInstance";
     case CatalogAssetKind::Scene: return "scene";
+    case CatalogAssetKind::Script: return "script";
     }
     return {};
 }
@@ -92,7 +93,7 @@ AssetMetadata MetadataFromJson(const Json& j) {
     const auto kind = j.at("kind").get<std::string>();
     bool found = false;
     for (const auto candidate : {CatalogAssetKind::Mesh, CatalogAssetKind::Texture, CatalogAssetKind::Shader,
-                                  CatalogAssetKind::Material, CatalogAssetKind::MaterialInstance, CatalogAssetKind::Scene}) {
+                                  CatalogAssetKind::Material, CatalogAssetKind::MaterialInstance, CatalogAssetKind::Scene, CatalogAssetKind::Script}) {
         if (kind == KindName(candidate)) { meta.kind = candidate; found = true; break; }
     }
     if (!found || (j.contains("centerOnLoad") && meta.kind != CatalogAssetKind::Mesh))
@@ -107,6 +108,10 @@ AssetMetadata MetadataFromJson(const Json& j) {
 
 std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& path) {
     const std::string name = NormalizeName(ToGenericUtf8(path.filename()));
+
+    // exclude LuaLS file recognition
+    if (name.ends_with(".d.lua")) return std::nullopt;
+
     if (name.ends_with(".material-instance.json")) return CatalogAssetKind::MaterialInstance;
     if (name.ends_with(".material.json")) return CatalogAssetKind::Material;
     if (name.ends_with(".scene.json")) return CatalogAssetKind::Scene;
@@ -116,6 +121,7 @@ std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& 
         ext == ".tiff" || ext == ".dds" || ext == ".bmp") return CatalogAssetKind::Texture;
     if (ext == ".fbx" || ext == ".gltf" || ext == ".glb" || ext == ".obj" ||
         ext == ".dae" || ext == ".blend" || ext == ".ply") return CatalogAssetKind::Mesh;
+    if (ext == ".lua") return CatalogAssetKind::Script;
     return std::nullopt;
 }
 

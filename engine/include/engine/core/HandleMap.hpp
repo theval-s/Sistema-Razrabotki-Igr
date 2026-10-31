@@ -92,6 +92,26 @@ struct HandleMap {
     void ForEach(F&& visit) const {
         for (const auto& slot : storage_) if (slot.Used()) visit(slot.val.value);
     }
+
+    /// Handles of all stored values, in slot order. A copy, so values may be added or removed
+    /// while going through it; check each with Contains() or TryGet().
+    [[nodiscard]] std::vector<Handle> Handles() const {
+        std::vector<Handle> handles;
+        Handles(handles);
+        return handles;
+    }
+
+    /// Same, into `handles` (replacing its contents), so a caller doing this every frame can keep
+    /// reusing one buffer.
+    void Handles(std::vector<Handle>& handles) const {
+        handles.clear();
+        handles.reserve(Size());
+        for (std::size_t id = 0; id < storage_.size(); ++id) {
+            if (storage_[id].Used()) {
+                handles.emplace_back(static_cast<uint32_t>(id), storage_[id].generation);
+            }
+        }
+    }
     
     bool Remove(Handle h) {
         if (!Contains(h)) {

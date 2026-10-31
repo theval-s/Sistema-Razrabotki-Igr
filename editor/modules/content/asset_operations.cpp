@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -37,6 +38,32 @@ namespace {
 QString fromUtf8(const std::string& text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
 }
+
+/// TODO: maybe extract it to a separate file?
+constexpr std::string_view ScriptTemplate = R"(-- Fields and functions belong to this script instance.
+-- require is for modules shared throughout the current Play session.
+-- local settings = require("shared.settings")
+
+-- Exposed per-object settings, editable in Script > Properties in the Inspector.
+-- Use literal strings, numbers or booleans. Read these values inside callbacks.
+Properties = {
+    -- horseName = "Horse",
+    -- speed = 2,
+}
+
+elapsed = 0.0
+
+function OnStart()
+    -- Initialize this object's behavior.
+end
+
+function OnUpdate(deltaSeconds)
+    elapsed = elapsed + deltaSeconds
+end
+
+function OnDestroy()
+    -- Release this object's gameplay resources.
+end)";
 
 /// Ids of the assets in `paths`, including everything inside the folders among them.
 std::vector<engine::AssetUuid> idsIn(const QStringList& paths) {
@@ -385,6 +412,16 @@ bool AssetOperations::updateMaterialInstance(const QString& path,
     }
     report(tr("Edit Material Instance"), errors);
     return errors.isEmpty();
+}
+
+bool AssetOperations::createScript(const QString& path) {
+    // "name.d.lua" would be a LuaLS declaration file, which the catalog skips.
+    if (engine::CatalogKindForFile(editor::toPath(path)) != engine::CatalogAssetKind::Script) {
+        report(tr("New Script"), {tr("%1 is not a script name; .d.lua files are declarations.")
+                                      .arg(QFileInfo(path).fileName())});
+        return false;
+    }
+    return createFile(tr("New Script"), path, std::string(ScriptTemplate), engine::CatalogAssetKind::Script);
 }
 
 void AssetOperations::adoptNewFiles() {

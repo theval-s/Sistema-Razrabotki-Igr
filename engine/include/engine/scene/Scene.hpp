@@ -19,6 +19,7 @@
 
 #include <engine/engine_export.hpp>
 #include <engine/scene/Components.hpp>
+#include <engine/scripting/ScriptComponent.hpp>
 #include <engine/scene/Controller.hpp>
 #include <engine/scene/SceneQueries.hpp>
 #include <engine/rendering/RenderComponents.hpp>
@@ -88,6 +89,7 @@ public:
     [[nodiscard]] std::optional<StateValue> CaptureControllerGameState(entt::entity entity, std::string& error) const;
     [[nodiscard]] bool RestoreControllerGameState(entt::entity entity, const StateValue& state, std::string& error);
     void SetControllersActive(bool active);
+    void SetControllerInstantiationEnabled(bool enabled);
     void UpdateControllers(double deltaSeconds);
     [[nodiscard]] bool IsInControllerCallback() const noexcept { return inControllerCallback_; }
     enum class LifecycleEvent { ComponentRemoving, EntityDestroying };
@@ -199,7 +201,7 @@ private:
     static constexpr bool IsSerializableComponent = std::is_same_v<T, MeshRenderer> ||
         std::is_same_v<T, Camera> || std::is_same_v<T, DirectionalLight> ||
         std::is_same_v<T, PointLight> || std::is_same_v<T, SpotLight> || std::is_same_v<T, Bounds> ||
-        std::is_same_v<T, GamePersistence>;
+        std::is_same_v<T, GamePersistence> || std::is_same_v<T, ScriptComponent>;
     /// Logs and returns false for an invalid entity. `caller` names the public function.
     [[nodiscard]] bool CheckEntity(entt::entity entity, std::string_view caller) const;
     void Detach(entt::entity entity);
@@ -236,6 +238,7 @@ private:
     std::unordered_map<std::size_t, LifecycleHandler> lifecycleObservers_;
     std::size_t nextLifecycleObserver_ = 0;
     bool controllersActive_ = false;
+    bool controllerInstantiationEnabled_ = true;
     bool inControllerCallback_ = false;
     std::size_t destructionDepth_ = 0;
     std::optional<EntityUuid> activeCameraId_;

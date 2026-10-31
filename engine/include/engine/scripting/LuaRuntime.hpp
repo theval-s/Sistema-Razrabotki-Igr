@@ -1,0 +1,121 @@
+
+#pragma once
+
+#include <engine/engine_export.hpp>
+#include <engine/assets/AssetCatalog.hpp>
+#include <engine/scripting/ScriptProperties.hpp>
+
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <functional>
+#include <string>
+#include <string_view>
+#include <optional>
+#include <SimpleMath.h>
+#include <entt/entity/entity.hpp>
+
+namespace engine {
+    class Scene;
+    struct ENGINE_API ScriptEntityHandle {
+        Scene* scene = nullptr;
+        entt::entity entity = entt::null;
+        std::weak_ptr<void> lifetime;
+        [[nodiscard]] bool IsValid() const;
+        [[nodiscard]] DirectX::SimpleMath::Vector3 GetPosition() const;
+        void SetPosition(DirectX::SimpleMath::Vector3 position) const;
+    };
+
+    /// Transient handle: a HandleMap slot and generation, plus the runtime session it belongs to
+    /// (every session starts a new map). Never serialized.
+    class InstanceId final {
+    public:
+        [[nodiscard]] bool IsValid() const noexcept { return session_ != 0; }
+        [[nodiscard]] bool operator==(const InstanceId&) const noexcept = default;
+    private:
+        friend class LuaRuntime;
+        std::uint32_t slot_ = 0;
+        std::int32_t generation_ = 0;
+        std::uint64_t session_ = 0;
+    };
+
+    struct ScriptInstanceDesc {
+        // Already resolved by the caller from CatalogEntry::source, never AssetReference::path.
+        std::filesystem::path source;
+        AssetUuid assetId;
+        std::string entityId;
+        // Empty for entity-owned instances. Autoloads set this and leave entityId empty.
+        std::string autoloadName{};
+        std::optional<ScriptEntityHandle> owner{};
+        ScriptPropertyMap properties;
+    };
+
+    class ENGINE_API LuaRuntime final {
+    public:
+        LuaRuntime();
+        ~LuaRuntime();
+
+        LuaRuntime(const LuaRuntime&) = delete;
+        LuaRuntime& operator=(const LuaRuntime&) = delete;
+
+        LuaRuntime(LuaRuntime&&) = delete;
+        LuaRuntime& operator=(LuaRuntime&&) = delete;
+
+        bool Initialize(std::string& error);
+        /// Pins require to this absolute project content root for the session.
+        /// The compatibility overload above leaves filesystem require unconfigured.
+        bool Initialize(const std::filesystem::path& root, std::string& error);
+
+        void Shutdown() noexcept;
+
+        [[nodiscard]] bool IsInitialized() const noexcept;
+        using LevelLoader = std::function<bool(std::string_view, std::string&)>;
+        void SetLevelLoader(LevelLoader loader);
+        void ClearEntityInstances() noexcept { DestroyEntityInstances(); }
+
+        /// Executes the file anew in a per-instance environment. Top-level scripts return nothing
+        /// and define OnStart(), OnUpdate(dt), OnDestroy(). Returned-table scripts remain supported
+        /// with their original callbacks receiving self.
+        /// Table literals, including nested defaults, are created separately for every instance.
+        /// All three lifecycle callbacks are optional in either format.
+        /// Output is unchanged on failure. Does not start the instance.
+        bool CreateInstance(const ScriptInstanceDesc& desc, InstanceId& instance, std::string& error);
+        /// Starts once; a repeated successful start does not invoke OnStart again.
+        bool StartInstance(InstanceId instance, std::string& error);
+        bool UpdateInstance(InstanceId instance, double deltaSeconds, std::string& error);
+        /// Calls OnDestroy only for successfully started, non-faulted instances, then releases references.
+        /// Repeated destruction in the same session succeeds. Invalid/stale session IDs fail.
+        /// Cleanup still completes when OnDestroy fails; faulted instances skip all Lua callbacks.
+        bool DestroyInstance(InstanceId instance, std::string& error);
+
+        bool ExecuteFile(
+            const std::filesystem::path& path,
+            std::string& error
+        );
+
+        bool ExecuteString(
+            std::string_view source,
+            std::string_view chunkName,
+            std::string& error
+        );
+
+        bool CallFunction(
+            std::string_view functionName,
+            std::string& error
+        );
+
+        bool CallUpdate(
+            double deltaSeconds,
+            std::string& error
+        );
+
+    private:
+        friend class ScriptSubsystem;
+        /// Finish entity-owned instances while autoload services and shared modules still exist.
+        void DestroyEntityInstances() noexcept;
+        bool UpdateInstances(double deltaSeconds, std::string& error);
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
+    };
+
+}

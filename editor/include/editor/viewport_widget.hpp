@@ -30,6 +30,7 @@ public:
     /// nullptr = input goes nowhere.
     void setInput(engine::InputSubsystem* input);
     void setCamera(EditorCameraSubsystem* camera);
+    void setPlaying(bool playing);
 
     /// No Qt painting at all, so it can't draw over the swap chain.
     [[nodiscard]] QPaintEngine* paintEngine() const override;
@@ -63,6 +64,7 @@ private:
     std::optional<QPoint> last_cursor_{};
     /// Right button held: cursor hidden and warped back to last_cursor_.
     bool cursor_pinned_ = false;
+    bool playing_ = false;
 };
 
 }  // namespace editor

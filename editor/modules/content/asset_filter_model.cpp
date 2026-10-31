@@ -14,8 +14,6 @@ namespace content {
 
 namespace {
 
-const QString PathsMimeType = QStringLiteral("application/x-sri-asset-paths");
-
 std::optional<engine::CatalogAssetKind> kindOf(const QFileSystemModel& files, const QModelIndex& index) {
     return files.isDir(index) ? std::nullopt : engine::CatalogKindForFile(editor::toPath(files.filePath(index)));
 }
@@ -57,8 +55,8 @@ void AssetFilterModel::setWritable(const bool writable) {
 
 QStringList AssetFilterModel::droppedPaths(const QMimeData* data) {
     QStringList paths;
-    if (data->hasFormat(PathsMimeType)) {
-        paths = QString::fromUtf8(data->data(PathsMimeType)).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    if (data->hasFormat(editor::AssetPathsMimeType)) {
+        paths = QString::fromUtf8(data->data(editor::AssetPathsMimeType)).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
     } else {
         for (const QUrl& url : data->urls()) {
             if (url.isLocalFile()) {
@@ -104,7 +102,7 @@ bool AssetFilterModel::setData(const QModelIndex& index, const QVariant& value, 
 }
 
 QStringList AssetFilterModel::mimeTypes() const {
-    return {PathsMimeType, QStringLiteral("text/uri-list")};
+    return {editor::AssetPathsMimeType, QStringLiteral("text/uri-list")};
 }
 
 QMimeData* AssetFilterModel::mimeData(const QModelIndexList& indexes) const {
@@ -115,7 +113,7 @@ QMimeData* AssetFilterModel::mimeData(const QModelIndexList& indexes) const {
         }
     }
     auto* data = new QMimeData;
-    data->setData(PathsMimeType, paths.join(QLatin1Char('\n')).toUtf8());
+    data->setData(editor::AssetPathsMimeType, paths.join(QLatin1Char('\n')).toUtf8());
     return data;
 }
 

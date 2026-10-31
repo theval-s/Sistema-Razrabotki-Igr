@@ -8,6 +8,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(spdlog CONFIG REQUIRED)
 find_package(directxtk CONFIG REQUIRED)
 
+# --- Lua scripting ----------------------------------------------------------
+
+find_package(Lua 5.4 EXACT REQUIRED)
+find_package(sol2 CONFIG REQUIRED)
+
+if(NOT TARGET Lua::Lua)
+    add_library(Lua::Lua INTERFACE IMPORTED)
+
+    set_target_properties(Lua::Lua PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${LUA_INCLUDE_DIR}"
+        INTERFACE_LINK_LIBRARIES "${LUA_LIBRARIES}"
+    )
+endif()
+
 set(ENGINE_PUBLIC_HEADERS
     include/engine/core/HandleMap.hpp
     include/engine/core/ResourceID.hpp
@@ -37,9 +51,15 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/rendering/resources/VertexLayoutCache.hpp
     include/engine/rendering/UglyUtils.hpp
     include/engine/window.hpp
+    include/engine/scripting/LuaRuntime.hpp
+    include/engine/scripting/ScriptComponent.hpp
+    include/engine/scripting/ScriptProperties.hpp
+    include/engine/scripting/AutoloadDefinition.hpp
+    include/engine/scripting/ScriptSubsystem.hpp
 )
 
 set(ENGINE_SOURCES
+    src/scripting/ScriptProperties.cpp
     src/core/HandleMap.cpp
     src/core/ResourceID.cpp
     src/core/Uuid.cpp
@@ -66,6 +86,9 @@ set(ENGINE_SOURCES
     src/rendering/resources/VertexLayoutCache.cpp
     src/rendering/UglyUtils.cpp
     src/window.cpp
+    src/scripting/LuaRuntime.cpp
+    src/scripting/AutoloadDefinition.cpp
+    src/scripting/ScriptSubsystem.cpp
 )
 
 set(ENGINE_SHADERS
@@ -278,7 +301,7 @@ foreach(engine_target IN ITEMS engine engine_static)
         target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
         # Assimp is PRIVATE on purpose: AssimpMeshImporter.cpp is its only user and no
         # public header mentions it. Static consumers still get it via the link-only interface.
-        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid)
+        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid Lua::Lua sol2::sol2)
     endif()
 endforeach()
 

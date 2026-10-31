@@ -40,6 +40,8 @@ public:
     void markDirty();
     /// Forgets unsaved changes, e.g. after building a scene in code.
     void markClean();
+    void beginRuntime();
+    void endRuntime();
     /// Follows the open file to `file` after it was renamed or moved on disk.
     void relocate(const std::filesystem::path& file);
 
@@ -85,6 +87,8 @@ private:
     std::filesystem::path file_;
     std::uint64_t clean_revision_ = 0;
     bool marked_dirty_ = false;
+    bool runtime_ = false;
+    bool runtime_dirty_ = false;
     // What stateChanged() last reported.
     std::filesystem::path reported_file_;
     bool reported_dirty_ = false;
