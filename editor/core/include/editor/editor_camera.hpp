@@ -43,6 +43,9 @@ public:
     [[nodiscard]] DirectX::SimpleMath::Vector3 GetForward() const noexcept;
     /// Unit vector to the view's right, kept horizontal.
     [[nodiscard]] DirectX::SimpleMath::Vector3 GetRight() const noexcept;
+    /// Where new entities go: the ground (y = 0) where the view meets it nearby, else a few
+    /// units ahead.
+    [[nodiscard]] DirectX::SimpleMath::Vector3 GetSpawnPoint() const noexcept;
 
 private:
     void TakeSceneCamera();

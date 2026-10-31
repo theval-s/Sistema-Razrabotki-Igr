@@ -27,6 +27,11 @@ constexpr float DollyStep = 1.0f;  // units per wheel notch
 const Vector3 DefaultPosition{0.0f, 4.0f, 9.0f};
 constexpr float DefaultPitch = -0.4f;
 
+/// How far ahead new entities go when the view doesn't hit the ground nearby.
+constexpr float SpawnDistance = 5.0f;
+/// Farthest point on the ground (y = 0) that new entities are put on.
+constexpr float MaxGroundDistance = 20.0f;
+
 }  // namespace
 
 std::string_view EditorCameraSubsystem::GetName() const {
@@ -82,6 +87,17 @@ Vector3 EditorCameraSubsystem::GetForward() const noexcept {
 
 Vector3 EditorCameraSubsystem::GetRight() const noexcept {
     return Vector3::Transform(Vector3::Right, Quaternion::CreateFromYawPitchRoll(yaw_, 0.0f, 0.0f));
+}
+
+Vector3 EditorCameraSubsystem::GetSpawnPoint() const noexcept {
+    const Vector3 forward = GetForward();
+    if (forward.y < 0.0f) {
+        const float distance = -position_.y / forward.y;
+        if (distance > 0.0f && distance <= MaxGroundDistance) {
+            return position_ + forward * distance;
+        }
+    }
+    return position_ + forward * SpawnDistance;
 }
 
 void EditorCameraSubsystem::TakeSceneCamera() {

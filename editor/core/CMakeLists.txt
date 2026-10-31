@@ -12,6 +12,7 @@ add_library(editor_core SHARED
     src/asset_picker.cpp
     src/editor_camera.cpp
     src/editor_context.cpp
+    src/menu_button.cpp
     src/play_session.cpp
     src/scene_document.cpp
     src/selection.cpp
@@ -22,6 +23,7 @@ add_library(editor_core SHARED
     include/editor/lua_definitions.hpp
     include/editor/editor_context.hpp
     include/editor/editor_module.hpp
+    include/editor/menu_button.hpp
     include/editor/paths.hpp
     include/editor/play_session.hpp
     include/editor/scene_document.hpp

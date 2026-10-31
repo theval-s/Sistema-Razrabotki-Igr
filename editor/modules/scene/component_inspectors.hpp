@@ -29,6 +29,10 @@ struct ComponentInspector {
     void (*remove)(editor::EditorContext& context, entt::entity entity) = nullptr;
 };
 
+/// Gives `entity` a MeshRenderer drawing the built-in cube with the default material, referenced
+/// by asset id so it saves.
+void addMeshRenderer(editor::EditorContext& context, entt::entity entity);
+
 /// Every component type the inspector knows, in the order it lists them.
 [[nodiscard]] std::span<const ComponentInspector> componentInspectors();
 

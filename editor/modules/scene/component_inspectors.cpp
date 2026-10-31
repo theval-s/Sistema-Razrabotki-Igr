@@ -452,8 +452,20 @@ void removeComponent(editor::EditorContext& context, const entt::entity entity) 
     context.scene().RemoveComponent<T>(entity);
 }
 
-/// A built-in cube with the default material, as Add Cube makes, but with authored references so
-/// it saves.
+/// The mesh's own bounds if it has one loaded, a unit cube around the origin otherwise.
+void addBounds(editor::EditorContext& context, const entt::entity entity) {
+    engine::Scene& scene = context.scene();
+    engine::Bounds bounds{{Vector3{-0.5f, -0.5f, -0.5f}, Vector3{0.5f, 0.5f, 0.5f}}};
+    if (const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity)) {
+        if (const auto mesh = context.engine().GetSceneAssets().Peek(renderer->mesh)) {
+            bounds.local = mesh->bounds;
+        }
+    }
+    scene.AddComponent<engine::Bounds>(entity, bounds);
+}
+
+}  // namespace
+
 void addMeshRenderer(editor::EditorContext& context, const entt::entity entity) {
     engine::AssetSystem& assets = context.engine().GetSceneAssets();
     const engine::AssetCatalog& catalog = assets.GetCatalog();
@@ -472,20 +484,6 @@ void addMeshRenderer(editor::EditorContext& context, const entt::entity entity) 
     }
     context.scene().AddComponent<engine::MeshRenderer>(entity, std::move(renderer));
 }
-
-/// The mesh's own bounds if it has one loaded, a unit cube around the origin otherwise.
-void addBounds(editor::EditorContext& context, const entt::entity entity) {
-    engine::Scene& scene = context.scene();
-    engine::Bounds bounds{{Vector3{-0.5f, -0.5f, -0.5f}, Vector3{0.5f, 0.5f, 0.5f}}};
-    if (const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity)) {
-        if (const auto mesh = context.engine().GetSceneAssets().Peek(renderer->mesh)) {
-            bounds.local = mesh->bounds;
-        }
-    }
-    scene.AddComponent<engine::Bounds>(entity, bounds);
-}
-
-}  // namespace
 
 std::span<const ComponentInspector> componentInspectors() {
     // maybe not necessary? I doubt we're gonna be caring about translation soon

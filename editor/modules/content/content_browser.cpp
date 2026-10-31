@@ -52,6 +52,7 @@
 
 #include <editor/asset_icons.hpp>
 #include <editor/editor_context.hpp>
+#include <editor/menu_button.hpp>
 #include <editor/paths.hpp>
 #include <editor/scene_document.hpp>
 
@@ -265,9 +266,7 @@ QWidget* ContentBrowser::buildTopBar() {
     import_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     import_button_->setAutoRaise(true);
     layout->addWidget(import_button_);
-    new_button_ = new QToolButton;
-    new_button_->setText(tr("New"));
-    new_button_->setPopupMode(QToolButton::InstantPopup);
+    new_button_ = editor::makeMenuButton(tr("New"));
     new_button_->setAutoRaise(true);
     layout->addWidget(new_button_);
     add_separator();
