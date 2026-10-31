@@ -8,9 +8,6 @@
 #include <QDesktopServices>
 #include <QUrl>
 #include <QPushButton>
-#include <QDragEnterEvent>
-#include <QDropEvent>
-#include <QMimeData>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -254,39 +251,6 @@ void buildGamePersistence(PropertyForm& form, editor::EditorContext& context, co
                  field(scene, entity, &engine::GamePersistence::controllerState));
 }
 
-class ScriptPicker final : public editor::AssetPicker {
-public:
-    explicit ScriptPicker(const engine::AssetCatalog& catalog)
-        : AssetPicker(catalog, engine::CatalogAssetKind::Script, QObject::tr("None")), catalog_(catalog) {
-        setAcceptDrops(true);
-        lineEdit()->setAcceptDrops(false);
-    }
-protected:
-    const engine::CatalogEntry* dropped(const QMimeData* mime) const {
-        if (!mime->hasFormat("application/x-sri-asset-paths")) return nullptr;
-        const auto paths = QString::fromUtf8(mime->data("application/x-sri-asset-paths")).split('\n', Qt::SkipEmptyParts);
-        if (paths.size() != 1) return nullptr;
-        const auto path = engine::FromUtf8(paths.front().toStdString());
-        for (const auto* entry : catalog_.List(engine::CatalogAssetKind::Script)) {
-            if (entry->source == path) return entry;
-        }
-        return nullptr;
-    }
-    void dragEnterEvent(QDragEnterEvent* event) override {
-        if (dropped(event->mimeData())) { event->setDropAction(Qt::CopyAction); event->accept(); }
-    }
-    void dropEvent(QDropEvent* event) override {
-        if (const auto* entry = dropped(event->mimeData())) {
-            reload();
-            selectId(entry->metadata.id);
-            event->setDropAction(Qt::CopyAction);
-            event->accept();
-        }
-    }
-private:
-    const engine::AssetCatalog& catalog_;
-};
-
 class ScriptPropertiesPanel final : public QWidget {
     editor::EditorContext& context_;
     entt::entity entity_;
@@ -384,7 +348,7 @@ void buildScript(PropertyForm& form, editor::EditorContext& context, entt::entit
     auto& scene = context.scene();
     auto& catalog = context.engine().GetAssets().GetCatalog();
     form.addBool(QObject::tr("Enabled"), field(scene, entity, &engine::ScriptComponent::enabled));
-    auto* picker = new ScriptPicker(catalog);
+    auto* picker = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Script, QObject::tr("None"));
     QObject::connect(picker, &QComboBox::currentIndexChanged, picker, [&context, &scene, entity, picker] {
         if (auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity)) {
             const auto chosen = picker->reference().value_or(engine::AssetReference{});
