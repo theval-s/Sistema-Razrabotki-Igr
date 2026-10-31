@@ -20,6 +20,7 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/rendering/passes/LightPass.hpp
     include/engine/rendering/passes/PresentPass.hpp
     include/engine/rendering/passes/RenderPass.hpp
+    include/engine/rendering/passes/SelectionMaskPass.hpp
     include/engine/rendering/passes/ShadowPass.hpp
     include/engine/rendering/RenderWorld.hpp
     include/engine/rendering/RenderingContext.hpp
@@ -49,6 +50,7 @@ set(ENGINE_SOURCES
     src/rendering/passes/LightPass.cpp
     src/rendering/passes/PresentPass.cpp
     src/rendering/passes/RenderPass.cpp
+    src/rendering/passes/SelectionMaskPass.cpp
     src/rendering/passes/ShadowPass.cpp
     src/rendering/RenderingContext.cpp
     src/rendering/RenderingResources.cpp
@@ -68,11 +70,13 @@ set(ENGINE_SOURCES
 
 set(ENGINE_SHADERS
     shaders/Common.hlsl
+    shaders/EditorLines.hlsl
     shaders/DirectionalLightVS.hlsl
     shaders/GBufferPass.hlsl
     shaders/GBufferVS.hlsl
     shaders/GBufferPS.hlsl
     shaders/PresentPass.hlsl
+    shaders/SelectionMask.hlsl
     shaders/LightPass.hlsl
     shaders/MaterialTemplate.hlsl
     shaders/ShadowCSMPass.hlsl

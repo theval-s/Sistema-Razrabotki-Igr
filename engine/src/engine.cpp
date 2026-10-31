@@ -530,7 +530,9 @@ bool Engine::EditEntityMaterial(entt::entity entity, const std::function<void(Ma
     const auto override = GetEntityMaterialOverride(entity);
     const auto* source = resources.TryGetMaterialInstance(override ? override : base);
     if (!source) { error = "material instance is no longer available"; return false; }
-    MaterialParameters parameters = source->parameters;
+    const auto* material = resources.TryGetMaterial(source->material);
+    if (!material) { error = "material is no longer available"; return false; }
+    MaterialParameters parameters = ResolveMaterialParameters(*material, *source);
     edit(parameters);
     if (!override) {
         const auto clone = resources.CreateMaterialInstance(source->material);
@@ -559,6 +561,10 @@ bool Engine::SetEntityAlbedoTexture(entt::entity entity, AssetHandle<TextureAsse
 
 MaterialInstanceHandle Engine::GetEntityMaterialOverride(entt::entity entity) const {
     return impl_->sceneRuntime.Find(entity);
+}
+
+void Engine::ClearEntityMaterialOverride(entt::entity entity) {
+    impl_->sceneRuntime.Release(entity, GetSubsystem<RenderingSubsystem>());
 }
 
 AssetSystem& Engine::GetAssets() noexcept {

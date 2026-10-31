@@ -93,6 +93,15 @@ bool MaterialInstanceImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, Cpu
     return true;
 }
 
+MaterialInstance::Overrides MaterialInstanceImporter::MakeOverrides(const MaterialParameterOverrides& authored,
+                                                                     TextureHandle explicitTexture) {
+    MaterialInstance::Overrides result;
+    result.specularColor = authored.specularColor;
+    result.shininess = authored.shininess;
+    if (authored.albedoTexture) result.albedoTexture = explicitTexture;
+    return result;
+}
+
 bool MaterialInstanceImporter::UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
                                          GpuPayload& result, std::string& error) const {
     if (payload.kind != CpuPayload::Kind::MaterialInstance) {
@@ -100,7 +109,8 @@ bool MaterialInstanceImporter::UploadGpu(const UploadTransfer& transfer, const C
         return false;
     }
     const auto instance = transfer.resources->CreateMaterialInstance(transfer.material);
-    if (!instance || !transfer.resources->SetMaterialInstanceParameters(instance, transfer.materialParameters)) {
+    if (!instance || !transfer.resources->SetMaterialInstanceOverrides(instance,
+        MakeOverrides(payload.materialInstance.parameters, transfer.materialParameters.albedoTexture))) {
         if (instance) transfer.resources->DestroyMaterialInstance(instance);
         error = "material instance registration failed";
         return false;

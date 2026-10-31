@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QPoint>
+#include <QPointF>
 #include <QWidget>
 
 #include <optional>
@@ -36,6 +37,8 @@ public:
 signals:
     /// Size in physical pixels.
     void surfaceResized(quint32 width, quint32 height);
+    /// Left click in viewport-local logical pixels, before forwarding the mouse button.
+    void pickRequested(QPointF position, bool toggle);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;

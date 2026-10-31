@@ -36,6 +36,10 @@ void PresentPass::Initialize(RenderingResourceManager& resourceManager, Renderin
                              RenderingResources&) {
     vertexShader_ = resourceManager.CompileShader(L"engine/PresentPass.hlsl", ShaderType::Vertex);
     pixelShader_ = resourceManager.CompileShader(L"engine/PresentPass.hlsl", ShaderType::Pixel);
+    outlinedPixelShader_ = resourceManager.CompileShader(L"engine/PresentPass.hlsl", ShaderType::Pixel,
+                                                          {.defines = {{"SELECTION_OUTLINE"}}});
+    linesVertexShader_ = resourceManager.CompileShader(L"engine/EditorLines.hlsl", ShaderType::Vertex);
+    linesPixelShader_ = resourceManager.CompileShader(L"engine/EditorLines.hlsl", ShaderType::Pixel);
 
     backBufferView_ = CreateBackbufferTexture(resourceManager, context);
     if (!backBufferView_) {
@@ -47,22 +51,33 @@ void PresentPass::Destroy(RenderingResourceManager& resourceManager, RenderingCo
     RenderingResources& resources) {
     resourceManager.DestroyShader(vertexShader_);
     resourceManager.DestroyShader(pixelShader_);
+    resourceManager.DestroyShader(outlinedPixelShader_);
+    resourceManager.DestroyShader(linesVertexShader_);
+    resourceManager.DestroyShader(linesPixelShader_);
     if (backBufferView_) {
         resourceManager.DestroyTexture(backBufferView_);
         backBufferView_ = {};
     }
 }
 
-void PresentPass::Render(RenderWorld&, RenderingContext& context, RenderingResources& resources) {
+void PresentPass::Render(RenderWorld& world, RenderingContext& context, RenderingResources& resources) {
     context.SetRenderTargets({backBufferView_}, TextureHandle{});
     context.SetViewport(resources.screenWith, resources.screenHeight);
     context.SetBlendState(BlendState::Opaque);
     context.SetDepthState(DepthState::Disabled);
     context.SetRasterizerState(RasterizerState::CullNone);
     context.SetShader(vertexShader_);
-    context.SetShader(pixelShader_);
+    const bool outlined = !world.selectedSceneItems.empty();
+    context.SetShader(outlined ? outlinedPixelShader_ : pixelShader_);
     context.SetShaderResources(BindSlots::Texture::SceneResult, resources.gBuffer.resultTexture);
+    if (outlined) context.SetShaderResources(BindSlots::Texture::Pass0, resources.selectionMask);
     context.RawDraw(6, 0);
+    if (!world.editorLines.empty()) {
+        world.BindCameraView(context, resources);
+        context.SetShader(linesVertexShader_);
+        context.SetShader(linesPixelShader_);
+        context.DrawLines(world.editorLines);
+    }
     context.Present();
 }
 

@@ -69,7 +69,7 @@ struct UploadTransfer {
     ID3D11Device* device = nullptr;
     ID3D11DeviceContext* context = nullptr;
     RenderingResourceManager* resources = nullptr;
-    MaterialParameters materialParameters; // resolved dependencies and inherited values; main thread only
+    MaterialParameters materialParameters; // resolved material defaults or explicit texture dependency
     MaterialHandle material;              // parent of a material instance
 };
 
@@ -122,6 +122,8 @@ public:
 
 class MaterialInstanceImporter final : public IAssetImporter {
 public:
+    static MaterialInstance::Overrides MakeOverrides(const MaterialParameterOverrides& authored,
+                                                      TextureHandle explicitTexture);
     bool ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPayload& payload,
                  std::string& error) const override;
     bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,

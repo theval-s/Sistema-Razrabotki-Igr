@@ -45,6 +45,8 @@
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/assets/MaterialDefinition.hpp>
+#include <engine/core/FileSystem.hpp>
 #include <engine/engine.hpp>
 #include <engine/project/Project.hpp>
 
@@ -463,8 +465,44 @@ void ContentBrowser::activate(const QModelIndex& index) {
         navigate(root_, path);
     } else if (engine::CatalogKindForFile(editor::toPath(path)) == engine::CatalogAssetKind::Scene) {
         context_.sceneDocument().openInteractive(window(), editor::toPath(path));
+    } else if (const auto kind = engine::CatalogKindForFile(editor::toPath(path));
+               kind == engine::CatalogAssetKind::Material || kind == engine::CatalogAssetKind::MaterialInstance) {
+        editMaterial(path, *kind);
     } else {
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    }
+}
+
+void ContentBrowser::editMaterial(const QString& path, const engine::CatalogAssetKind kind) {
+    if (roots_[root_].read_only) {
+        QMessageBox::information(window(), tr("Read-only asset"), tr("Engine assets cannot be edited here."));
+        return;
+    }
+    std::string text, error;
+    if (!engine::ReadTextFile(editor::toPath(path), text, error, 1024 * 1024)) {
+        QMessageBox::warning(window(), tr("Edit Material"), QString::fromStdString(error));
+        return;
+    }
+    const QString name = splitAssetName(QFileInfo(path).fileName(), false).first;
+    const QString folder = QFileInfo(path).absolutePath();
+    if (kind == engine::CatalogAssetKind::Material) {
+        engine::MaterialDefinition definition;
+        if (!engine::ParseMaterialDefinition(text, definition, error)) {
+            QMessageBox::warning(window(), tr("Edit Material"), QString::fromStdString(error));
+            return;
+        }
+        MaterialDialog dialog(catalog(), folder, name, window(), true);
+        dialog.load(definition);
+        if (dialog.exec() == QDialog::Accepted) operations_.updateMaterial(path, dialog.definition());
+    } else {
+        engine::MaterialInstanceDefinition definition;
+        if (!engine::ParseMaterialInstanceDefinition(text, definition, error)) {
+            QMessageBox::warning(window(), tr("Edit Material Instance"), QString::fromStdString(error));
+            return;
+        }
+        MaterialInstanceDialog dialog(catalog(), folder, name, window(), true);
+        dialog.load(definition);
+        if (dialog.exec() == QDialog::Accepted) operations_.updateMaterialInstance(path, dialog.definition());
     }
 }
 
@@ -605,6 +643,13 @@ void ContentBrowser::updateActions() {
     const QMimeData* clipboard = QGuiApplication::clipboard()->mimeData();
 
     open_->setEnabled(selected.size() == 1);
+    if (selected.size() == 1) {
+        const auto kind = engine::CatalogKindForFile(editor::toPath(selected.front()));
+        open_->setText(kind == engine::CatalogAssetKind::Material || kind == engine::CatalogAssetKind::MaterialInstance
+                           ? tr("Edit...") : tr("Open"));
+    } else {
+        open_->setText(tr("Open"));
+    }
     // Engine assets too: its primitives are worth placing.
     add_to_scene_->setEnabled(std::ranges::any_of(
         selected, [this](const QString& path) { return placeableMesh(catalog(), path) != nullptr; }));

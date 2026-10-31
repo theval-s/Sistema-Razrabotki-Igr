@@ -169,6 +169,91 @@ entt::resource<MaterialInstanceAsset> AssetSystem::LoadMaterialInstance(const st
     return LoadSync(RequestMaterialInstance(name));
 }
 
+bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& error) {
+    error.clear();
+    if (kind != AssetKind::Material && kind != AssetKind::MaterialInstance) {
+        error = "reload is not supported for this asset type";
+        return false;
+    }
+    const std::string normalized = NormalizeAssetName(name, kind);
+    // A never-requested asset has no live state to replace.
+    if (kind == AssetKind::Material && !materials_.Find(normalized)) return true;
+    if (kind == AssetKind::MaterialInstance && !materialInstances_.Find(normalized)) return true;
+    if (kind == AssetKind::Material) {
+        const auto handle = materials_.Find(normalized);
+        if (materials_.Get(handle)->state == AssetState::Loading && !LoadSync(handle)) {
+            error = "could not finish loading the previous material";
+            return false;
+        }
+    } else {
+        const auto handle = materialInstances_.Find(normalized);
+        if (materialInstances_.Get(handle)->state == AssetState::Loading && !LoadSync(handle)) {
+            error = "could not finish loading the previous material instance";
+            return false;
+        }
+    }
+    const AssetDesc* desc = kind == AssetKind::Material
+        ? &materials_.Get(materials_.Find(normalized))->desc
+        : &materialInstances_.Get(materialInstances_.Find(normalized))->desc;
+    LoadJob job;
+    job.kind = kind;
+    job.name = normalized;
+    job.id = ToResourceID(normalized);
+    job.desc = desc;
+    if (auto* rendering = engine_.GetSubsystem<RenderingSubsystem>()) job.device = rendering->GetContext().GetDevice();
+    job.cpuOk = ImporterFor(kind).ReadCpu(*desc, job.device, job.payload, job.error);
+    if (job.cpuOk && ResolveDependencies(job, true) == DependencyState::Failed) job.cpuOk = false;
+    if (!job.cpuOk) {
+        error = job.error;
+        spdlog::error("AssetSystem: live reload failed for '{}': {}", normalized, error);
+        return false;
+    }
+    if (!ReloadReady(job, error)) {
+        spdlog::error("AssetSystem: live reload failed for '{}': {}", normalized, error);
+        return false;
+    }
+    engine_.GetEvents().trigger(AssetLoadedEvent{job.id, job.name, job.kind});
+    return true;
+}
+
+bool AssetSystem::ReloadReady(LoadJob& job, std::string& error) {
+    auto* rendering = engine_.GetSubsystem<RenderingSubsystem>();
+    if (!rendering) { error = "no RenderingSubsystem to upload the result to"; return false; }
+    auto& resources = rendering->GetResourceManager();
+    auto transfer = MakeTransfer(*rendering);
+    transfer.material = job.resolvedMaterial;
+    transfer.materialParameters = job.resolvedParameters;
+    GpuPayload staged;
+    if (!ImporterFor(job.kind).UploadGpu(transfer, job.payload, staged, error)) return false;
+
+    if (job.kind == AssetKind::MaterialInstance) {
+        auto* record = materialInstances_.Get(materialInstances_.Find(job.name));
+        const auto* old = resources.TryGetMaterialInstance(record->value->instance);
+        if (!old) {
+            resources.DestroyMaterialInstance(staged.materialInstance);
+            error = "live material instance is no longer available";
+            return false;
+        }
+        const bool committed = resources.UpdateMaterialInstance(record->value->instance, job.resolvedMaterial,
+            MaterialInstanceImporter::MakeOverrides(job.payload.materialInstance.parameters,
+                job.resolvedParameters.albedoTexture));
+        resources.DestroyMaterialInstance(staged.materialInstance);
+        if (!committed) { error = "cannot update the loaded material instance"; return false; }
+        record->value->definition = std::move(job.payload.materialInstance);
+        return true;
+    }
+
+    auto* record = materials_.Get(materials_.Find(job.name));
+    const MaterialHandle live = record->value->material;
+    if (!resources.ReplaceMaterial(live, staged.material)) {
+        resources.DestroyMaterial(staged.material);
+        error = "cannot replace the loaded material";
+        return false;
+    }
+    record->value->definition = std::move(job.payload.material.definition);
+    return true;
+}
+
 std::string AssetSystem::NormalizeAssetName(std::string_view name, AssetKind kind) {
     auto normalized = NormalizeName(name);
     if (!normalized.empty() && (kind == AssetKind::Material || kind == AssetKind::MaterialInstance) &&
@@ -488,7 +573,6 @@ AssetSystem::DependencyState AssetSystem::ResolveDependencies(LoadJob& job, bool
             job.error = "parent material no longer exists";
             return DependencyState::Failed;
         }
-        parameters = material->defaultParameters;
         job.resolvedMaterial = parent->material;
     }
     if (overrides.specularColor) parameters.parameters.specularColor = *overrides.specularColor;

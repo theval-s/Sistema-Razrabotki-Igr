@@ -133,15 +133,18 @@ void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt
 
     // Only the user's choices get here: refresh picks quietly.
     QObject::connect(picker, &QComboBox::currentIndexChanged, picker,
-                     [&context, &scene, &engine, entity, picker, reference, handle, request] {
+                      [&context, &scene, &engine, entity, picker, kind, reference, handle, request] {
                          auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity);
                          const std::optional<engine::AssetReference> chosen = picker->reference();
                          if (renderer == nullptr || !chosen || chosen->id == (renderer->*reference).id) {
                              return;
                          }
-                         // Asynchronous, like adding the component: the entity isn't drawn until it's loaded.
-                         renderer->*handle = (engine.GetSceneAssets().*request)(*chosen);
-                         renderer->*reference = *chosen;
+                          // Asynchronous, like adding the component: the entity isn't drawn until it's loaded.
+                          renderer->*handle = (engine.GetSceneAssets().*request)(*chosen);
+                          renderer->*reference = *chosen;
+                          if (kind == engine::CatalogAssetKind::MaterialInstance) {
+                              engine.ClearEntityMaterialOverride(entity);
+                          }
                          context.sceneDocument().markDirty();
                      });
 

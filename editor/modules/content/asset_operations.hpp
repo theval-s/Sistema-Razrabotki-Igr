@@ -66,6 +66,9 @@ public:
     /// Write a new .material.json / .material-instance.json at `path`, with its meta. False on failure.
     bool createMaterial(const QString& path, const engine::MaterialDefinition& definition);
     bool createMaterialInstance(const QString& path, const engine::MaterialInstanceDefinition& definition);
+    /// Replaces an existing definition without touching its metadata/UUID.
+    bool updateMaterial(const QString& path, const engine::MaterialDefinition& definition);
+    bool updateMaterialInstance(const QString& path, const engine::MaterialInstanceDefinition& definition);
     /// Adds metas and rescans
     void adoptNewFiles();
     void rescan();
@@ -78,6 +81,8 @@ private:
     void report(const QString& command, const QStringList& errors) const;
     /// Writes `text` to the new file `path` and gives it a meta of `kind`, then rescans.
     bool createFile(const QString& command, const QString& path, const std::string& text,
+                    engine::CatalogAssetKind kind);
+    bool updateFile(const QString& command, const QString& path, const std::string& text,
                     engine::CatalogAssetKind kind);
     /// Keeps the scene document on the open scene after `from` (it, or a folder holding it) moved to `to`.
     void followOpenScene(const QString& from, const QString& to);

@@ -253,6 +253,10 @@ void Integration() {
     }
     auto& assets = engine.GetAssets();
     auto& resources = rendering->GetResourceManager();
+    const auto resolved = [&](MaterialInstanceHandle handle) {
+        const auto* instance = resources.TryGetMaterialInstance(handle);
+        return ResolveMaterialParameters(*resources.TryGetMaterial(instance->material), *instance);
+    };
     ASSERT_NO_FATAL_FAILURE(fixture.Write("bounds.obj",
         "v 2 3 4\nv 6 3 4\nv 2 7 12\nvt 0 0\nvt 1 0\nvt 0 1\nf 1/1 2/2 3/3\n"));
     const auto meshAsset = assets.LoadMesh(fixture.prefix + "/bounds.obj");
@@ -306,9 +310,13 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     const auto glossAsset = assets.LoadMaterialInstance(fixture.prefix + "/gloss");
     ASSERT_TRUE(static_cast<bool>(glossAsset)) << "synchronous instance failed";
     const auto* instance = resources.TryGetMaterialInstance(glossAsset->instance);
-    ASSERT_TRUE(instance && instance->material == materialHandle && instance->parameters.parameters.shininess == 96 &&
-          instance->parameters.parameters.specularColor == *base.defaults.specularColor &&
-          instance->parameters.albedoTexture == resources.TryGetMaterial(materialHandle)->defaultParameters.albedoTexture) << "sparse overrides did not inherit defaults";
+    ASSERT_TRUE(instance && instance->material == materialHandle);
+    EXPECT_EQ(instance->overrides.shininess, 96);
+    EXPECT_FALSE(instance->overrides.specularColor);
+    EXPECT_FALSE(instance->overrides.albedoTexture);
+    EXPECT_EQ(resolved(glossAsset->instance).parameters.specularColor, *base.defaults.specularColor);
+    EXPECT_EQ(resolved(glossAsset->instance).albedoTexture,
+              resources.TryGetMaterial(materialHandle)->defaultParameters.albedoTexture);
     ASSERT_TRUE(resources.TryGetMaterial(materialHandle)->defaultParameters.parameters.shininess == 48) << "instance mutated base";
     ASSERT_TRUE(!glossAsset->definition.parameters.albedoTexture) << "authored overrides were flattened";
     ASSERT_TRUE(assets.GetState<MaterialInstanceAsset>(fixture.prefix + "/gloss") == AssetState::Ready &&
@@ -316,8 +324,11 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     gloss.parameters.albedoTexture = "";
     ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("clear", gloss));
     const auto clear = assets.LoadMaterialInstance(fixture.prefix + "/clear");
-    ASSERT_TRUE(clear && !resources.TryGetMaterialInstance(clear->instance)->parameters.albedoTexture) << "null did not clear texture";
-    ASSERT_TRUE(resources.TryGetMaterial(materialHandle)->instanceCount == 3) << "instance count is not maintained";
+    ASSERT_TRUE(clear);
+    ASSERT_TRUE(resources.TryGetMaterialInstance(clear->instance)->overrides.albedoTexture);
+    EXPECT_FALSE(*resources.TryGetMaterialInstance(clear->instance)->overrides.albedoTexture);
+    EXPECT_FALSE(resolved(clear->instance).albedoTexture);
+    ASSERT_TRUE(resources.TryGetMaterial(materialHandle)->instanceCount == 2) << "instance count is not maintained";
     ASSERT_TRUE(!resources.DestroyMaterial(materialHandle)) << "material with live instances was destroyed";
 
     std::filesystem::copy_file(AssetPathResolver::GetRoot() / "engine/primitives/white/texture.png",
@@ -329,10 +340,13 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     const auto textured = assets.LoadMaterialInstance(fixture.prefix + "/textured");
     ASSERT_TRUE(static_cast<bool>(textured)) << "texture override failed";
     const auto* texturedInstance = resources.TryGetMaterialInstance(textured->instance);
-    ASSERT_TRUE(texturedInstance->parameters.albedoTexture &&
-          texturedInstance->parameters.albedoTexture != resources.TryGetMaterial(materialHandle)->defaultParameters.albedoTexture &&
-          texturedInstance->parameters.parameters.specularColor == *gloss.parameters.specularColor &&
-          texturedInstance->parameters.parameters.shininess == 48) << "texture/color override or removed scalar override failed";
+    ASSERT_TRUE(texturedInstance->overrides.albedoTexture && *texturedInstance->overrides.albedoTexture);
+    EXPECT_NE(resolved(textured->instance).albedoTexture,
+              resources.TryGetMaterial(materialHandle)->defaultParameters.albedoTexture);
+    EXPECT_EQ(resolved(textured->instance).parameters.specularColor, *gloss.parameters.specularColor);
+    EXPECT_FALSE(texturedInstance->overrides.shininess);
+    EXPECT_FLOAT_EQ(resolved(textured->instance).parameters.shininess, 48);
+    EXPECT_FALSE(resolved(clear->instance).albedoTexture);
 
     std::filesystem::copy_file(AssetPathResolver::GetRoot() / "engine/primitives/white/texture.png",
                                fixture.root / "async.png", std::filesystem::copy_options::overwrite_existing);
@@ -354,7 +368,7 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     const auto* asyncMaterial = resources.TryGetMaterial(asyncInstance->material);
     ASSERT_TRUE(asyncMaterial->shaders.gBufferPassPS && !asyncMaterial->shaders.gBufferPassVS &&
           !asyncMaterial->shaders.shadowPassVS) << "undeclared hooks were compiled";
-    ASSERT_TRUE(asyncInstance->parameters.parameters.shininess == 0) << "zero override was lost";
+    ASSERT_TRUE(asyncInstance->overrides.shininess == 0) << "zero override was lost";
     size_t textureEvent = events.loaded.size(), materialEvent = events.loaded.size(), instanceEvent = events.loaded.size();
     for (size_t i = 0; i < events.loaded.size(); ++i) {
         if (events.loaded[i].kind == AssetKind::Texture) textureEvent = i;
@@ -373,6 +387,13 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
         .shaderFile = FromUtf8(unicode.shaderFile).wstring(),
         .hooks = MaterialHook::GBufferPS});
     ASSERT_TRUE(static_cast<bool>(legacyUnicode)) << "wstring material API lost Unicode compatibility";
+    EXPECT_EQ(resources.TryGetMaterial(legacyUnicode)->instanceCount, 0u);
+    EXPECT_FALSE(resources.DestroyShader(resources.TryGetMaterial(legacyUnicode)->shaders.gBufferPassPS));
+    const auto ordinary = resources.CreateMaterialInstance(legacyUnicode);
+    ASSERT_TRUE(ordinary);
+    EXPECT_FALSE(resources.TryGetMaterialInstance(ordinary)->overrides.shininess);
+    EXPECT_FALSE(resources.DestroyMaterial(legacyUnicode));
+    EXPECT_TRUE(resources.DestroyMaterialInstance(ordinary));
     ASSERT_TRUE(resources.DestroyMaterial(legacyUnicode)) << "legacy material cleanup failed";
 
     ASSERT_NO_FATAL_FAILURE(fixture.Write("bad.material.json", R"({"version":1,"hooks":["missing"]})"));
@@ -464,11 +485,143 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     }
     ASSERT_TRUE(sceneAssets.IsReady(markerRenderer->mesh)) << "marker mesh did not load";
     ASSERT_TRUE(sceneAssets.IsReady(markerRenderer->materialInstance)) << "marker material did not load";
+    const auto markerAsset = sceneAssets.Peek(markerRenderer->materialInstance);
+    ASSERT_TRUE(markerAsset);
+    // Both asset systems can hold the same authored instance; scene renderers must keep their handle.
+    const auto live = sceneAssets.LoadMaterialInstance(fixture.prefix + "/gloss");
+    ASSERT_TRUE(live);
+    const auto hostLive = assets.LoadMaterialInstance(fixture.prefix + "/gloss");
+    ASSERT_TRUE(hostLive);
+    const auto liveHandle = sceneAssets.RequestMaterialInstance(fixture.prefix + "/gloss");
+    const auto liveEntity = engine.GetScene().CreateEntity("Live instance");
+    auto liveRenderer = *engine.GetScene().TryGetComponent<MeshRenderer>(cube);
+    liveRenderer.materialInstance = liveHandle;
+    ASSERT_NE(engine.GetScene().AddComponent<MeshRenderer>(liveEntity, liveRenderer), nullptr);
+    const auto oldGpuHandle = live->instance;
+    const auto callerBuffer = resources.CreateConstantBuffer<MaterialPBRParameters>();
+    ASSERT_TRUE(callerBuffer);
+    ASSERT_TRUE(resources.SetMaterialInstanceCustomBuffer(oldGpuHandle, callerBuffer));
+    MaterialInstanceDefinition revised;
+    revised.material = fixture.prefix + "/base";
+    revised.parameters.albedoTexture = fixture.prefix + "/override.png";
+    revised.parameters.shininess = 23.0f;
+    std::string refreshError;
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("gloss", revised));
+    ASSERT_TRUE(sceneAssets.Reload(fixture.prefix + "/gloss", AssetKind::MaterialInstance, refreshError)) << refreshError;
+    ASSERT_TRUE(assets.Reload(fixture.prefix + "/gloss", AssetKind::MaterialInstance, refreshError)) << refreshError;
+    EXPECT_EQ(sceneAssets.RequestMaterialInstance(fixture.prefix + "/gloss"), liveHandle);
+    EXPECT_EQ(engine.GetScene().TryGetComponent<MeshRenderer>(liveEntity)->materialInstance, liveHandle);
+    EXPECT_EQ(live->instance, oldGpuHandle);
+    EXPECT_EQ(assets.Peek<MaterialInstanceAsset>(fixture.prefix + "/gloss")->instance, hostLive->instance);
+    const auto* liveGpu = resources.TryGetMaterialInstance(oldGpuHandle);
+    ASSERT_NE(liveGpu, nullptr);
+    const auto overrideTexture = sceneAssets.LoadTexture(fixture.prefix + "/override.png");
+    ASSERT_TRUE(overrideTexture);
+    EXPECT_EQ(resolved(oldGpuHandle).albedoTexture, overrideTexture->texture);
+    EXPECT_FLOAT_EQ(resolved(oldGpuHandle).parameters.shininess, 23.0f);
+    EXPECT_EQ(liveGpu->customBuffer, callerBuffer);
+    EXPECT_EQ(hostLive->definition.parameters.albedoTexture, revised.parameters.albedoTexture);
+    const auto sceneBase = sceneAssets.LoadMaterial(fixture.prefix + "/base");
+    ASSERT_TRUE(sceneBase);
+    const auto sceneBaseHandle = sceneBase->material;
+    const auto hostBaseHandle = assets.LoadMaterial(fixture.prefix + "/base")->material;
+    const auto plainInstance = resources.CreateMaterialInstance(sceneBaseHandle);
+    ASSERT_TRUE(plainInstance);
+    EXPECT_FALSE(resources.TryGetMaterialInstance(plainInstance)->overrides.albedoTexture);
+    const auto oldPlainAlbedo = resolved(plainInstance).albedoTexture;
+    const auto sceneInstanceHandle = sceneAssets.RequestMaterialInstance(fixture.prefix + "/gloss");
+    const auto oldHooks = resources.TryGetMaterial(sceneBaseHandle)->shaders;
+    base.shaderFile = shaderFile;
+    base.defaults.albedoTexture = fixture.prefix + "/async.png";
+    base.defaults.shininess = 61.0f;
+    base.defaults.specularColor = Vector3{0.7f, 0.6f, 0.5f};
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("base", base));
+    ASSERT_TRUE(sceneAssets.Reload(fixture.prefix + "/base", AssetKind::Material, refreshError)) << refreshError;
+    ASSERT_TRUE(assets.Reload(fixture.prefix + "/base", AssetKind::Material, refreshError)) << refreshError;
+    EXPECT_EQ(sceneAssets.Peek<MaterialAsset>(fixture.prefix + "/base").operator->(), sceneBase.operator->());
+    EXPECT_EQ(sceneBase->material, sceneBaseHandle);
+    EXPECT_EQ(assets.LoadMaterial(fixture.prefix + "/base")->material, hostBaseHandle);
+    EXPECT_EQ(resources.TryGetMaterialInstance(plainInstance)->material, sceneBaseHandle);
+    EXPECT_EQ(engine.GetScene().TryGetComponent<MeshRenderer>(liveEntity)->materialInstance, sceneInstanceHandle);
+    EXPECT_EQ(resources.TryGetMaterialInstance(oldGpuHandle)->material, sceneBaseHandle);
+    EXPECT_FLOAT_EQ(resolved(oldGpuHandle).parameters.shininess, 23.0f);
+    EXPECT_EQ(resources.TryGetMaterialInstance(oldGpuHandle)->customBuffer, callerBuffer);
+    EXPECT_EQ(resolved(oldGpuHandle).parameters.specularColor,
+               *base.defaults.specularColor);
+    EXPECT_EQ(resolved(hostLive->instance).parameters.specularColor,
+               *base.defaults.specularColor);
+    EXPECT_FLOAT_EQ(resolved(plainInstance).parameters.shininess, 61.0f);
+    EXPECT_NE(resolved(plainInstance).albedoTexture, oldPlainAlbedo);
+    EXPECT_EQ(resolved(plainInstance).albedoTexture,
+              resources.TryGetMaterial(sceneBaseHandle)->defaultParameters.albedoTexture);
+    const auto fixedInstance = resources.CreateMaterialInstance(sceneBaseHandle);
+    ASSERT_TRUE(fixedInstance);
+    auto fixedValues = resolved(fixedInstance);
+    fixedValues.parameters.shininess = 9.0f;
+    ASSERT_TRUE(resources.SetMaterialInstanceParameters(fixedInstance, fixedValues));
+    EXPECT_TRUE(resources.TryGetMaterialInstance(fixedInstance)->overrides.albedoTexture.has_value());
+    EXPECT_NE(resources.TryGetMaterial(sceneBaseHandle)->shaders.gBufferPassPS, oldHooks.gBufferPassPS);
+    const auto committedShader = resources.TryGetMaterial(sceneBaseHandle)->shaders.gBufferPassPS;
+    base.defaults.albedoTexture = fixture.prefix + "/missing.png";
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("base", base));
+    EXPECT_FALSE(sceneAssets.Reload(fixture.prefix + "/base", AssetKind::Material, refreshError));
+    EXPECT_FALSE(refreshError.empty());
+    EXPECT_EQ(resources.TryGetMaterial(sceneBaseHandle)->shaders.gBufferPassPS, committedShader);
+    EXPECT_FLOAT_EQ(resolved(plainInstance).parameters.shininess, 61.0f);
+    EXPECT_FLOAT_EQ(resolved(fixedInstance).parameters.shininess, 9.0f);
+    EXPECT_EQ(sceneBase->definition.defaults.albedoTexture, std::optional<std::string>{fixture.prefix + "/async.png"});
+    ASSERT_NO_FATAL_FAILURE(fixture.Write("base.material.json", "{invalid json"));
+    EXPECT_FALSE(sceneAssets.Reload(fixture.prefix + "/base", AssetKind::Material, refreshError));
+    EXPECT_EQ(sceneBase->material, sceneBaseHandle);
+    EXPECT_EQ(resources.TryGetMaterial(sceneBaseHandle)->shaders.gBufferPassPS, committedShader);
+    EXPECT_EQ(resolved(oldGpuHandle).parameters.specularColor,
+              *base.defaults.specularColor);
+    base.defaults.albedoTexture = fixture.prefix + "/async.png";
+    base.shaderFile = fixture.prefix + "/missing.hlsl";
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("base", base));
+    EXPECT_FALSE(sceneAssets.Reload(fixture.prefix + "/base", AssetKind::Material, refreshError));
+    EXPECT_FLOAT_EQ(resolved(plainInstance).parameters.shininess, 61.0f);
+    base.shaderFile = shaderFile;
+    base.defaults.shininess = 72.0f;
+    base.defaults.specularColor = Vector3{0.3f, 0.4f, 0.6f};
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("base", base));
+    ASSERT_TRUE(sceneAssets.Reload(fixture.prefix + "/base", AssetKind::Material, refreshError)) << refreshError;
+    EXPECT_FLOAT_EQ(resolved(plainInstance).parameters.shininess, 72.0f);
+    EXPECT_EQ(resolved(oldGpuHandle).parameters.specularColor, *base.defaults.specularColor);
+    EXPECT_FLOAT_EQ(resolved(fixedInstance).parameters.shininess, 9.0f);
+    EXPECT_EQ(resolved(fixedInstance).parameters.specularColor, fixedValues.parameters.specularColor);
+    EXPECT_EQ(resolved(fixedInstance).albedoTexture, fixedValues.albedoTexture);
+    revised.parameters.albedoTexture = "";
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("gloss", revised));
+    ASSERT_TRUE(sceneAssets.Reload(fixture.prefix + "/gloss", AssetKind::MaterialInstance, refreshError)) << refreshError;
+    EXPECT_FALSE(resolved(oldGpuHandle).albedoTexture);
+    revised.parameters.albedoTexture = fixture.prefix + "/missing.png";
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("gloss", revised));
+    EXPECT_FALSE(sceneAssets.Reload(fixture.prefix + "/gloss", AssetKind::MaterialInstance, refreshError));
+    EXPECT_FALSE(resolved(oldGpuHandle).albedoTexture)
+        << "failed refresh changed a live instance";
+    const auto previousParent = resources.TryGetMaterialInstance(oldGpuHandle)->material;
+    const auto previousCount = resources.TryGetMaterial(previousParent)->instanceCount;
+    revised.material = fixture.prefix + "/async";
+    revised.parameters.albedoTexture.reset();
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("gloss", revised));
+    ASSERT_TRUE(sceneAssets.Reload(fixture.prefix + "/gloss", AssetKind::MaterialInstance, refreshError)) << refreshError;
+    EXPECT_EQ(resources.TryGetMaterial(previousParent)->instanceCount, previousCount - 1);
+    EXPECT_NE(resources.TryGetMaterialInstance(oldGpuHandle)->material, previousParent);
+    EXPECT_EQ(live->instance, oldGpuHandle);
+    EXPECT_EQ(resources.TryGetMaterialInstance(oldGpuHandle)->customBuffer, callerBuffer);
+    EXPECT_EQ(resolved(oldGpuHandle).parameters.specularColor,
+              resources.TryGetMaterial(resources.TryGetMaterialInstance(oldGpuHandle)->material)->defaultParameters.parameters.specularColor);
+    EXPECT_EQ(engine.GetScene().TryGetComponent<MeshRenderer>(liveEntity)->materialInstance, liveHandle);
+    EXPECT_EQ(sceneAssets.Peek(liveHandle).operator->(), live.operator->());
+    EXPECT_TRUE(resources.DestroyMaterialInstance(fixedInstance));
+    EXPECT_TRUE(resources.DestroyMaterialInstance(plainInstance));
+    EXPECT_FALSE(resources.TryGetMaterialInstance(plainInstance));
     const auto otherCube = engine.GetScene().CreateEntity("Same material");
     ASSERT_NE(engine.GetScene().AddComponent<MeshRenderer>(otherCube,
         *engine.GetScene().TryGetComponent<MeshRenderer>(cube)), nullptr);
     const auto baseInstance = sceneAssets.Peek(sceneHandle)->instance;
-    const auto baseShininess = resources.TryGetMaterialInstance(baseInstance)->parameters.parameters.shininess;
+    const auto baseShininess = resolved(baseInstance).parameters.shininess;
     ASSERT_TRUE(engine.EditEntityMaterial(cube, [](MaterialParameters& parameters) {
         parameters.parameters.shininess = 17;
     }, sceneError)) << sceneError;
@@ -476,8 +629,8 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     ASSERT_TRUE(clone);
     EXPECT_NE(clone, baseInstance);
     EXPECT_FALSE(engine.GetEntityMaterialOverride(otherCube));
-    EXPECT_FLOAT_EQ(resources.TryGetMaterialInstance(baseInstance)->parameters.parameters.shininess, baseShininess);
-    EXPECT_FLOAT_EQ(resources.TryGetMaterialInstance(clone)->parameters.parameters.shininess, 17);
+    EXPECT_FLOAT_EQ(resolved(baseInstance).parameters.shininess, baseShininess);
+    EXPECT_FLOAT_EQ(resolved(clone).parameters.shininess, 17);
     engine.GetScene().DestroyEntity(cube);
     EXPECT_EQ(resources.TryGetMaterialInstance(clone), nullptr);
     ASSERT_TRUE(engine.EditEntityMaterial(otherCube, [](MaterialParameters& parameters) {

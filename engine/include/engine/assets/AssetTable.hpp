@@ -143,6 +143,13 @@ public:
         }
     }
 
+    template <class Fn>
+    void ForEachReadyRecord(Fn&& fn) const {
+        for (const auto& record : records_) {
+            if (record->state == AssetState::Ready) fn(*record);
+        }
+    }
+
     // Releases records without resetting generations: an old handle must remain
     // invalid even when a subsequent scene loads the same name into the same slot.
     void EvictAll() {

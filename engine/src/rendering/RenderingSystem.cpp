@@ -58,6 +58,7 @@ void RenderingSystem::InitializePasses(const uint32_t screenWidth, const uint32_
     renderPasses_.push_back(std::make_unique<ShadowCSMPass>());
     renderPasses_.push_back(std::make_unique<GBufferPass>());
     renderPasses_.push_back(std::make_unique<LightPass>());
+    renderPasses_.push_back(std::make_unique<SelectionMaskPass>());
     renderPasses_.push_back(std::make_unique<PresentPass>());
 
     for (const auto& renderPass : renderPasses_) {

@@ -66,6 +66,9 @@ public:
     /// JSON names are exe-relative. Extensionless names gain .material.json / .material-instance.json.
     entt::resource<MaterialAsset> LoadMaterial(std::string_view name);
     entt::resource<MaterialInstanceAsset> LoadMaterialInstance(std::string_view name);
+    /// Reimport a saved asset and atomically replace its live GPU contents on the main thread.
+    /// Unloaded names are read on their next request. A failure leaves ready values untouched.
+    bool Reload(std::string_view name, AssetKind kind, std::string& error);
     /// Names use game/... or engine/...; each stage/entry point/define set is a separate asset.
     entt::resource<ShaderAsset> LoadShader(std::string_view name, ShaderType stage,
                                           ShaderCompileOptions options = {});
@@ -159,6 +162,7 @@ private:
     bool FinishJob(LoadJob& job, uint64_t frameIndex);
     enum class DependencyState { Ready, Waiting, Failed };
     DependencyState ResolveDependencies(LoadJob& job, bool wait);
+    bool ReloadReady(LoadJob& job, std::string& error);
     template <typename T>
     entt::resource<T> FinishTyped(const LoadJob& job, AssetTable<T>& table, AssetHandle<T> handle, uint64_t frameIndex);
 

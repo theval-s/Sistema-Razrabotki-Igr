@@ -3,7 +3,6 @@
 #include <span>
 #include <string>
 #include <type_traits>
-#include <unordered_map>
 #include <engine/engine_export.hpp>
 
 #include <engine/rendering/resources/Buffer.hpp>
@@ -34,15 +33,23 @@ struct ENGINE_API RenderingResourceManager {
     /// Empty handle when the device refused the bytecode.
     ShaderHandle RegisterCompiledShader(const CompiledShader& compiled);
     bool DestroyShader(ShaderHandle shaderHandle);
-    /// Compiles declared hooks and creates a default instance. Empty handle on failure.
+    /// Compiles declared hooks. Empty handle on failure.
     MaterialHandle CreateMaterial(const MaterialDesc& desc);
     /// Main-thread upload path for the asset importer: no file I/O or compilation.
     /// Takes ownership of the shader handles on success; they must not be shared.
     MaterialHandle RegisterMaterial(const ShaderSet& shaders, const MaterialParameters& defaults);
     bool DestroyMaterial(MaterialHandle material);
-    [[nodiscard]] MaterialInstanceHandle GetDefaultMaterialInstance(MaterialHandle material) const;
+    /// Consumes a prepared material, retaining the live handle and all its instances.
+    bool ReplaceMaterial(MaterialHandle live, MaterialHandle staged);
     [[nodiscard]] MaterialInstanceHandle CreateMaterialInstance(MaterialHandle material);
+    /// Advanced escape hatch: fixes every supplied PBR/texture value as an explicit override.
+    /// Those fields will not follow subsequent material-default changes.
     bool SetMaterialInstanceParameters(MaterialInstanceHandle instance, const MaterialParameters& parameters);
+    /// Changes an authored instance without replacing its handle (scene renderers retain that handle).
+    bool UpdateMaterialInstance(MaterialInstanceHandle instance, MaterialHandle material,
+                                const MaterialInstance::Overrides& overrides);
+    bool SetMaterialInstanceOverrides(MaterialInstanceHandle instance, const MaterialInstance::Overrides& overrides);
+    bool SetMaterialInstanceCustomBuffer(MaterialInstanceHandle instance, BufferHandle buffer);
     bool DestroyMaterialInstance(MaterialInstanceHandle instance);
     [[nodiscard]] const Material* TryGetMaterial(MaterialHandle material) const;
     [[nodiscard]] const MaterialInstance* TryGetMaterialInstance(MaterialInstanceHandle instance) const;
@@ -101,7 +108,6 @@ private:
     HandleMap<RenderedMesh> meshes_{};
     HandleMap<Material> materials_{};
     HandleMap<MaterialInstance> materialInstances_{};
-    std::unordered_map<uint32_t, MaterialInstanceHandle> defaultInstances_{}; //I dont particularly like idea of the map here... But is should be fine as it's not in render path
     ComPtr<ID3D11Device> device_{};
     InputLayoutCache inputLayoutCache_;
 };

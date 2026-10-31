@@ -2,6 +2,7 @@
 
 #include <QCheckBox>
 #include <QColorDialog>
+#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDoubleSpinBox>
@@ -17,6 +18,8 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QToolButton>
+#include <QTimer>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -36,6 +39,10 @@ namespace {
 
 const QString DefaultMaterial = QStringLiteral("engine/primitives/default.material.json");
 const QString WhiteTexture = QStringLiteral("engine/primitives/white/texture.png");
+
+// How often, and how many times, a material instance dialog looks for a texture still being imported.
+constexpr int PendingAlbedoInterval = 100;  // ms
+constexpr int PendingAlbedoTicks = 100;     // 10 s
 
 bool isImage(const QString& path) {
     return engine::AssetPathResolver::IsImageFile(editor::toPath(path));
@@ -78,6 +85,19 @@ QDoubleSpinBox* shininessBox() {
     return box;
 }
 
+QComboBox* albedoMode() {
+    auto* mode = new QComboBox;
+    mode->addItems({QComboBox::tr("Inherit / unspecified"), QComboBox::tr("Use texture"),
+                    QComboBox::tr("Clear texture")});
+    return mode;
+}
+
+bool selectReference(editor::AssetPicker* picker, const std::optional<engine::AssetReference>& reference,
+                     const std::string& path) {
+    if (reference) return picker->selectId(reference->id);  // UUID is authoritative; path may be stale
+    return path.empty() || picker->selectPath(QString::fromStdString(path));
+}
+
 }  // namespace
 
 // The extensions CatalogKindForFile() takes as textures and as meshes.
@@ -110,19 +130,20 @@ public:
     }
 
     [[nodiscard]] engine::Vector3 value() const {
-        // A colour channel has 16 bits: 0.25 would come back as 0.2500038.
-        const auto channel = [](const double value) { return static_cast<float>(std::round(value * 1000.0) / 1000.0); };
-        return {channel(color_.redF()), channel(color_.greenF()), channel(color_.blueF())};
+        return value_;
     }
 
     void setValue(const engine::Vector3& value) {
         const auto channel = [](const float value) { return std::clamp(value, 0.0f, 1.0f); };
         setColor(QColor::fromRgbF(channel(value.x), channel(value.y), channel(value.z)));
+        value_ = value;  // retain authored precision until the user actually chooses a new colour
     }
 
 private:
     void setColor(const QColor& color) {
         color_ = color;
+        const auto channel = [](const double value) { return static_cast<float>(std::round(value * 1000.0) / 1000.0); };
+        value_ = {channel(color.redF()), channel(color.greenF()), channel(color.blueF())};
         QPixmap swatch(iconSize());
         swatch.fill(color);
         setIcon(swatch);
@@ -130,14 +151,17 @@ private:
     }
 
     QColor color_;
+    engine::Vector3 value_{};
 };
 
 NewAssetDialog::NewAssetDialog(const QString& title, const QString& folder, const QString& suffix,
-                               const QString& name, QWidget* parent)
-    : QDialog(parent), folder_(folder), suffix_(suffix) {
+                               const QString& name, QWidget* parent, const bool editing)
+    : QDialog(parent), folder_(folder), suffix_(suffix), editing_(editing) {
     setWindowTitle(title);
-    const QString free = QFileInfo(AssetOperations::uniquePath(folder, name + suffix, suffix.isEmpty())).fileName();
+    const QString free = editing ? name + suffix :
+        QFileInfo(AssetOperations::uniquePath(folder, name + suffix, suffix.isEmpty())).fileName();
     name_ = new QLineEdit(free.chopped(suffix.size()));
+    name_->setReadOnly(editing);
     name_->setMinimumWidth(320);
     name_->selectAll();
     connect(name_, &QLineEdit::textChanged, this, &NewAssetDialog::validate);
@@ -181,8 +205,8 @@ QString NewAssetDialog::problem() const {
     if (name.endsWith(QLatin1Char('.'))) {
         return tr("A name can't end with a dot.");  // Windows drops it
     }
-    if (const QString path = this->path();
-        QFileInfo::exists(path) || QFileInfo::exists(path + QLatin1String(".meta"))) {
+    if (const QString path = this->path(); !editing_ &&
+        (QFileInfo::exists(path) || QFileInfo::exists(path + QLatin1String(".meta")))) {
         return tr("%1 already exists here.").arg(name + suffix_);
     }
     return {};
@@ -285,14 +309,53 @@ QString ImportModelDialog::problem() const {
 }
 
 MaterialInstanceDialog::MaterialInstanceDialog(const engine::AssetCatalog& catalog, const QString& folder,
-                                               const QString& name, QWidget* parent)
-    : NewAssetDialog(tr("New Material Instance"), folder, QStringLiteral(".material-instance.json"), name, parent),
+                                               const QString& name, QWidget* parent, const bool editing)
+    : NewAssetDialog(editing ? tr("Edit Material Instance") : tr("New Material Instance"), folder,
+                     QStringLiteral(".material-instance.json"), name, parent, editing),
       catalog_(catalog) {
     material_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Material);
     material_->selectPath(DefaultMaterial);
     form()->addRow(tr("Material"), material_);
     albedo_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Texture, tr("(the material's)"));
-    form()->addRow(tr("Albedo texture"), albedo_);
+    albedo_mode_ = albedoMode();
+    auto* albedo_row = new QHBoxLayout;
+    albedo_row->addWidget(albedo_mode_);
+    albedo_row->addWidget(albedo_, 1);
+    form()->addRow(tr("Albedo texture"), albedo_row);
+    connect(albedo_mode_, &QComboBox::currentIndexChanged, this, [this] {
+        albedo_->setEnabled(albedo_mode_->currentIndex() == 1);
+        if (albedo_mode_->currentIndex() != 1 && pending_albedo_timer_) {
+            pending_albedo_.clear();
+            pending_albedo_timer_->stop();
+        }
+        validate();
+    });
+    albedo_->setEnabled(false);
+    pending_albedo_timer_ = new QTimer(this);
+    pending_albedo_timer_->setInterval(PendingAlbedoInterval);
+    connect(pending_albedo_timer_, &QTimer::timeout, this, [this] {
+        // The catalog rescan may still be pending while an imported texture is loading.
+        // Keep the dialog open rather than saving an instance without its intended override.
+        if (!catalog_.FindPath(pending_albedo_.toStdString())) {
+            if (++pending_albedo_ticks_ >= PendingAlbedoTicks) {
+                pending_albedo_timer_->stop();  // gave up: problem() says so, the picker stays usable
+                validate();
+            }
+            return;
+        }
+        const QSignalBlocker blocker(albedo_);
+        albedo_->reload();
+        if (albedo_->selectPath(pending_albedo_)) {
+            pending_albedo_.clear();
+        }
+        pending_albedo_timer_->stop();
+        validate();
+    });
+    connect(albedo_, &QComboBox::currentIndexChanged, this, [this] {
+        pending_albedo_.clear();
+        pending_albedo_timer_->stop();
+        validate();
+    });
 
     // Unchecked parameters come from the material, and show its values.
     override_specular_ = new QCheckBox(tr("Specular colour"));
@@ -315,25 +378,59 @@ MaterialInstanceDialog::MaterialInstanceDialog(const engine::AssetCatalog& catal
 }
 
 void MaterialInstanceDialog::setAlbedo(const QString& path) {
-    albedo_->selectPath(path);
+    albedo_mode_->setCurrentIndex(1);
+    albedo_->reload();
+    if (!albedo_->selectPath(path)) {
+        pending_albedo_ = path;
+        pending_albedo_ticks_ = 0;
+        pending_albedo_timer_->start();
+    }
+    validate();
+}
+
+void MaterialInstanceDialog::load(const engine::MaterialInstanceDefinition& definition) {
+    version_ = definition.version;
+    if (!selectReference(material_, definition.materialReference, definition.material)) {
+        material_->setCurrentIndex(-1);
+    }
+    if (definition.parameters.albedoTexture) {
+        if (definition.parameters.albedoTexture->empty()) {
+            albedo_mode_->setCurrentIndex(2);
+        } else {
+            albedo_mode_->setCurrentIndex(1);
+            if (!selectReference(albedo_, definition.parameters.albedoReference,
+                                 *definition.parameters.albedoTexture)) albedo_->setCurrentIndex(-1);
+        }
+    }
+    override_specular_->setChecked(definition.parameters.specularColor.has_value());
+    if (definition.parameters.specularColor) specular_->setValue(*definition.parameters.specularColor);
+    override_shininess_->setChecked(definition.parameters.shininess.has_value());
+    if (definition.parameters.shininess) shininess_->setValue(*definition.parameters.shininess);
+    loaded_shininess_ = definition.parameters.shininess;
+    displayed_shininess_ = shininess_->value();
+    validate();
 }
 
 engine::MaterialInstanceDefinition MaterialInstanceDialog::definition() const {
     engine::MaterialInstanceDefinition definition;
-    definition.version = 2;
+    definition.version = version_;
     if (const auto material = material_->reference()) {
         definition.material = material->path;
-        definition.materialReference = material;
+        if (version_ == 2) definition.materialReference = material;
     }
-    if (const auto albedo = albedo_->reference()) {
-        definition.parameters.albedoTexture = albedo->path;
-        definition.parameters.albedoReference = albedo;
+    if (albedo_mode_->currentIndex() == 2) definition.parameters.albedoTexture = "";
+    if (albedo_mode_->currentIndex() == 1) {
+        if (const auto albedo = albedo_->reference()) {
+            definition.parameters.albedoTexture = albedo->path;
+            if (version_ == 2) definition.parameters.albedoReference = albedo;
+        }
     }
     if (override_specular_->isChecked()) {
         definition.parameters.specularColor = specular_->value();
     }
     if (override_shininess_->isChecked()) {
-        definition.parameters.shininess = static_cast<float>(shininess_->value());
+        definition.parameters.shininess = loaded_shininess_ && shininess_->value() == displayed_shininess_
+            ? *loaded_shininess_ : static_cast<float>(shininess_->value());
     }
     return definition;
 }
@@ -342,7 +439,14 @@ QString MaterialInstanceDialog::problem() const {
     if (QString problem = NewAssetDialog::problem(); !problem.isEmpty()) {
         return problem;
     }
-    return material_->reference() ? QString() : tr("Choose a material.");
+    if (!material_->reference()) return tr("Choose a material.");
+    if (albedo_mode_->currentIndex() == 1 && !pending_albedo_.isEmpty()) {
+        return pending_albedo_timer_->isActive()
+            ? tr("Waiting for the new texture to appear in the asset catalog.")
+            : tr("%1 isn't in the asset catalog. Choose an albedo texture.").arg(pending_albedo_);
+    }
+    if (albedo_mode_->currentIndex() == 1 && !albedo_->reference()) return tr("Choose an albedo texture.");
+    return {};
 }
 
 void MaterialInstanceDialog::showInherited() {
@@ -367,8 +471,9 @@ void MaterialInstanceDialog::showInherited() {
 }
 
 MaterialDialog::MaterialDialog(const engine::AssetCatalog& catalog, const QString& folder, const QString& name,
-                               QWidget* parent)
-    : NewAssetDialog(tr("New Material"), folder, QStringLiteral(".material.json"), name, parent) {
+                               QWidget* parent, const bool editing)
+    : NewAssetDialog(editing ? tr("Edit Material") : tr("New Material"), folder,
+                     QStringLiteral(".material.json"), name, parent, editing) {
     shader_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Shader, tr("(standard shading)"));
     form()->addRow(tr("Shader"), shader_);
     // The functions a shader defines to patch the standard passes (MaterialDesc).
@@ -388,14 +493,30 @@ MaterialDialog::MaterialDialog(const engine::AssetCatalog& catalog, const QStrin
 
     albedo_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Texture, tr("(none)"));
     albedo_->selectPath(WhiteTexture);
-    form()->addRow(tr("Albedo texture"), albedo_);
+    albedo_mode_ = albedoMode();
+    albedo_mode_->setCurrentIndex(1);
+    auto* albedo_row = new QHBoxLayout;
+    albedo_row->addWidget(albedo_mode_);
+    albedo_row->addWidget(albedo_, 1);
+    form()->addRow(tr("Albedo texture"), albedo_row);
+    connect(albedo_mode_, &QComboBox::currentIndexChanged, this, [this] {
+        albedo_->setEnabled(albedo_mode_->currentIndex() == 1);
+        validate();
+    });
+    connect(albedo_, &QComboBox::currentIndexChanged, this, &MaterialDialog::validate);
     const engine::MaterialPBRParameters defaults;
+    override_specular_ = new QCheckBox(tr("Specular colour"));
+    override_specular_->setChecked(true);
     specular_ = new ColorButton(tr("Specular Colour"));
     specular_->setValue(defaults.specularColor);
-    form()->addRow(tr("Specular colour"), specular_);
+    connect(override_specular_, &QCheckBox::toggled, specular_, &QWidget::setEnabled);
+    form()->addRow(override_specular_, specular_);
+    override_shininess_ = new QCheckBox(tr("Shininess"));
+    override_shininess_->setChecked(true);
     shininess_ = shininessBox();
     shininess_->setValue(defaults.shininess);
-    form()->addRow(tr("Shininess"), shininess_);
+    connect(override_shininess_, &QCheckBox::toggled, shininess_, &QWidget::setEnabled);
+    form()->addRow(override_shininess_, shininess_);
 
     const auto shader_changed = [this] {
         const bool shader = shader_->reference().has_value();
@@ -408,12 +529,38 @@ MaterialDialog::MaterialDialog(const engine::AssetCatalog& catalog, const QStrin
     shader_changed();
 }
 
+void MaterialDialog::load(const engine::MaterialDefinition& definition) {
+    version_ = definition.version;
+    if (!selectReference(shader_, definition.shaderReference, definition.shaderFile)) shader_->setCurrentIndex(-1);
+    gbuffer_vs_->setChecked(engine::HasHook(definition.hooks, engine::MaterialHook::GBufferVS));
+    gbuffer_ps_->setChecked(engine::HasHook(definition.hooks, engine::MaterialHook::GBufferPS));
+    shadow_vs_->setChecked(engine::HasHook(definition.hooks, engine::MaterialHook::ShadowVS));
+    if (definition.defaults.albedoTexture) {
+        if (definition.defaults.albedoTexture->empty()) {
+            albedo_mode_->setCurrentIndex(2);
+        } else {
+            albedo_mode_->setCurrentIndex(1);
+            if (!selectReference(albedo_, definition.defaults.albedoReference,
+                                 *definition.defaults.albedoTexture)) albedo_->setCurrentIndex(-1);
+        }
+    } else {
+        albedo_mode_->setCurrentIndex(0);
+    }
+    override_specular_->setChecked(definition.defaults.specularColor.has_value());
+    if (definition.defaults.specularColor) specular_->setValue(*definition.defaults.specularColor);
+    override_shininess_->setChecked(definition.defaults.shininess.has_value());
+    if (definition.defaults.shininess) shininess_->setValue(*definition.defaults.shininess);
+    loaded_shininess_ = definition.defaults.shininess;
+    displayed_shininess_ = shininess_->value();
+    validate();
+}
+
 engine::MaterialDefinition MaterialDialog::definition() const {
     engine::MaterialDefinition definition;
-    definition.version = 2;
+    definition.version = version_;
     if (const auto shader = shader_->reference()) {
         definition.shaderFile = shader->path;
-        definition.shaderReference = shader;
+        if (version_ == 2) definition.shaderReference = shader;
         const std::pair<QCheckBox*, engine::MaterialHook> hooks[] = {{gbuffer_vs_, engine::MaterialHook::GBufferVS},
                                                                       {gbuffer_ps_, engine::MaterialHook::GBufferPS},
                                                                       {shadow_vs_, engine::MaterialHook::ShadowVS}};
@@ -423,12 +570,17 @@ engine::MaterialDefinition MaterialDialog::definition() const {
             }
         }
     }
-    if (const auto albedo = albedo_->reference()) {
-        definition.defaults.albedoTexture = albedo->path;
-        definition.defaults.albedoReference = albedo;
+    if (albedo_mode_->currentIndex() == 2) definition.defaults.albedoTexture = "";
+    if (albedo_mode_->currentIndex() == 1) {
+        if (const auto albedo = albedo_->reference()) {
+            definition.defaults.albedoTexture = albedo->path;
+            if (version_ == 2) definition.defaults.albedoReference = albedo;
+        }
     }
-    definition.defaults.specularColor = specular_->value();
-    definition.defaults.shininess = static_cast<float>(shininess_->value());
+    if (override_specular_->isChecked()) definition.defaults.specularColor = specular_->value();
+    if (override_shininess_->isChecked()) definition.defaults.shininess =
+        loaded_shininess_ && shininess_->value() == displayed_shininess_
+            ? *loaded_shininess_ : static_cast<float>(shininess_->value());
     return definition;
 }
 
@@ -436,6 +588,8 @@ QString MaterialDialog::problem() const {
     if (QString problem = NewAssetDialog::problem(); !problem.isEmpty()) {
         return problem;
     }
+    if (albedo_mode_->currentIndex() == 1 && !albedo_->reference()) return tr("Choose an albedo texture.");
+    if (shader_->currentIndex() < 0) return tr("Choose a shader or standard shading.");
     const bool hooked = gbuffer_vs_->isChecked() || gbuffer_ps_->isChecked() || shadow_vs_->isChecked();
     return shader_->reference() && !hooked ? tr("Pick the hooks the shader implements.") : QString();
 }

@@ -20,6 +20,7 @@
 #include <engine/assets/AssetAuthoring.hpp>
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
+#include <engine/assets/AssetSystem.hpp>
 #include <engine/assets/MaterialDefinition.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/engine.hpp>
@@ -340,13 +341,50 @@ bool AssetOperations::createMaterial(const QString& path, const engine::Material
 }
 
 bool AssetOperations::createMaterialInstance(const QString& path,
-                                             const engine::MaterialInstanceDefinition& definition) {
+                                              const engine::MaterialInstanceDefinition& definition) {
     std::string text;
     if (std::string error; !engine::SerializeMaterialInstanceDefinition(definition, text, error)) {
         report(tr("New Material Instance"), {fromUtf8(error)});
         return false;
     }
     return createFile(tr("New Material Instance"), path, text, engine::CatalogAssetKind::MaterialInstance);
+}
+
+bool AssetOperations::updateMaterial(const QString& path, const engine::MaterialDefinition& definition) {
+    std::string text;
+    if (std::string error; !engine::SerializeMaterialDefinition(definition, text, error)) {
+        report(tr("Edit Material"), {fromUtf8(error)});
+        return false;
+    }
+    if (!updateFile(tr("Edit Material"), path, text, engine::CatalogAssetKind::Material)) return false;
+    const std::string name = assetName(path).toStdString();
+    QStringList errors;
+    for (engine::AssetSystem* assets : {&context_.engine().GetAssets(), &context_.engine().GetSceneAssets()}) {
+        std::string error;
+        if (!assets->Reload(name, engine::AssetKind::Material, error))
+            errors << tr("File saved, but live reload failed: %1").arg(fromUtf8(error));
+    }
+    report(tr("Edit Material"), errors);
+    return errors.isEmpty();
+}
+
+bool AssetOperations::updateMaterialInstance(const QString& path,
+                                             const engine::MaterialInstanceDefinition& definition) {
+    std::string text;
+    if (std::string error; !engine::SerializeMaterialInstanceDefinition(definition, text, error)) {
+        report(tr("Edit Material Instance"), {fromUtf8(error)});
+        return false;
+    }
+    if (!updateFile(tr("Edit Material Instance"), path, text, engine::CatalogAssetKind::MaterialInstance)) return false;
+    const std::string name = assetName(path).toStdString();
+    QStringList errors;
+    for (engine::AssetSystem* assets : {&context_.engine().GetAssets(), &context_.engine().GetSceneAssets()}) {
+        std::string error;
+        if (!assets->Reload(name, engine::AssetKind::MaterialInstance, error))
+            errors << tr("File saved, but live reload failed: %1").arg(fromUtf8(error));
+    }
+    report(tr("Edit Material Instance"), errors);
+    return errors.isEmpty();
 }
 
 void AssetOperations::adoptNewFiles() {
@@ -408,6 +446,24 @@ bool AssetOperations::createFile(const QString& command, const QString& path, co
     if (!engine::WriteAssetMetadata(file, {engine::NewUuid(), kind}, error)) {
         std::error_code ec;
         std::filesystem::remove(file, ec);
+        report(command, {fromUtf8(error)});
+        return false;
+    }
+    rescan();
+    return true;
+}
+
+bool AssetOperations::updateFile(const QString& command, const QString& path, const std::string& text,
+                                 const engine::CatalogAssetKind kind) {
+    const std::filesystem::path file = editor::toPath(path);
+    const auto* entry = context_.engine().GetAssets().GetCatalog().FindPath(assetName(path).toStdString());
+    if (entry == nullptr || entry->metadata.kind != kind || entry->source != file ||
+        !isWithin(path, cleanPath(editor::toQString(context_.project().ContentDir())))) {
+        report(command, {tr("This asset is not an editable project asset.")});
+        return false;
+    }
+    std::string error;
+    if (!engine::WriteFileAtomic(file, text + '\n', error)) {
         report(command, {fromUtf8(error)});
         return false;
     }
