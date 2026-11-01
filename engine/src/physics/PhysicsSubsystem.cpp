@@ -244,6 +244,8 @@ struct PhysicsSubsystem::Impl {
         // Root authored scale avoids decomposition jitter as a dynamic body rotates.
         if (scene->GetParent(entity) == entt::null) pose.scale = scale;
         input = {collider, pose.scale, {}};
+        // Display preferences must never invalidate a simulation body or shape cache.
+        input.collider.showDebug = true;
         if (collider.shape == ColliderShape::ConvexMesh || collider.shape == ColliderShape::TriangleMesh) {
             const auto* renderer = scene->TryGetComponent<MeshRenderer>(entity);
             if (!renderer) { error = "mesh collider requires MeshRenderer"; return false; }
@@ -273,7 +275,7 @@ struct PhysicsSubsystem::Impl {
             }
             const auto& geometry = input.geometry;
             auto it = bodies.find(entity);
-            if (it != bodies.end() && (it->second.settings != settings || it->second.collider != *collider || it->second.scale != pose.scale || it->second.geometry != geometry)) {
+            if (it != bodies.end() && (it->second.settings != settings || it->second.collider != input.collider || it->second.scale != pose.scale || it->second.geometry != geometry)) {
                 Remove(entity); // authoring changes rebuild the shape/body and reset velocity
                 it = bodies.end();
             }
@@ -298,7 +300,7 @@ struct PhysicsSubsystem::Impl {
                 auto* body = api.CreateBody(creation);
                 if (!body) { Reject(entity, "body capacity exceeded"); return; }
                 const auto id = body->GetID();
-                bodies.emplace(entity, Body{id, settings, *collider, pose.scale, pose.position, pose.rotation, geometry});
+                bodies.emplace(entity, Body{id, settings, input.collider, pose.scale, pose.position, pose.rotation, geometry});
                 added.push_back(id);
                 failures.erase(entity);
             } else if (dt > 0 && settings.motionType != MotionType::Dynamic) {
@@ -436,6 +438,7 @@ bool PhysicsSubsystem::AppendColliderDebugLines(entt::entity entity, std::vector
     if (!impl_) { error = "physics is not initialized"; return false; }
     if (entity == entt::null) { impl_->ClearPreview(); return true; }
     const auto* collider = impl_->scene->TryGetComponent<Collider>(entity);
+    if (collider && !collider->showDebug) { impl_->ClearPreview(); return true; }
     const auto* settings = impl_->scene->TryGetComponent<RigidBody>(entity);
     detail::PhysicsPose pose;
     Impl::ShapeInput input;

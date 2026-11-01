@@ -106,8 +106,8 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
     if (components.contains("Collider") || components.contains("BoxCollider")) {
         const bool legacy = components.contains("BoxCollider");
         const auto& box = components.at(legacy ? "BoxCollider" : "Collider");
-        if (legacy) Fields(box, {"center", "halfExtents"});
-        else Fields(box, {"shape", "center", "halfExtents", "radius", "halfHeight"});
+        if (legacy) Fields(box, {"center", "halfExtents", "showDebug"});
+        else Fields(box, {"shape", "center", "halfExtents", "radius", "halfHeight", "showDebug"});
         Collider value;
         if (!legacy) {
             const auto shape = box.at("shape").get<std::string>();
@@ -129,6 +129,10 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         }
         if (box.contains("radius")) value.radius = Number(box.at("radius"));
         if (box.contains("halfHeight")) value.halfHeight = Number(box.at("halfHeight"));
+        if (box.contains("showDebug")) {
+            if (!box.at("showDebug").is_boolean()) throw std::invalid_argument("Collider showDebug must be boolean");
+            value.showDebug = box.at("showDebug").get<bool>();
+        }
         entity.collider = value;
     }
     if (components.contains("Script")) {
@@ -350,7 +354,7 @@ Json Encode(const SceneDocument& document) {
             case ColliderShape::TriangleMesh: shape = "TriangleMesh"; break;
             }
             auto& json = components["Collider"];
-            json = {{"shape", shape}, {"center", Encode(c.center)}};
+            json = {{"shape", shape}, {"center", Encode(c.center)}, {"showDebug", c.showDebug}};
             if (c.shape == ColliderShape::Cube || c.shape == ColliderShape::Box) json["halfExtents"] = Encode(c.halfExtents);
             if (c.shape == ColliderShape::Sphere || c.shape == ColliderShape::Capsule) json["radius"] = c.radius;
             if (c.shape == ColliderShape::Capsule) json["halfHeight"] = c.halfHeight;

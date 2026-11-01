@@ -120,7 +120,10 @@ remove button tooltip states this explicitly. Shape/settings edits during Play
 rebuild the body and reset velocity.
 
 The primary selected entity (the one shown in the inspector) displays a gold
-collider wireframe over the viewport, visible through the rendered mesh. This
+collider wireframe over the viewport, visible through the rendered mesh. The
+Collider inspector's Show collider checkbox controls this preview. It defaults
+to enabled (also for older scenes), persists as the boolean showDebug field in
+Collider JSON, and never rebuilds the physical body or resets its velocity. This
 works in Edit and Play for every Collider shape, including the cooked convex
 hull rather than the source mesh. Editing Shape, Center, dimensions, scale, Convex
 or the source mesh updates the outline; moving/rotating transforms cached lines.

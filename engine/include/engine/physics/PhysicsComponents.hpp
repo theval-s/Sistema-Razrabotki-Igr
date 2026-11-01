@@ -20,6 +20,7 @@ struct Collider {
     ColliderShape shape = ColliderShape::Box;
     float radius = 0.5f; // sphere/capsule
     float halfHeight = 0.5f; // capsule cylinder, along local Y (without caps)
+    bool showDebug = true; // editor wireframe; does not affect simulation
     bool operator==(const Collider&) const = default;
 };
 // Source compatibility for code authored before the shape selector.
