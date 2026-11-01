@@ -119,6 +119,16 @@ restores the authored pose. Removing either physics component removes both; the
 remove button tooltip states this explicitly. Shape/settings edits during Play
 rebuild the body and reset velocity.
 
+The primary selected entity (the one shown in the inspector) displays a gold
+collider wireframe over the viewport, visible through the rendered mesh. This
+works in Edit and Play for every Collider shape, including the cooked convex
+hull rather than the source mesh. Editing Shape, Center, dimensions, scale, Convex
+or the source mesh updates the outline; moving/rotating transforms cached lines.
+Deselecting, deleting the component/entity, unavailable mesh data or an invalid
+collider clears the preview. Preview uses the simulation's Jolt shape builder and
+Jolt leaf-shape triangles, without creating bodies or advancing physics in Edit.
+Only one preview geometry is cached; unchanged shapes are not cooked each frame.
+
 ## Pose ownership and commands
 
 - Dynamic: physics owns position/rotation. Direct Transform edits are overwritten;

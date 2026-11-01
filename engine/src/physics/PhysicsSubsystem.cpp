@@ -5,6 +5,8 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/TransformedShape.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -27,6 +29,8 @@
 #include <cstdio>
 #include <cmath>
 #include <mutex>
+#include <optional>
+#include <array>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -78,6 +82,7 @@ struct RuntimeLease {
     }
 };
 constexpr JPH::ObjectLayer StaticLayer = 0, MovingLayer = 1;
+constexpr std::string_view WaitingForMesh = "waiting for mesh collision geometry";
 JPH::EMotionType Motion(MotionType type) {
     switch (type) {
     case MotionType::Dynamic: return JPH::EMotionType::Dynamic;
@@ -179,6 +184,10 @@ struct PhysicsSubsystem::Impl {
         std::shared_ptr<const MeshGeometry> geometry;
         bool operator==(const ShapeInput&) const = default;
     };
+    std::optional<ShapeInput> previewInput;
+    std::vector<Vector3> previewLines;
+    std::string previewError;
+    void ClearPreview() { previewInput.reset(); previewLines.clear(); previewError.clear(); }
     std::unordered_map<entt::entity, ShapeInput> failedShapes;
     std::unordered_map<entt::entity, Body> bodies;
     std::unordered_map<entt::entity, std::string> failures;
@@ -211,12 +220,39 @@ struct PhysicsSubsystem::Impl {
         while (!bodies.empty()) Remove(bodies.begin()->first);
         failures.clear();
         failedShapes.clear();
+        ClearPreview();
     }
     void Reject(entt::entity entity, const std::string& error) {
         if (failures[entity] != error) {
             spdlog::error("Physics '{}': {}", scene->GetName(entity), error);
             failures[entity] = error;
         }
+    }
+    bool ReadShapeInput(entt::entity entity, const RigidBody& settings, const Collider& collider,
+                        detail::PhysicsPose& pose, ShapeInput& input, std::string& error) {
+        const auto scale = scene->GetTransform(entity).scale;
+        if (!detail::Finite(scale) || scale.x <= 0 || scale.y <= 0 || scale.z <= 0) {
+            error = "physics entities require positive local scale";
+            return false;
+        }
+        if (!detail::ValidatePhysics(settings, collider, error) ||
+            !detail::GetPhysicsPose(scene->GetWorldMatrix(entity), pose, error)) return false;
+        if (settings.motionType == MotionType::Dynamic && scene->GetParent(entity) != entt::null) {
+            error = "dynamic bodies must be root entities";
+            return false;
+        }
+        // Root authored scale avoids decomposition jitter as a dynamic body rotates.
+        if (scene->GetParent(entity) == entt::null) pose.scale = scale;
+        input = {collider, pose.scale, {}};
+        if (collider.shape == ColliderShape::ConvexMesh || collider.shape == ColliderShape::TriangleMesh) {
+            const auto* renderer = scene->TryGetComponent<MeshRenderer>(entity);
+            if (!renderer) { error = "mesh collider requires MeshRenderer"; return false; }
+            const auto mesh = assets->Peek(renderer->mesh);
+            if (!mesh || !mesh->geometry) { error = WaitingForMesh; return false; }
+            input.geometry = mesh->geometry;
+        }
+        error.clear();
+        return true;
     }
     void Synchronize(float dt) {
         std::unordered_set<entt::entity> live;
@@ -227,42 +263,21 @@ struct PhysicsSubsystem::Impl {
             if (!collider) { Remove(entity); return; }
             live.insert(entity);
             std::string error;
-            const auto scale = scene->GetTransform(entity).scale;
-            if (!detail::Finite(scale) || scale.x <= 0 || scale.y <= 0 || scale.z <= 0) {
-                if (bodies.contains(entity)) Remove(entity);
-                Reject(entity, "physics entities require positive local scale");
-                return;
-            }
             detail::PhysicsPose pose;
-            if (!detail::ValidatePhysics(settings, *collider, error) ||
-                !detail::GetPhysicsPose(scene->GetWorldMatrix(entity), pose, error) ||
-                (settings.motionType == MotionType::Dynamic && scene->GetParent(entity) != entt::null)) {
+            ShapeInput input;
+            if (!ReadShapeInput(entity, settings, *collider, pose, input, error)) {
                 if (bodies.contains(entity)) Remove(entity);
-                Reject(entity, error.empty() ? "dynamic bodies must be root entities" : error);
+                if (error == WaitingForMesh) failures[entity] = error;
+                else Reject(entity, error);
                 return;
             }
-            // A root's authored scale is exact; matrix decomposition can jitter as
-            // a dynamic body rotates, which must not rebuild it/reset its velocity.
-            if (scene->GetParent(entity) == entt::null) pose.scale = scale;
-            std::shared_ptr<const MeshGeometry> geometry;
-            if (collider->shape == ColliderShape::ConvexMesh || collider->shape == ColliderShape::TriangleMesh) {
-                const auto* renderer = scene->TryGetComponent<MeshRenderer>(entity);
-                const auto mesh = renderer ? assets->Peek(renderer->mesh) : entt::resource<MeshAsset>{};
-                if (!mesh || !mesh->geometry) {
-                    if (bodies.contains(entity)) Remove(entity);
-                    // An asynchronous asset request is normal: retry once it publishes.
-                    failures[entity] = renderer ? "waiting for mesh collision geometry" : "mesh collider requires MeshRenderer";
-                    return;
-                }
-                geometry = mesh->geometry;
-            }
+            const auto& geometry = input.geometry;
             auto it = bodies.find(entity);
             if (it != bodies.end() && (it->second.settings != settings || it->second.collider != *collider || it->second.scale != pose.scale || it->second.geometry != geometry)) {
                 Remove(entity); // authoring changes rebuild the shape/body and reset velocity
                 it = bodies.end();
             }
             if (it == bodies.end()) {
-                const ShapeInput input{*collider, pose.scale, geometry};
                 if (const auto failed = failedShapes.find(entity); failed != failedShapes.end() && failed->second == input) return;
                 const auto shape = CreateShape(*collider, pose.scale, geometry.get());
                 if (shape.HasError()) {
@@ -415,6 +430,57 @@ bool PhysicsSubsystem::Teleport(entt::entity entity, Vector3 position, Quaternio
     body->position = pose.position;
     body->rotation = pose.rotation;
     error.clear(); return true;
+}
+bool PhysicsSubsystem::AppendColliderDebugLines(entt::entity entity, std::vector<Vector3>& endpoints, std::string& error) {
+    error.clear();
+    if (!impl_) { error = "physics is not initialized"; return false; }
+    if (entity == entt::null) { impl_->ClearPreview(); return true; }
+    const auto* collider = impl_->scene->TryGetComponent<Collider>(entity);
+    const auto* settings = impl_->scene->TryGetComponent<RigidBody>(entity);
+    detail::PhysicsPose pose;
+    Impl::ShapeInput input;
+    if (!collider || !settings || !impl_->ReadShapeInput(entity, *settings, *collider, pose, input, error)) {
+        impl_->ClearPreview();
+        if (error.empty()) error = "entity has no RigidBody/Collider";
+        return false;
+    }
+    if (!impl_->previewInput || *impl_->previewInput != input) {
+        impl_->ClearPreview();
+        impl_->previewInput = input;
+        const auto result = CreateShape(input.collider, input.scale, input.geometry.get());
+        if (result.HasError()) impl_->previewError = result.GetError().c_str();
+        else {
+            const auto* shape = result.Get().GetPtr();
+            // The offset wrapper is not a leaf. Let Jolt collect transformed
+            // leaves before requesting triangles, preserving the local mesh origin.
+            JPH::AllHitCollisionCollector<JPH::TransformedShapeCollector> leaves;
+            const JPH::TransformedShape transformed(JPH::RVec3(shape->GetCenterOfMass()),
+                JPH::Quat::sIdentity(), shape, JPH::BodyID{});
+            transformed.CollectTransformedShapes(JPH::AABox::sBiggest(), leaves);
+            constexpr int batch = 128;
+            std::array<JPH::Float3, batch * 3> vertices;
+            for (const auto& leaf : leaves.mHits) {
+                JPH::Shape::GetTrianglesContext context;
+                leaf.GetTrianglesStart(context, JPH::AABox::sBiggest(), JPH::RVec3::sZero());
+                for (int count; (count = leaf.GetTrianglesNext(context, batch, vertices.data())) != 0;) {
+                    for (int i = 0; i < count * 3; i += 3) {
+                        for (int edge = 0; edge < 3; ++edge) {
+                            const auto& a = vertices[i + edge];
+                            const auto& b = vertices[i + (edge + 1) % 3];
+                            impl_->previewLines.emplace_back(a.x, a.y, a.z);
+                            impl_->previewLines.emplace_back(b.x, b.y, b.z);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    error = impl_->previewError;
+    if (!error.empty()) return false;
+    endpoints.reserve(endpoints.size() + impl_->previewLines.size());
+    for (const auto point : impl_->previewLines)
+        endpoints.push_back(Vector3::Transform(point, pose.rotation) + pose.position);
+    return true;
 }
 std::size_t PhysicsSubsystem::GetBodyCount() const { return impl_ ? impl_->bodies.size() : 0; }
 } // namespace engine

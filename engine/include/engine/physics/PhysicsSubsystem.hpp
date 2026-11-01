@@ -2,6 +2,7 @@
 #include <memory>
 #include <string>
 #include <cstdint>
+#include <vector>
 #include <entt/entity/entity.hpp>
 #include <engine/core/Subsystem.hpp>
 #include <engine/physics/PhysicsComponents.hpp>
@@ -34,6 +35,11 @@ public:
                                     DirectX::SimpleMath::Quaternion rotation, std::string& error);
     [[nodiscard]] bool Teleport(entt::entity entity, DirectX::SimpleMath::Vector3 position,
                                DirectX::SimpleMath::Quaternion rotation, std::string& error);
+    /// Append world-space wireframe endpoints for the authored collider, including in Edit mode.
+    /// Uses the same Jolt shape builder as simulation; does not create a body or step physics.
+    /// One preview is cached. Pass entt::null to release it when the inspector has no selection.
+    [[nodiscard]] bool AppendColliderDebugLines(entt::entity entity,
+        std::vector<DirectX::SimpleMath::Vector3>& endpoints, std::string& error);
     [[nodiscard]] std::size_t GetBodyCount() const;
 private:
     struct Impl;

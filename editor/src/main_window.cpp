@@ -67,6 +67,12 @@ public:
         world.editorLines.clear();
         auto& assets = GetEngine().GetSceneAssets();
         const auto& scene = GetEngine().GetScene();
+        if (auto* physics = GetEngine().GetSubsystem<engine::PhysicsSubsystem>()) {
+            std::string ignored;
+            // The inspector edits the primary entity. Preview also works in Edit,
+            // without registering simulation bodies or advancing the fixed clock.
+            (void)physics->AppendColliderDebugLines(selection_.primary(), world.editorLines, ignored);
+        }
         for (const auto entity : selection_.entities()) {
             if (!scene.IsValid(entity)) continue;
             lightLines(world.editorLines, scene, entity);
