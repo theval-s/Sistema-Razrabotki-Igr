@@ -40,6 +40,8 @@ struct EngineConfig {
     /// Upper bound for a frame's delta time, so a breakpoint or a window drag
     /// doesn't produce a giant simulation step.
     double maxDeltaSeconds = 0.25;
+    double fixedStepSeconds = 1.0 / 60.0;
+    std::uint32_t maxFixedStepsPerFrame = 8;
     /// Task scheduler threads to create in addition to the main thread.
     /// 0 = one per hardware thread, minus the main thread.
     std::uint32_t taskThreads = 0;
@@ -99,7 +101,7 @@ public:
     ENGINE_API void Shutdown();
     [[nodiscard]] ENGINE_API bool IsInitialized() const noexcept;
 
-    /// Runs exactly one frame: all Update()s, then all Render()s.
+    /// Runs one frame: Update/controllers, fixed steps, LateUpdate, Render.
     ENGINE_API void Tick();
     /// Initializes if needed, then Tick()s until RequestExit() is called.
     /// Something (e.g. a platform/window subsystem handling WM_QUIT) must call it.
@@ -168,6 +170,7 @@ public:
 
     
 private:
+    void ResetSimulation();
     void CommitScene(const SceneDocument& document);
     ENGINE_API Subsystem* RegisterSubsystem(entt::id_type type, std::string_view typeName,
                                             std::unique_ptr<Subsystem> subsystem);

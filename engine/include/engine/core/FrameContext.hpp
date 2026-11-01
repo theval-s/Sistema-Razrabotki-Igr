@@ -4,6 +4,13 @@
 
 namespace engine {
 
+/// Timing for a simulation tick, independent of rendering frequency.
+struct FixedUpdateContext {
+    std::uint64_t stepIndex = 0;
+    double deltaSeconds = 1.0 / 60.0;
+    double simulationTimeSeconds = 0.0; // end of step, since the last simulation reset
+};
+
 /// Timing information for the frame currently being processed.
 /// Passed to every Subsystem::Update / Subsystem::Render call.
 /// Although I'm not really sure we need this

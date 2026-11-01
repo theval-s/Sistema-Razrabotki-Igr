@@ -13,6 +13,8 @@ bool Subsystem::Initialize() {
 }
 void Subsystem::Shutdown() {}
 void Subsystem::Update(const FrameContext&) {}
+void Subsystem::FixedUpdate(const FixedUpdateContext&) {}
+void Subsystem::ResetSimulation() {}
 void Subsystem::LateUpdate(const FrameContext&) {}
 void Subsystem::Render(const FrameContext&) {}
 

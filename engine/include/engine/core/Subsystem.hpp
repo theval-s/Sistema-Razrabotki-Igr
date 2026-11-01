@@ -8,6 +8,7 @@ namespace engine {
 
 class Engine;
 struct FrameContext;
+struct FixedUpdateContext;
 
 /// Base class for everything the engine runs every frame: rendering, input,
 /// audio, physics, scripting, asset streaming, ...
@@ -16,6 +17,7 @@ struct FrameContext;
 ///   Initialize()  once, in registration order
 ///   Update()      every Tick(), in registration order
 ///                 (then the scene's controllers update and deferred scene loads apply)
+///   FixedUpdate() zero or more fixed steps after controllers/scene changes
 ///   LateUpdate()  every Tick() after controllers, in registration order; sees the
 ///                 frame's final scene state (e.g. render extraction)
 ///   Render()      every Tick() after all LateUpdates, in registration order
@@ -38,6 +40,10 @@ public:
     [[nodiscard]] virtual bool Initialize();
     virtual void Shutdown();
     virtual void Update(const FrameContext& frame);
+    /// Registration order: gameplay/forces first, PhysicsSubsystem last.
+    virtual void FixedUpdate(const FixedUpdateContext& step);
+    /// Scene replacement/Stop/shutdown; discard simulation state and external handles.
+    virtual void ResetSimulation();
     virtual void LateUpdate(const FrameContext& frame);
     virtual void Render(const FrameContext& frame);
 
