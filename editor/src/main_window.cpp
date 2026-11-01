@@ -1,3 +1,4 @@
+#include <engine/physics/PhysicsSubsystem.hpp>
 #include <editor/main_window.hpp>
 
 #include <QAction>
@@ -226,6 +227,7 @@ void MainWindow::startEngine() {
     viewport_->setInput(engine_.AddSubsystem<engine::InputSubsystem>());
     engine_.AddSubsystem<engine::ScriptSubsystem>();
     engine_.AddSubsystem<engine::RenderingSubsystem>();
+    engine_.AddSubsystem<engine::PhysicsSubsystem>();
     engine_.AddSubsystem<engine::RenderExtractionSubsystem>();
     camera_ = engine_.AddSubsystem<EditorCameraSubsystem>();
     engine_.AddSubsystem<SelectionRenderSubsystem>(context_->selection());

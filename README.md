@@ -107,3 +107,5 @@ The engine SDK (headers, import library, CMake package) is a separate install co
 ```
 cmake --install build/windows-msvc --config RelWithDebInfo --component sdk --prefix dist/sdk
 ```
+
+Fixed-step simulation and Jolt integration: [physics guide](docs/physics.md).
