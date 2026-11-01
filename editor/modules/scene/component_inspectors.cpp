@@ -12,6 +12,8 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QStandardItemModel>
 #include <QDoubleSpinBox>
 #include <QStyle>
 #include <QVBoxLayout>
@@ -32,6 +34,7 @@
 
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/engine.hpp>
+#include <engine/physics/PhysicsComponents.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/Scene.hpp>
 
@@ -244,6 +247,48 @@ void buildBounds(PropertyForm& form, editor::EditorContext& context, const entt:
         engine::Aabb* aabb = local();
         return aabb != nullptr ? &aabb->max : nullptr;
     });
+}
+
+void buildRigidBody(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
+    auto& scene = context.scene();
+    auto* motion = new QComboBox;
+    motion->addItem(QObject::tr("Static"), static_cast<int>(engine::MotionType::Static));
+    motion->addItem(QObject::tr("Dynamic"), static_cast<int>(engine::MotionType::Dynamic));
+    motion->addItem(QObject::tr("Kinematic"), static_cast<int>(engine::MotionType::Kinematic));
+    motion->setToolTip(QObject::tr("Dynamic bodies must be root entities without a parent."));
+    QObject::connect(motion, &QComboBox::activated, motion, [&context, &scene, entity, motion](int index) {
+        auto* body = scene.TryGetComponent<engine::RigidBody>(entity);
+        if (!body) return;
+        const auto type = static_cast<engine::MotionType>(motion->itemData(index).toInt());
+        if (type == engine::MotionType::Dynamic && scene.GetParent(entity) != entt::null) return;
+        if (body->motionType != type) {
+            body->motionType = type;
+            context.sceneDocument().markDirty();
+        }
+    });
+    form.addRow(QObject::tr("Motion type"), motion, [&scene, entity, motion] {
+        const auto* body = scene.TryGetComponent<engine::RigidBody>(entity);
+        if (!body) return;
+        if (auto* model = qobject_cast<QStandardItemModel*>(motion->model()))
+            model->item(motion->findData(static_cast<int>(engine::MotionType::Dynamic)))->setEnabled(scene.GetParent(entity) == entt::null);
+        if (!motion->view()->isVisible()) {
+            const QSignalBlocker blocker(motion);
+            motion->setCurrentIndex(motion->findData(static_cast<int>(body->motionType)));
+        }
+    });
+    form.addFloat(QObject::tr("Mass (kg)"), field(scene, entity, &engine::RigidBody::mass),
+                  {.step = 0.1, .decimals = 3, .minimum = 0.001, .maximum = 1.0e6});
+    form.addFloat(QObject::tr("Friction"), field(scene, entity, &engine::RigidBody::friction),
+                  {.step = 0.05, .decimals = 3, .minimum = 0, .maximum = 1.0e4});
+    form.addFloat(QObject::tr("Restitution"), field(scene, entity, &engine::RigidBody::restitution),
+                  {.step = 0.05, .decimals = 3, .minimum = 0, .maximum = 1});
+}
+
+void buildBoxCollider(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
+    auto& scene = context.scene();
+    form.addVec3(QObject::tr("Center"), field(scene, entity, &engine::BoxCollider::center));
+    form.addVec3(QObject::tr("Half extents"), field(scene, entity, &engine::BoxCollider::halfExtents),
+                 {.step = 0.1, .decimals = 3, .minimum = 0.001, .maximum = 1.0e6});
 }
 
 void buildGamePersistence(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
@@ -464,6 +509,18 @@ void addBounds(editor::EditorContext& context, const entt::entity entity) {
     scene.AddComponent<engine::Bounds>(entity, bounds);
 }
 
+// The scene codec requires the pair. Either menu action produces a saveable
+// default Static body; removing either component also removes its companion.
+void addPhysics(editor::EditorContext& context, const entt::entity entity) {
+    auto& scene = context.scene();
+    if (!scene.HasComponent<engine::BoxCollider>(entity)) scene.AddComponent<engine::BoxCollider>(entity);
+    if (!scene.HasComponent<engine::RigidBody>(entity)) scene.AddComponent<engine::RigidBody>(entity);
+}
+void removePhysics(editor::EditorContext& context, const entt::entity entity) {
+    context.scene().RemoveComponent<engine::RigidBody>(entity);
+    context.scene().RemoveComponent<engine::BoxCollider>(entity);
+}
+
 }  // namespace
 
 void addMeshRenderer(editor::EditorContext& context, const entt::entity entity) {
@@ -504,6 +561,10 @@ std::span<const ComponentInspector> componentInspectors() {
          addComponent<engine::SpotLight>, removeComponent<engine::SpotLight>},
         {entt::type_hash<engine::Bounds>::value(), QObject::tr("Bounds"), buildBounds, addBounds,
          removeComponent<engine::Bounds>},
+        {entt::type_hash<engine::RigidBody>::value(), QObject::tr("Rigid Body"), buildRigidBody,
+         addPhysics, removePhysics, QObject::tr("Remove Rigid Body and Box Collider")},
+        {entt::type_hash<engine::BoxCollider>::value(), QObject::tr("Box Collider"), buildBoxCollider,
+         addPhysics, removePhysics, QObject::tr("Remove Rigid Body and Box Collider")},
         {entt::type_hash<engine::GamePersistence>::value(), QObject::tr("Game Persistence"), buildGamePersistence,
          addComponent<engine::GamePersistence>, removeComponent<engine::GamePersistence>},
     };

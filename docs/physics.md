@@ -50,6 +50,21 @@ edits are diagnosed and the affected body is removed. Components are reconciled
 before each step. Changing body settings, collider geometry or scale rebuilds the
 body and resets velocity. Mesh AABBs are not implicitly physical colliders.
 
+## Editing in the editor
+
+Select an entity and use Add Component > Rigid Body (or Box Collider). Either
+entry adds both components with a default Static body, so the scene remains
+saveable. Change Motion type to Dynamic for a falling object, or leave Static
+for a floor. Dynamic is unavailable on entities with a parent; move the entity
+to the hierarchy root first.
+
+Rigid Body exposes mass, friction and restitution. Box Collider exposes local
+Center and Half extents: [0.5, 0.5, 0.5] is a unit-sized box before Transform scale.
+Numeric fields enforce positive mass/extents, nonnegative friction and restitution
+in [0,1]. Save with Ctrl+S and press Play. Stop restores the authored pose.
+Removing either physics component removes both; the remove button tooltip states
+this explicitly. Shape/settings edits during Play rebuild the body and reset velocity.
+
 ## Pose ownership and commands
 
 - Dynamic: physics owns position/rotation. Direct Transform edits are overwritten;
@@ -81,4 +96,4 @@ No CTest integration or new test suites are required. Check fixed stepping, floo
 contacts, removal, repeated initialization, paused frames and scene replacement.
 
 Not included: interpolated rendering, character controllers, mesh/convex cooking,
-constraints, ragdolls, Lua physics bindings, inspector controls and contact events.
+constraints, ragdolls, Lua physics bindings, contact events.
