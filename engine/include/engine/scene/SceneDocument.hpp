@@ -39,7 +39,7 @@ struct SceneEntityDefinition {
     std::optional<ControllerDefinition> controller;
     std::optional<Bounds> bounds;
     std::optional<RigidBody> rigidBody;
-    std::optional<BoxCollider> boxCollider;
+    std::optional<Collider> collider;
     std::optional<GamePersistence> persistence;
     std::optional<ScriptComponent> script;
 };

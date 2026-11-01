@@ -28,19 +28,38 @@ already register it. There is one PhysicsSystem per subsystem, while Jolt type
 registration lives until the last subsystem shuts down. Engine and EngineStatic
 both link Jolt privately via vcpkg. No Jolt types appear in the public API.
 
-A physics entity needs both RigidBody and BoxCollider. Component data is authored
+A physics entity needs both RigidBody and Collider. Component data is authored
 and serializable; BodyIDs and shapes are owned only by the physics subsystem.
 Example scene components:
 
 ~~~json
 "RigidBody": { "motionType": "Dynamic", "mass": 1, "friction": 0.5, "restitution": 0.15 },
-"BoxCollider": { "center": [0, 0, 0], "halfExtents": [0.5, 0.5, 0.5] }
+"Collider": { "shape": "Box", "center": [0, 0, 0], "halfExtents": [0.5, 0.5, 0.5] }
 ~~~
 
 Motion types are Static (default), Dynamic and Kinematic. Mass must be positive,
-friction nonnegative, restitution in [0,1]. Collider half extents must be positive;
-center is a local offset, not a world position. The offset and half extents are
-scaled with the entity. One scene unit is one metre; gravity defaults to -9.81 on Y.
+friction nonnegative, restitution in [0,1]. Collider center is an additional local
+translation, not a world position; it is scaled with the entity. One scene unit
+is one metre; gravity defaults to -9.81 on Y.
+
+Collider shapes and their JSON fields:
+
+| shape | Dimensions / geometry |
+| --- | --- |
+| Cube | halfExtents.x is the local half side; Y/Z are ignored |
+| Box | positive halfExtents [x,y,z] |
+| Sphere | positive radius |
+| Capsule | positive radius, nonnegative halfHeight of the cylinder, along local Y; total height = 2 * (halfHeight + radius) |
+| ConvexMesh | convex hull of the entity's MeshRenderer mesh positions |
+| TriangleMesh | original mesh triangles; Static bodies only |
+
+All shapes accept center. Dimensions omitted from JSON take component defaults.
+Legacy BoxCollider JSON still loads as a Box; saving writes Collider. The C++
+BoxCollider alias remains for source compatibility.
+Box/Cube dimensions and mesh vertices follow world scale per axis (a Cube under
+nonuniform scale becomes a rectangular box). A sphere keeps its shape using the
+largest world scale axis. A capsule keeps a circular cross-section using max(X,Z)
+for radius and Y for cylinder half height; it never becomes an ellipsoid.
 
 Dynamic bodies must be root entities and have positive local scale. Static and
 kinematic bodies may have parents when their world transform can be decomposed
@@ -49,21 +68,56 @@ Invalid scene data is rejected before replacing the active scene; invalid runtim
 edits are diagnosed and the affected body is removed. Components are reconciled
 before each step. Changing body settings, collider geometry or scale rebuilds the
 body and resets velocity. Mesh AABBs are not implicitly physical colliders.
+Mesh colliders require MeshRenderer. While its async mesh load is pending, the
+body is absent; it is created on the first fixed step after publication. Changing
+the mesh recreates the body. Removed/unavailable mesh data removes its body.
+
+MeshAsset retains shared immutable MeshGeometry (positions and CCW triangle
+indices, after import transforms/normalization). GPU-only normals/UV data is still
+released after upload. Jolt constructs convex hulls / triangle acceleration trees
+when creating a body, not every fixed step. This cooking currently runs on the
+main thread and large meshes can cause a Play-start hitch. Convex hulls fill holes
+and concavities; triangle surfaces are one-sided and need outward-facing winding.
+Dynamic/Kinematic use convex hulls; TriangleMesh is restricted to Static here.
+Jolt supports up to 256 hull vertices (interior source vertices do not count).
+An excessively detailed or invalid hull can fail cooking; its diagnostic is logged
+and the failed input is cached until collider dimensions/source geometry change.
+Use a simpler collision mesh or primitive in that case.
 
 ## Editing in the editor
 
-Select an entity and use Add Component > Rigid Body (or Box Collider). Either
+Select an entity and use Add Component > Rigid Body (or Collider). Either
 entry adds both components with a default Static body, so the scene remains
 saveable. Change Motion type to Dynamic for a falling object, or leave Static
 for a floor. Dynamic is unavailable on entities with a parent; move the entity
 to the hierarchy root first.
 
-Rigid Body exposes mass, friction and restitution. Box Collider exposes local
-Center and Half extents: [0.5, 0.5, 0.5] is a unit-sized box before Transform scale.
-Numeric fields enforce positive mass/extents, nonnegative friction and restitution
-in [0,1]. Save with Ctrl+S and press Play. Stop restores the authored pose.
-Removing either physics component removes both; the remove button tooltip states
-this explicitly. Shape/settings edits during Play rebuild the body and reset velocity.
+Rigid Body exposes mass, friction and restitution. Collider has a Shape selector:
+Cube, Box (parallelepiped), Sphere, Capsule, Mesh. Mesh exposes a Convex checkbox
+which asks Jolt to generate a convex hull, even when the source mesh is concave.
+In JSON, Mesh + Convex is shape ConvexMesh; Mesh without Convex is TriangleMesh.
+Only the selected shape's dimension fields are shown. Center is a local offset;
+[0.5, 0.5, 0.5] half extents describe a unit box before Transform scale.
+
+Assign the model in Mesh Renderer and wait for loading, then:
+
+- Fit to mesh sizes the selected primitive from the mesh AABB and centers it on
+  that AABB. Cube uses the largest half extent; Sphere uses the AABB half-diagonal;
+  Capsule uses max(X,Z) half extent for radius and max(0,Y-radius) for cylinder
+  half height. Capsule fitting is an approximation; adjust it for the model.
+- From mesh resets Center and selects TriangleMesh for Static or ConvexMesh for
+  Dynamic/Kinematic (preserving an existing Convex selection). Geometry stays linked to the Mesh Renderer asset rather than
+  being copied into scene JSON. Mesh tools are disabled while data is unavailable.
+- Convex is optional for Static: checked uses a generated hull, unchecked uses
+  original triangles. Changing Motion type to Dynamic/Kinematic automatically
+  enables Convex and locks the checkbox; switching back to Static allows turning
+  it off. A previously chosen Convex mode is preserved by From mesh.
+
+Numeric fields enforce positive mass/dimensions, nonnegative capsule half height
+and friction, and restitution in [0,1]. Save with Ctrl+S and press Play. Stop
+restores the authored pose. Removing either physics component removes both; the
+remove button tooltip states this explicitly. Shape/settings edits during Play
+rebuild the body and reset velocity.
 
 ## Pose ownership and commands
 
@@ -95,5 +149,5 @@ Build using the existing presets and run existing GoogleTest executables directl
 No CTest integration or new test suites are required. Check fixed stepping, floor
 contacts, removal, repeated initialization, paused frames and scene replacement.
 
-Not included: interpolated rendering, character controllers, mesh/convex cooking,
+Not included: interpolated rendering, character controllers, asynchronous shape cooking,
 constraints, ragdolls, Lua physics bindings, contact events.

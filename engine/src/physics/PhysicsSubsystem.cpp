@@ -6,6 +6,10 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayerInterfaceTable.h>
 #include <Jolt/Physics/Collision/BroadPhase/ObjectVsBroadPhaseLayerFilterTable.h>
@@ -13,6 +17,8 @@
 
 #include <engine/physics/PhysicsSubsystem.hpp>
 #include <engine/engine.hpp>
+#include <engine/assets/AssetSystem.hpp>
+#include <engine/rendering/RenderComponents.hpp>
 #include <engine/core/FrameContext.hpp>
 #include "PhysicsValidation.hpp"
 #include <spdlog/spdlog.h>
@@ -79,6 +85,68 @@ JPH::EMotionType Motion(MotionType type) {
     default: return JPH::EMotionType::Static;
     }
 }
+JPH::ShapeSettings::ShapeResult CreateShape(const Collider& collider, Vector3 scale, const MeshGeometry* geometry) {
+    using Result = JPH::ShapeSettings::ShapeResult;
+    const auto fail = [](const char* message) { Result result; result.SetError(message); return result; };
+    const Vector3 offset = collider.center * scale;
+    if (!detail::Finite(offset)) return fail("scaled collider center is not finite");
+    Result base;
+    switch (collider.shape) {
+    case ColliderShape::Cube:
+    case ColliderShape::Box: {
+        const auto half = collider.shape == ColliderShape::Cube ? Vector3(collider.halfExtents.x) : collider.halfExtents;
+        const Vector3 extent = half * scale;
+        if (!detail::Finite(extent)) return fail("scaled collider extents are not finite");
+        const float radius = (std::min)(0.05f, (std::min)({extent.x, extent.y, extent.z}) * 0.1f);
+        base = JPH::BoxShapeSettings(Vec(extent), radius).Create();
+        break;
+    }
+    case ColliderShape::Sphere: {
+        const float radius = collider.radius * (std::max)({scale.x, scale.y, scale.z});
+        if (!std::isfinite(radius)) return fail("scaled sphere radius is not finite");
+        base = JPH::SphereShapeSettings(radius).Create();
+        break;
+    }
+    case ColliderShape::Capsule: {
+        const float radius = collider.radius * (std::max)(scale.x, scale.z);
+        const float height = collider.halfHeight * scale.y;
+        if (!std::isfinite(radius) || !std::isfinite(height)) return fail("scaled capsule dimensions are not finite");
+        base = JPH::CapsuleShapeSettings(height, radius).Create();
+        break;
+    }
+    case ColliderShape::ConvexMesh:
+    case ColliderShape::TriangleMesh: {
+        if (!geometry || geometry->positions.empty()) return fail("mesh has no CPU collision geometry");
+        JPH::Array<JPH::Vec3> points;
+        points.reserve(geometry->positions.size());
+        for (const auto position : geometry->positions) {
+            const Vector3 scaled = position * scale;
+            if (!detail::Finite(scaled)) return fail("scaled mesh position is not finite");
+            points.push_back(Vec(scaled));
+        }
+        if (collider.shape == ColliderShape::ConvexMesh) {
+            base = JPH::ConvexHullShapeSettings(points).Create();
+        } else {
+            if (geometry->indices.empty() || geometry->indices.size() % 3 != 0) return fail("mesh requires triangle indices");
+            JPH::VertexList vertices;
+            vertices.reserve(points.size());
+            for (const auto point : points) { JPH::Float3 vertex; point.StoreFloat3(&vertex); vertices.push_back(vertex); }
+            JPH::IndexedTriangleList triangles;
+            triangles.reserve(geometry->indices.size() / 3);
+            for (std::size_t i = 0; i < geometry->indices.size(); i += 3) {
+                const auto a = geometry->indices[i], b = geometry->indices[i + 1], c = geometry->indices[i + 2];
+                if (a >= points.size() || b >= points.size() || c >= points.size()) return fail("mesh index is out of range");
+                triangles.emplace_back(a, b, c);
+            }
+            base = JPH::MeshShapeSettings(std::move(vertices), std::move(triangles)).Create();
+        }
+        break;
+    }
+    default: return fail("invalid collider shape");
+    }
+    if (base.HasError()) return base;
+    return JPH::RotatedTranslatedShapeSettings(Vec(offset), JPH::Quat::sIdentity(), base.Get()).Create();
+}
 bool ValidPose(Vector3 position, Quaternion rotation, std::string& error) {
     if (!detail::Finite(position) || !std::isfinite(rotation.LengthSquared()) || rotation.LengthSquared() < 1e-8f) {
         error = "position/rotation must be finite and rotation must be nonzero";
@@ -99,14 +167,23 @@ struct PhysicsSubsystem::Impl {
     struct Body {
         JPH::BodyID id;
         RigidBody settings;
-        BoxCollider collider;
+        Collider collider;
         Vector3 scale;
         Vector3 position;
         Quaternion rotation;
+        std::shared_ptr<const MeshGeometry> geometry;
     };
+    struct ShapeInput {
+        Collider collider;
+        Vector3 scale;
+        std::shared_ptr<const MeshGeometry> geometry;
+        bool operator==(const ShapeInput&) const = default;
+    };
+    std::unordered_map<entt::entity, ShapeInput> failedShapes;
     std::unordered_map<entt::entity, Body> bodies;
     std::unordered_map<entt::entity, std::string> failures;
     Scene* scene = nullptr;
+    AssetSystem* assets = nullptr;
     std::size_t observer = 0;
 
     explicit Impl(const PhysicsConfig& config)
@@ -128,10 +205,12 @@ struct PhysicsSubsystem::Impl {
             bodies.erase(it);
         }
         failures.erase(entity);
+        failedShapes.erase(entity);
     }
     void Clear() {
         while (!bodies.empty()) Remove(bodies.begin()->first);
         failures.clear();
+        failedShapes.clear();
     }
     void Reject(entt::entity entity, const std::string& error) {
         if (failures[entity] != error) {
@@ -144,7 +223,7 @@ struct PhysicsSubsystem::Impl {
         std::vector<JPH::BodyID> added;
         auto& api = world.GetBodyInterface();
         scene->ForEach<RigidBody>([&](entt::entity entity, const RigidBody& settings) {
-            const auto* collider = scene->TryGetComponent<BoxCollider>(entity);
+            const auto* collider = scene->TryGetComponent<Collider>(entity);
             if (!collider) { Remove(entity); return; }
             live.insert(entity);
             std::string error;
@@ -165,20 +244,33 @@ struct PhysicsSubsystem::Impl {
             // A root's authored scale is exact; matrix decomposition can jitter as
             // a dynamic body rotates, which must not rebuild it/reset its velocity.
             if (scene->GetParent(entity) == entt::null) pose.scale = scale;
+            std::shared_ptr<const MeshGeometry> geometry;
+            if (collider->shape == ColliderShape::ConvexMesh || collider->shape == ColliderShape::TriangleMesh) {
+                const auto* renderer = scene->TryGetComponent<MeshRenderer>(entity);
+                const auto mesh = renderer ? assets->Peek(renderer->mesh) : entt::resource<MeshAsset>{};
+                if (!mesh || !mesh->geometry) {
+                    if (bodies.contains(entity)) Remove(entity);
+                    // An asynchronous asset request is normal: retry once it publishes.
+                    failures[entity] = renderer ? "waiting for mesh collision geometry" : "mesh collider requires MeshRenderer";
+                    return;
+                }
+                geometry = mesh->geometry;
+            }
             auto it = bodies.find(entity);
-            if (it != bodies.end() && (it->second.settings != settings || it->second.collider != *collider || it->second.scale != pose.scale)) {
+            if (it != bodies.end() && (it->second.settings != settings || it->second.collider != *collider || it->second.scale != pose.scale || it->second.geometry != geometry)) {
                 Remove(entity); // authoring changes rebuild the shape/body and reset velocity
                 it = bodies.end();
             }
             if (it == bodies.end()) {
-                const Vector3 extent = collider->halfExtents * pose.scale;
-                const Vector3 offset = collider->center * pose.scale;
-                if (!detail::Finite(extent) || !detail::Finite(offset)) { Reject(entity, "scaled collider is not finite"); return; }
-                const float radius = (std::min)(0.05f, (std::min)({extent.x, extent.y, extent.z}) * 0.1f);
-                const auto box = JPH::BoxShapeSettings(Vec(extent), radius).Create();
-                if (box.HasError()) { Reject(entity, box.GetError().c_str()); return; }
-                const auto shape = JPH::RotatedTranslatedShapeSettings(Vec(offset), JPH::Quat::sIdentity(), box.Get()).Create();
-                if (shape.HasError()) { Reject(entity, shape.GetError().c_str()); return; }
+                const ShapeInput input{*collider, pose.scale, geometry};
+                if (const auto failed = failedShapes.find(entity); failed != failedShapes.end() && failed->second == input) return;
+                const auto shape = CreateShape(*collider, pose.scale, geometry.get());
+                if (shape.HasError()) {
+                    failedShapes.insert_or_assign(entity, input); // do not re-cook invalid geometry every step
+                    Reject(entity, shape.GetError().c_str());
+                    return;
+                }
+                failedShapes.erase(entity);
                 JPH::BodyCreationSettings creation(shape.Get(), Position(pose.position), Quat(pose.rotation),
                     Motion(settings.motionType), settings.motionType == MotionType::Static ? StaticLayer : MovingLayer);
                 creation.mFriction = settings.friction;
@@ -191,7 +283,7 @@ struct PhysicsSubsystem::Impl {
                 auto* body = api.CreateBody(creation);
                 if (!body) { Reject(entity, "body capacity exceeded"); return; }
                 const auto id = body->GetID();
-                bodies.emplace(entity, Body{id, settings, *collider, pose.scale, pose.position, pose.rotation});
+                bodies.emplace(entity, Body{id, settings, *collider, pose.scale, pose.position, pose.rotation, geometry});
                 added.push_back(id);
                 failures.erase(entity);
             } else if (dt > 0 && settings.motionType != MotionType::Dynamic) {
@@ -217,7 +309,7 @@ struct PhysicsSubsystem::Impl {
         Synchronize(0);
         const auto it = bodies.find(entity);
         if (it == bodies.end()) {
-            error = failures.contains(entity) ? failures.at(entity) : "entity has no RigidBody/BoxCollider";
+            error = failures.contains(entity) ? failures.at(entity) : "entity has no RigidBody/Collider";
             return nullptr;
         }
         error.clear();
@@ -237,9 +329,10 @@ bool PhysicsSubsystem::Initialize() {
     try {
         impl_ = std::make_unique<Impl>(config_);
         impl_->scene = &GetEngine().GetScene();
+        impl_->assets = &GetEngine().GetSceneAssets();
         impl_->observer = impl_->scene->AddLifecycleObserver([this](Scene::LifecycleEvent event, entt::entity entity, entt::id_type type) {
             if (event == Scene::LifecycleEvent::EntityDestroying || type == entt::type_hash<RigidBody>::value() ||
-                type == entt::type_hash<BoxCollider>::value()) impl_->Remove(entity);
+                type == entt::type_hash<Collider>::value()) impl_->Remove(entity);
         });
         return true;
     } catch (const std::exception& e) {

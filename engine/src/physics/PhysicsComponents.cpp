@@ -5,13 +5,23 @@ namespace engine::detail {
 bool Finite(DirectX::SimpleMath::Vector3 v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
 }
-bool ValidatePhysics(const RigidBody& body, const BoxCollider& collider, std::string& error) {
+bool ValidatePhysics(const RigidBody& body, const Collider& collider, std::string& error) {
     const auto extents = collider.halfExtents;
     if ((body.motionType != MotionType::Static && body.motionType != MotionType::Dynamic && body.motionType != MotionType::Kinematic) ||
         !std::isfinite(body.mass) || body.mass <= 0 || !std::isfinite(body.friction) || body.friction < 0 ||
         !std::isfinite(body.restitution) || body.restitution < 0 || body.restitution > 1 ||
         !Finite(collider.center) || !Finite(extents) || extents.x <= 0 || extents.y <= 0 || extents.z <= 0) {
-        error = "invalid RigidBody/BoxCollider: require positive mass/extents, nonnegative friction and restitution in [0,1]";
+        error = "invalid RigidBody/Collider: require positive mass/extents, nonnegative friction and restitution in [0,1]";
+        return false;
+    }
+    if (!std::isfinite(collider.radius) || collider.radius <= 0 ||
+        !std::isfinite(collider.halfHeight) || collider.halfHeight < 0 ||
+        collider.shape < ColliderShape::Cube || collider.shape > ColliderShape::TriangleMesh) {
+        error = "invalid collider shape, radius or capsule half height";
+        return false;
+    }
+    if (collider.shape == ColliderShape::TriangleMesh && body.motionType != MotionType::Static) {
+        error = "triangle mesh colliders require Static; use ConvexMesh for moving bodies";
         return false;
     }
     error.clear();

@@ -87,7 +87,7 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
     }
     if (j.contains("parent")) entity.parent = OptionalId(j.at("parent"));
     const auto& components = j.at("components");
-    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "RigidBody", "BoxCollider"});
+    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "RigidBody", "Collider", "BoxCollider"});
     if (components.contains("RigidBody")) {
         const auto& body = components.at("RigidBody");
         Fields(body, {"motionType", "mass", "friction", "restitution"});
@@ -101,17 +101,35 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         if (body.contains("restitution")) value.restitution = Number(body.at("restitution"));
         entity.rigidBody = value;
     }
-    if (components.contains("BoxCollider")) {
-        const auto& box = components.at("BoxCollider");
-        Fields(box, {"center", "halfExtents"});
-        const auto extents = Numbers<3>(box.at("halfExtents"));
-        BoxCollider value;
-        value.halfExtents = {extents[0], extents[1], extents[2]};
+    if (components.contains("Collider") && components.contains("BoxCollider"))
+        throw std::invalid_argument("use Collider or legacy BoxCollider, not both");
+    if (components.contains("Collider") || components.contains("BoxCollider")) {
+        const bool legacy = components.contains("BoxCollider");
+        const auto& box = components.at(legacy ? "BoxCollider" : "Collider");
+        if (legacy) Fields(box, {"center", "halfExtents"});
+        else Fields(box, {"shape", "center", "halfExtents", "radius", "halfHeight"});
+        Collider value;
+        if (!legacy) {
+            const auto shape = box.at("shape").get<std::string>();
+            if (shape == "Cube") value.shape = ColliderShape::Cube;
+            else if (shape == "Box") value.shape = ColliderShape::Box;
+            else if (shape == "Sphere") value.shape = ColliderShape::Sphere;
+            else if (shape == "Capsule") value.shape = ColliderShape::Capsule;
+            else if (shape == "ConvexMesh") value.shape = ColliderShape::ConvexMesh;
+            else if (shape == "TriangleMesh") value.shape = ColliderShape::TriangleMesh;
+            else throw std::invalid_argument("invalid Collider shape");
+        }
+        if (box.contains("halfExtents")) {
+            const auto extents = Numbers<3>(box.at("halfExtents"));
+            value.halfExtents = {extents[0], extents[1], extents[2]};
+        } else if (legacy) throw std::invalid_argument("BoxCollider requires halfExtents");
         if (box.contains("center")) {
             const auto center = Numbers<3>(box.at("center"));
             value.center = {center[0], center[1], center[2]};
         }
-        entity.boxCollider = value;
+        if (box.contains("radius")) value.radius = Number(box.at("radius"));
+        if (box.contains("halfHeight")) value.halfHeight = Number(box.at("halfHeight"));
+        entity.collider = value;
     }
     if (components.contains("Script")) {
         const auto& script = components.at("Script");
@@ -233,11 +251,13 @@ void Validate(const SceneDocument& document) {
         }
     }
     for (const auto& entity : document.entities) {
-        if (entity.rigidBody.has_value() != entity.boxCollider.has_value())
-            throw std::invalid_argument("RigidBody and BoxCollider must be provided together");
+        if (entity.rigidBody.has_value() != entity.collider.has_value())
+            throw std::invalid_argument("RigidBody and Collider must be provided together");
         if (!entity.rigidBody) continue;
         std::string error;
-        if (!detail::ValidatePhysics(*entity.rigidBody, *entity.boxCollider, error)) throw std::invalid_argument(error);
+        if (!detail::ValidatePhysics(*entity.rigidBody, *entity.collider, error)) throw std::invalid_argument(error);
+        if ((entity.collider->shape == ColliderShape::ConvexMesh || entity.collider->shape == ColliderShape::TriangleMesh) && !entity.renderer)
+            throw std::invalid_argument("mesh collider requires MeshRenderer");
         if (entity.parent && entity.rigidBody->motionType == MotionType::Dynamic)
             throw std::invalid_argument("dynamic physics bodies must be root entities");
         if (entity.transform.scale.x <= 0 || entity.transform.scale.y <= 0 || entity.transform.scale.z <= 0)
@@ -250,7 +270,8 @@ void Validate(const SceneDocument& document) {
         }
         detail::PhysicsPose pose;
         if (!detail::GetPhysicsPose(matrix, pose, error)) throw std::invalid_argument(error);
-        if (!detail::Finite(entity.boxCollider->halfExtents * pose.scale) || !detail::Finite(entity.boxCollider->center * pose.scale))
+        if (!detail::Finite(entity.collider->halfExtents * pose.scale) || !detail::Finite(entity.collider->center * pose.scale) ||
+            !detail::Finite(pose.scale * entity.collider->radius) || !detail::Finite(pose.scale * entity.collider->halfHeight))
             throw std::invalid_argument("scaled collider is not finite");
     }
     if (document.activeCamera) {
@@ -317,8 +338,23 @@ Json Encode(const SceneDocument& document) {
                 throw std::invalid_argument("invalid RigidBody motionType");
             components["RigidBody"] = {{"motionType", motion}, {"mass", body.mass}, {"friction", body.friction}, {"restitution", body.restitution}};
         }
-        if (entity.boxCollider)
-            components["BoxCollider"] = {{"center", Encode(entity.boxCollider->center)}, {"halfExtents", Encode(entity.boxCollider->halfExtents)}};
+        if (entity.collider) {
+            const auto& c = *entity.collider;
+            const char* shape = "Box";
+            switch (c.shape) {
+            case ColliderShape::Cube: shape = "Cube"; break;
+            case ColliderShape::Box: break;
+            case ColliderShape::Sphere: shape = "Sphere"; break;
+            case ColliderShape::Capsule: shape = "Capsule"; break;
+            case ColliderShape::ConvexMesh: shape = "ConvexMesh"; break;
+            case ColliderShape::TriangleMesh: shape = "TriangleMesh"; break;
+            }
+            auto& json = components["Collider"];
+            json = {{"shape", shape}, {"center", Encode(c.center)}};
+            if (c.shape == ColliderShape::Cube || c.shape == ColliderShape::Box) json["halfExtents"] = Encode(c.halfExtents);
+            if (c.shape == ColliderShape::Sphere || c.shape == ColliderShape::Capsule) json["radius"] = c.radius;
+            if (c.shape == ColliderShape::Capsule) json["halfHeight"] = c.halfHeight;
+        }
         if (entity.bounds)
             components["Bounds"] = {{"min", Encode(entity.bounds->local.min)}, {"max", Encode(entity.bounds->local.max)}};
         if (entity.persistence)
@@ -389,7 +425,7 @@ bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDo
             definition.tags.assign(tags.begin(), tags.end());
             if (const auto* controller = scene.GetControllerDefinition(entity)) definition.controller = *controller;
             if (const auto* body = scene.TryGetComponent<RigidBody>(entity)) definition.rigidBody = *body;
-            if (const auto* box = scene.TryGetComponent<BoxCollider>(entity)) definition.boxCollider = *box;
+            if (const auto* box = scene.TryGetComponent<Collider>(entity)) definition.collider = *box;
             if (const auto* bounds = scene.TryGetComponent<Bounds>(entity)) definition.bounds = *bounds;
             if (const auto* persistence = scene.TryGetComponent<GamePersistence>(entity)) definition.persistence = *persistence;
             if (const auto* script = scene.TryGetComponent<ScriptComponent>(entity)) definition.script = *script;
@@ -445,7 +481,7 @@ void PopulateScene(const SceneDocument& document, AssetSystem& assets, Scene& de
         if (definition.pointLight) destination.AddComponent<PointLight>(entity, *definition.pointLight);
         if (definition.spotLight) destination.AddComponent<SpotLight>(entity, *definition.spotLight);
         if (definition.rigidBody) destination.AddComponent<RigidBody>(entity, *definition.rigidBody);
-        if (definition.boxCollider) destination.AddComponent<BoxCollider>(entity, *definition.boxCollider);
+        if (definition.collider) destination.AddComponent<Collider>(entity, *definition.collider);
         if (definition.bounds) destination.AddComponent<Bounds>(entity, *definition.bounds);
         if (definition.persistence) destination.AddComponent<GamePersistence>(entity, *definition.persistence);
         if (definition.script) destination.AddComponent<ScriptComponent>(entity, *definition.script);

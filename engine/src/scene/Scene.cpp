@@ -18,7 +18,7 @@ Scene::Scene() {
     static_cast<void>(registry_.storage<SpotLight>());
     static_cast<void>(registry_.storage<Bounds>());
     static_cast<void>(registry_.storage<RigidBody>());
-    static_cast<void>(registry_.storage<BoxCollider>());
+    static_cast<void>(registry_.storage<Collider>());
     static_cast<void>(registry_.storage<GamePersistence>());
 }
 Scene::~Scene() { Clear(); }
