@@ -665,6 +665,20 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
         }
         if (!seen.insert(cursor).second) { error = "spawn hierarchy cycle"; return false; }
     }
+    // Validate the composed scene too: save-game transforms/parents can turn a
+    // valid authored collider into an unsupported dynamic hierarchy or shear.
+    SceneDocument restored = base;
+    std::erase_if(restored.entities, [&](const auto& item) { return removed(item.id); });
+    restored.entities.insert(restored.entities.end(), game.spawned.entities.begin(), game.spawned.entities.end());
+    for (auto& item : restored.entities) {
+        if (const auto it = game.spawnParents.find(item.id); it != game.spawnParents.end()) item.parent = it->second;
+        for (const auto& state : game.entities)
+            if (state.id == item.id && state.transform) item.transform = *state.transform;
+    }
+    if (restored.activeCamera && removed(*restored.activeCamera)) restored.activeCamera.reset();
+    if (restored.directionalLight && removed(*restored.directionalLight)) restored.directionalLight.reset();
+    std::string checkedScene;
+    if (!SerializeSceneDocument(restored, checkedScene, error)) return false;
     impl_->deferControllerActivation = true;
     const bool loaded = LoadScene(entry->source, error);
     impl_->deferControllerActivation = false;

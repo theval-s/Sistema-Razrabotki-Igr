@@ -10,6 +10,7 @@
 #include <engine/engine_export.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/Transform.hpp>
+#include <engine/physics/PhysicsComponents.hpp>
 #include <engine/scene/Components.hpp>
 #include <engine/scene/Controller.hpp>
 #include <engine/scene/SceneQueries.hpp>
@@ -37,6 +38,8 @@ struct SceneEntityDefinition {
     std::optional<SpotLight> spotLight;
     std::optional<ControllerDefinition> controller;
     std::optional<Bounds> bounds;
+    std::optional<RigidBody> rigidBody;
+    std::optional<BoxCollider> boxCollider;
     std::optional<GamePersistence> persistence;
     std::optional<ScriptComponent> script;
 };

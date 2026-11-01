@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/scene/Scene.hpp>
+#include "../physics/PhysicsValidation.hpp"
 
 namespace engine {
 namespace {
@@ -86,7 +87,32 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
     }
     if (j.contains("parent")) entity.parent = OptionalId(j.at("parent"));
     const auto& components = j.at("components");
-    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script"});
+    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "RigidBody", "BoxCollider"});
+    if (components.contains("RigidBody")) {
+        const auto& body = components.at("RigidBody");
+        Fields(body, {"motionType", "mass", "friction", "restitution"});
+        RigidBody value;
+        const auto type = body.value("motionType", std::string("Static"));
+        if (type == "Dynamic") value.motionType = MotionType::Dynamic;
+        else if (type == "Kinematic") value.motionType = MotionType::Kinematic;
+        else if (type != "Static") throw std::invalid_argument("invalid RigidBody motionType");
+        if (body.contains("mass")) value.mass = Number(body.at("mass"));
+        if (body.contains("friction")) value.friction = Number(body.at("friction"));
+        if (body.contains("restitution")) value.restitution = Number(body.at("restitution"));
+        entity.rigidBody = value;
+    }
+    if (components.contains("BoxCollider")) {
+        const auto& box = components.at("BoxCollider");
+        Fields(box, {"center", "halfExtents"});
+        const auto extents = Numbers<3>(box.at("halfExtents"));
+        BoxCollider value;
+        value.halfExtents = {extents[0], extents[1], extents[2]};
+        if (box.contains("center")) {
+            const auto center = Numbers<3>(box.at("center"));
+            value.center = {center[0], center[1], center[2]};
+        }
+        entity.boxCollider = value;
+    }
     if (components.contains("Script")) {
         const auto& script = components.at("Script");
         Fields(script, {"script", "enabled", "properties"});
@@ -206,6 +232,27 @@ void Validate(const SceneDocument& document) {
             current = &document.entities[it->second];
         }
     }
+    for (const auto& entity : document.entities) {
+        if (entity.rigidBody.has_value() != entity.boxCollider.has_value())
+            throw std::invalid_argument("RigidBody and BoxCollider must be provided together");
+        if (!entity.rigidBody) continue;
+        std::string error;
+        if (!detail::ValidatePhysics(*entity.rigidBody, *entity.boxCollider, error)) throw std::invalid_argument(error);
+        if (entity.parent && entity.rigidBody->motionType == MotionType::Dynamic)
+            throw std::invalid_argument("dynamic physics bodies must be root entities");
+        if (entity.transform.scale.x <= 0 || entity.transform.scale.y <= 0 || entity.transform.scale.z <= 0)
+            throw std::invalid_argument("physics entities require positive local scale");
+        auto matrix = entity.transform.ToMatrix();
+        const auto* current = &entity;
+        while (current->parent) {
+            current = &document.entities[ids.at(*current->parent)];
+            matrix *= current->transform.ToMatrix();
+        }
+        detail::PhysicsPose pose;
+        if (!detail::GetPhysicsPose(matrix, pose, error)) throw std::invalid_argument(error);
+        if (!detail::Finite(entity.boxCollider->halfExtents * pose.scale) || !detail::Finite(entity.boxCollider->center * pose.scale))
+            throw std::invalid_argument("scaled collider is not finite");
+    }
     if (document.activeCamera) {
         const auto it = ids.find(*document.activeCamera);
         if (it == ids.end() || !document.entities[it->second].camera)
@@ -262,6 +309,16 @@ Json Encode(const SceneDocument& document) {
                                                  throw std::invalid_argument(error);
                                              return Json::parse(json);
                                          }()}};
+        if (entity.rigidBody) {
+            const auto& body = *entity.rigidBody;
+            const char* motion = body.motionType == MotionType::Dynamic ? "Dynamic" :
+                                 body.motionType == MotionType::Kinematic ? "Kinematic" : "Static";
+            if (body.motionType != MotionType::Static && body.motionType != MotionType::Dynamic && body.motionType != MotionType::Kinematic)
+                throw std::invalid_argument("invalid RigidBody motionType");
+            components["RigidBody"] = {{"motionType", motion}, {"mass", body.mass}, {"friction", body.friction}, {"restitution", body.restitution}};
+        }
+        if (entity.boxCollider)
+            components["BoxCollider"] = {{"center", Encode(entity.boxCollider->center)}, {"halfExtents", Encode(entity.boxCollider->halfExtents)}};
         if (entity.bounds)
             components["Bounds"] = {{"min", Encode(entity.bounds->local.min)}, {"max", Encode(entity.bounds->local.max)}};
         if (entity.persistence)
@@ -331,6 +388,8 @@ bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDo
             const auto tags = scene.GetTags(entity);
             definition.tags.assign(tags.begin(), tags.end());
             if (const auto* controller = scene.GetControllerDefinition(entity)) definition.controller = *controller;
+            if (const auto* body = scene.TryGetComponent<RigidBody>(entity)) definition.rigidBody = *body;
+            if (const auto* box = scene.TryGetComponent<BoxCollider>(entity)) definition.boxCollider = *box;
             if (const auto* bounds = scene.TryGetComponent<Bounds>(entity)) definition.bounds = *bounds;
             if (const auto* persistence = scene.TryGetComponent<GamePersistence>(entity)) definition.persistence = *persistence;
             if (const auto* script = scene.TryGetComponent<ScriptComponent>(entity)) definition.script = *script;
@@ -385,6 +444,8 @@ void PopulateScene(const SceneDocument& document, AssetSystem& assets, Scene& de
         if (definition.directionalLight) destination.AddComponent<DirectionalLight>(entity, *definition.directionalLight);
         if (definition.pointLight) destination.AddComponent<PointLight>(entity, *definition.pointLight);
         if (definition.spotLight) destination.AddComponent<SpotLight>(entity, *definition.spotLight);
+        if (definition.rigidBody) destination.AddComponent<RigidBody>(entity, *definition.rigidBody);
+        if (definition.boxCollider) destination.AddComponent<BoxCollider>(entity, *definition.boxCollider);
         if (definition.bounds) destination.AddComponent<Bounds>(entity, *definition.bounds);
         if (definition.persistence) destination.AddComponent<GamePersistence>(entity, *definition.persistence);
         if (definition.script) destination.AddComponent<ScriptComponent>(entity, *definition.script);
