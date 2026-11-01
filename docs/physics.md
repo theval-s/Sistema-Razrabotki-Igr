@@ -30,14 +30,17 @@ both link Jolt privately via vcpkg. No Jolt types appear in the public API.
 
 A physics entity needs both RigidBody and Collider. Component data is authored
 and serializable; BodyIDs and shapes are owned only by the physics subsystem.
-Example scene components:
+Example components object:
 
 ~~~json
-"RigidBody": { "motionType": "Dynamic", "mass": 1, "friction": 0.5, "restitution": 0.15 },
-"Collider": { "shape": "Box", "center": [0, 0, 0], "halfExtents": [0.5, 0.5, 0.5] }
+{
+  "RigidBody": { "motionType": "Dynamic", "mass": 1, "friction": 0.5, "restitution": 0.15 },
+  "Collider": { "shape": "Box", "center": [0, 0, 0], "showDebug": true, "halfExtents": [0.5, 0.5, 0.5] }
+}
 ~~~
 
-Motion types are Static (default), Dynamic and Kinematic. Mass must be positive,
+New RigidBody components default to Static. Motion types are Static, Dynamic
+and Kinematic. Mass must be positive,
 friction nonnegative, restitution in [0,1]. Collider center is an additional local
 translation, not a world position; it is scaled with the entity. One scene unit
 is one metre; gravity defaults to -9.81 on Y.
@@ -53,9 +56,11 @@ Collider shapes and their JSON fields:
 | ConvexMesh | convex hull of the entity's MeshRenderer mesh positions |
 | TriangleMesh | original mesh triangles; Static bodies only |
 
-All shapes accept center. Dimensions omitted from JSON take component defaults.
-Legacy BoxCollider JSON still loads as a Box; saving writes Collider. The C++
-BoxCollider alias remains for source compatibility.
+RigidBody JSON requires motionType, mass, friction and restitution. Collider JSON
+requires shape, center, showDebug and the dimension fields listed for that shape;
+mesh shapes have no dimension fields. Unknown or missing fields are rejected.
+Scenes may contain no physics components; their existing scene/asset formats
+remain supported. The physics interface consists of RigidBody and Collider.
 Box/Cube dimensions and mesh vertices follow world scale per axis (a Cube under
 nonuniform scale becomes a rectangular box). A sphere keeps its shape using the
 largest world scale axis. A capsule keeps a circular cross-section using max(X,Z)
@@ -122,8 +127,8 @@ rebuild the body and reset velocity.
 The primary selected entity (the one shown in the inspector) displays a gold
 collider wireframe over the viewport, visible through the rendered mesh. The
 Collider inspector's Show collider checkbox controls this preview. It defaults
-to enabled (also for older scenes), persists as the boolean showDebug field in
-Collider JSON, and never rebuilds the physical body or resets its velocity. This
+to enabled for new components and persists as the required boolean showDebug field
+in Collider JSON, and never rebuilds the physical body or resets its velocity. This
 works in Edit and Play for every Collider shape, including the cooked convex
 hull rather than the source mesh. Editing Shape, Center, dimensions, scale, Convex
 or the source mesh updates the outline; moving/rotating transforms cached lines.
@@ -151,7 +156,7 @@ nonphysical objects. This PR does not add physics-specific queries or contact ev
 ## Demonstration and checks
 
 ExampleGame's demo scene contains a static floor and three falling boxes tagged
-physics-demo. The enchanted cube keeps its previous authored animation. Pause and
+physics-demo. The enchanted cube uses authored animation. Pause and
 Play/Stop use the engine's existing controls; restarting Play reconstructs bodies
 from the authored snapshot. Save-game transforms continue using GamePersistence;
 velocities/sleep state are not saved, so loading restarts physics from those poses.

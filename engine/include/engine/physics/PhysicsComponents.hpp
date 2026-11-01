@@ -23,6 +23,4 @@ struct Collider {
     bool showDebug = true; // editor wireframe; does not affect simulation
     bool operator==(const Collider&) const = default;
 };
-// Source compatibility for code authored before the shape selector.
-using BoxCollider = Collider;
 } // namespace engine

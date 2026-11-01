@@ -87,51 +87,56 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
     }
     if (j.contains("parent")) entity.parent = OptionalId(j.at("parent"));
     const auto& components = j.at("components");
-    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "RigidBody", "Collider", "BoxCollider"});
+    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "RigidBody", "Collider"});
     if (components.contains("RigidBody")) {
         const auto& body = components.at("RigidBody");
         Fields(body, {"motionType", "mass", "friction", "restitution"});
         RigidBody value;
-        const auto type = body.value("motionType", std::string("Static"));
+        const auto type = body.at("motionType").get<std::string>();
         if (type == "Dynamic") value.motionType = MotionType::Dynamic;
         else if (type == "Kinematic") value.motionType = MotionType::Kinematic;
         else if (type != "Static") throw std::invalid_argument("invalid RigidBody motionType");
-        if (body.contains("mass")) value.mass = Number(body.at("mass"));
-        if (body.contains("friction")) value.friction = Number(body.at("friction"));
-        if (body.contains("restitution")) value.restitution = Number(body.at("restitution"));
+        value.mass = Number(body.at("mass"));
+        value.friction = Number(body.at("friction"));
+        value.restitution = Number(body.at("restitution"));
         entity.rigidBody = value;
     }
-    if (components.contains("Collider") && components.contains("BoxCollider"))
-        throw std::invalid_argument("use Collider or legacy BoxCollider, not both");
-    if (components.contains("Collider") || components.contains("BoxCollider")) {
-        const bool legacy = components.contains("BoxCollider");
-        const auto& box = components.at(legacy ? "BoxCollider" : "Collider");
-        if (legacy) Fields(box, {"center", "halfExtents", "showDebug"});
-        else Fields(box, {"shape", "center", "halfExtents", "radius", "halfHeight", "showDebug"});
+    if (components.contains("Collider")) {
+        const auto& collider = components.at("Collider");
         Collider value;
-        if (!legacy) {
-            const auto shape = box.at("shape").get<std::string>();
-            if (shape == "Cube") value.shape = ColliderShape::Cube;
-            else if (shape == "Box") value.shape = ColliderShape::Box;
-            else if (shape == "Sphere") value.shape = ColliderShape::Sphere;
-            else if (shape == "Capsule") value.shape = ColliderShape::Capsule;
-            else if (shape == "ConvexMesh") value.shape = ColliderShape::ConvexMesh;
-            else if (shape == "TriangleMesh") value.shape = ColliderShape::TriangleMesh;
-            else throw std::invalid_argument("invalid Collider shape");
-        }
-        if (box.contains("halfExtents")) {
-            const auto extents = Numbers<3>(box.at("halfExtents"));
+        const auto shape = collider.at("shape").get<std::string>();
+        if (shape == "Cube") value.shape = ColliderShape::Cube;
+        else if (shape == "Box") value.shape = ColliderShape::Box;
+        else if (shape == "Sphere") value.shape = ColliderShape::Sphere;
+        else if (shape == "Capsule") value.shape = ColliderShape::Capsule;
+        else if (shape == "ConvexMesh") value.shape = ColliderShape::ConvexMesh;
+        else if (shape == "TriangleMesh") value.shape = ColliderShape::TriangleMesh;
+        else throw std::invalid_argument("invalid Collider shape");
+        const auto center = Numbers<3>(collider.at("center"));
+        value.center = {center[0], center[1], center[2]};
+        if (!collider.at("showDebug").is_boolean()) throw std::invalid_argument("Collider showDebug must be boolean");
+        value.showDebug = collider.at("showDebug").get<bool>();
+        switch (value.shape) {
+        case ColliderShape::Cube:
+        case ColliderShape::Box: {
+            Fields(collider, {"shape", "center", "showDebug", "halfExtents"});
+            const auto extents = Numbers<3>(collider.at("halfExtents"));
             value.halfExtents = {extents[0], extents[1], extents[2]};
-        } else if (legacy) throw std::invalid_argument("BoxCollider requires halfExtents");
-        if (box.contains("center")) {
-            const auto center = Numbers<3>(box.at("center"));
-            value.center = {center[0], center[1], center[2]};
+            break;
         }
-        if (box.contains("radius")) value.radius = Number(box.at("radius"));
-        if (box.contains("halfHeight")) value.halfHeight = Number(box.at("halfHeight"));
-        if (box.contains("showDebug")) {
-            if (!box.at("showDebug").is_boolean()) throw std::invalid_argument("Collider showDebug must be boolean");
-            value.showDebug = box.at("showDebug").get<bool>();
+        case ColliderShape::Sphere:
+            Fields(collider, {"shape", "center", "showDebug", "radius"});
+            value.radius = Number(collider.at("radius"));
+            break;
+        case ColliderShape::Capsule:
+            Fields(collider, {"shape", "center", "showDebug", "radius", "halfHeight"});
+            value.radius = Number(collider.at("radius"));
+            value.halfHeight = Number(collider.at("halfHeight"));
+            break;
+        case ColliderShape::ConvexMesh:
+        case ColliderShape::TriangleMesh:
+            Fields(collider, {"shape", "center", "showDebug"});
+            break;
         }
         entity.collider = value;
     }
