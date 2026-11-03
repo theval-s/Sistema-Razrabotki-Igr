@@ -1,6 +1,9 @@
 #pragma once
 
 #include <SimpleMath.h>
+#include <memory>
+#include <vector>
+#include <cstdint>
 
 #include <engine/rendering/resources/RenderedMesh.hpp>
 #include <engine/rendering/resources/ShaderContext.hpp>
@@ -10,8 +13,8 @@
 
 namespace engine {
 
-/// Thin records: they name GPU resources owned by RenderingResourceManager, they do not
-/// hold D3D objects or free anything. UnloadAll invalidates their GPU handles.
+/// Records name GPU resources owned by RenderingResourceManager, without owning D3D
+/// objects. UnloadAll invalidates GPU handles; shared CPU metadata may outlive them.
 
 /// Axis-aligned bounds in imported mesh-local space (after centerOnLoad, if enabled).
 struct Aabb {
@@ -19,9 +22,17 @@ struct Aabb {
     DirectX::SimpleMath::Vector3 max{};
 };
 
+/// Imported mesh-local positions and CCW triangles, retained for physics cooking.
+/// Shared once per asset; independent of GPU resource lifetime.
+struct MeshGeometry {
+    std::vector<DirectX::SimpleMath::Vector3> positions;
+    std::vector<uint32_t> indices;
+};
+
 struct MeshAsset {
     MeshHandle mesh;
     Aabb bounds;
+    std::shared_ptr<const MeshGeometry> geometry;
 };
 
 struct TextureAsset {

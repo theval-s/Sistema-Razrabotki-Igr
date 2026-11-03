@@ -1,6 +1,7 @@
 #include <engine/engine.hpp>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <optional>
 #include <unordered_map>
@@ -62,6 +63,9 @@ struct Engine::Impl {
     bool paused = false;
 
     FrameContext frame{};
+    double fixedAccumulator = 0.0;
+    FixedUpdateContext fixedStep{};
+    std::uint64_t simulationRevision = 0;
     std::uint64_t nextFrameIndex = 0;
     std::chrono::steady_clock::time_point lastTickTime{};
 
@@ -151,6 +155,12 @@ bool Engine::Initialize() {
     if (impl_->initialized) {
         return true;
     }
+    if (!std::isfinite(impl_->config.fixedStepSeconds) || impl_->config.fixedStepSeconds <= 0 ||
+        impl_->config.maxFixedStepsPerFrame == 0) {
+        spdlog::error("Invalid fixed update configuration");
+        return false;
+    }
+    impl_->fixedStep.deltaSeconds = impl_->config.fixedStepSeconds;
     spdlog::info("Engine {} initializing '{}'", version(), impl_->config.applicationName);
 
     // Up before any subsystem, so they can already schedule work in Initialize().
@@ -192,6 +202,7 @@ void Engine::Shutdown() {
     }
     spdlog::info("Engine shutting down");
     StopPlay();
+    ResetSimulation();
 
     impl_->scene.SetControllersActive(false);
     impl_->scene.Clear();
@@ -239,6 +250,7 @@ void Engine::Tick() {
 
     // Copy: a subsystem reacting to the frame must not see it change under it.
     const FrameContext current = frame;
+    const auto frameRevision = impl_->simulationRevision;
     impl_->inCallbacks = true;
     // Finished background loads become usable before anything can ask for them this frame.
     impl_->assets->Update(current);
@@ -253,6 +265,36 @@ void Engine::Tick() {
         impl_->queuedScene.reset();
         std::string error;
         if (!LoadScene(file, error) || !error.empty()) spdlog::error("Deferred scene load: {}", error);
+    }
+    const auto revision = impl_->simulationRevision;
+    // A newly committed scene starts accumulating time on the next frame.
+    if (!impl_->paused && (!impl_->editorMode || IsPlaying()) && revision == frameRevision) {
+        impl_->fixedAccumulator += current.deltaSeconds;
+        std::uint32_t steps = 0;
+        while (impl_->fixedAccumulator >= impl_->config.fixedStepSeconds &&
+               steps < impl_->config.maxFixedStepsPerFrame) {
+            impl_->fixedAccumulator -= impl_->config.fixedStepSeconds;
+            impl_->fixedStep.simulationTimeSeconds += impl_->config.fixedStepSeconds;
+            impl_->inCallbacks = true;
+            const auto step = impl_->fixedStep;
+            for (std::size_t i = 0; i < impl_->subsystems.size(); ++i)
+                impl_->subsystems[i].subsystem->FixedUpdate(step);
+            impl_->inCallbacks = false;
+            ++impl_->fixedStep.stepIndex;
+            ++steps;
+            if (impl_->queuedScene) {
+                const auto file = std::move(*impl_->queuedScene);
+                impl_->queuedScene.reset();
+                std::string error;
+                if (!LoadScene(file, error) || !error.empty()) spdlog::error("Deferred scene load: {}", error);
+                if (revision != impl_->simulationRevision) break;
+            }
+            if (impl_->paused || impl_->exitRequested) break;
+        }
+        if (impl_->fixedAccumulator >= impl_->config.fixedStepSeconds) {
+            impl_->fixedAccumulator = std::fmod(impl_->fixedAccumulator, impl_->config.fixedStepSeconds);
+            spdlog::warn("FixedUpdate catch-up limit reached; discarded simulation backlog");
+        }
     }
     for (std::size_t i = 0; i < impl_->subsystems.size(); ++i) {
         impl_->subsystems[i].subsystem->LateUpdate(current);
@@ -289,6 +331,7 @@ void Engine::SetPaused(const bool paused) {
         return;
     }
     impl_->paused = paused;
+    impl_->fixedAccumulator = 0;
     impl_->events.trigger(PauseChangedEvent{paused});
 }
 
@@ -428,7 +471,16 @@ bool Engine::RequestOpenLevel(std::string_view name, std::string& error) {
     return true;
 }
 
+void Engine::ResetSimulation() {
+    impl_->fixedAccumulator = 0;
+    impl_->fixedStep = {0, impl_->config.fixedStepSeconds, 0};
+    ++impl_->simulationRevision;
+    for (std::size_t i = 0; i < impl_->initializedCount; ++i)
+        impl_->subsystems[i].subsystem->ResetSimulation();
+}
+
 void Engine::CommitScene(const SceneDocument& document) {
+    ResetSimulation();
     if (auto* scripting = GetSubsystem<ScriptSubsystem>()) {
         scripting->ClearSceneScripts();
         scripting->GetRuntime().ClearEntityInstances();
@@ -613,6 +665,20 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
         }
         if (!seen.insert(cursor).second) { error = "spawn hierarchy cycle"; return false; }
     }
+    // Validate the composed scene too: save-game transforms/parents can turn a
+    // valid authored collider into an unsupported dynamic hierarchy or shear.
+    SceneDocument restored = base;
+    std::erase_if(restored.entities, [&](const auto& item) { return removed(item.id); });
+    restored.entities.insert(restored.entities.end(), game.spawned.entities.begin(), game.spawned.entities.end());
+    for (auto& item : restored.entities) {
+        if (const auto it = game.spawnParents.find(item.id); it != game.spawnParents.end()) item.parent = it->second;
+        for (const auto& state : game.entities)
+            if (state.id == item.id && state.transform) item.transform = *state.transform;
+    }
+    if (restored.activeCamera && removed(*restored.activeCamera)) restored.activeCamera.reset();
+    if (restored.directionalLight && removed(*restored.directionalLight)) restored.directionalLight.reset();
+    std::string checkedScene;
+    if (!SerializeSceneDocument(restored, checkedScene, error)) return false;
     impl_->deferControllerActivation = true;
     const bool loaded = LoadScene(entry->source, error);
     impl_->deferControllerActivation = false;

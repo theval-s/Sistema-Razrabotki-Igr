@@ -225,6 +225,7 @@ find_package(assimp CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(nlohmann_json_schema_validator CONFIG REQUIRED)
 find_package(stduuid CONFIG REQUIRED)
+find_package(Jolt CONFIG REQUIRED)
 
 # Embed the schema so material parsing does not depend on runtime file locations.
 set(MATERIAL_SCHEMA_FILE "${CMAKE_CURRENT_SOURCE_DIR}/schemas/material.schema.json")
@@ -265,6 +266,8 @@ set(ENGINE_CORE_HEADERS
     include/engine/scene/Scene.hpp
     include/engine/scene/SceneDocument.hpp
     include/engine/scene/GameDocument.hpp
+    include/engine/physics/PhysicsComponents.hpp
+    include/engine/physics/PhysicsSubsystem.hpp
     include/engine/scene/Transform.hpp
 )
 
@@ -284,6 +287,8 @@ set(ENGINE_CORE_SOURCES
     src/assets/MaterialImporter.cpp
     src/core/FileSystem.cpp
     src/core/Subsystem.cpp
+    src/physics/PhysicsComponents.cpp
+    src/physics/PhysicsSubsystem.cpp
     src/project/Project.cpp
     src/scene/Scene.cpp
     src/scene/SceneDocument.cpp
@@ -301,7 +306,7 @@ foreach(engine_target IN ITEMS engine engine_static)
         target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
         # Assimp is PRIVATE on purpose: AssimpMeshImporter.cpp is its only user and no
         # public header mentions it. Static consumers still get it via the link-only interface.
-        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid Lua::Lua sol2::sol2)
+        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid Lua::Lua sol2::sol2 Jolt::Jolt)
     endif()
 endforeach()
 

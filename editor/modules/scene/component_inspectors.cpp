@@ -12,6 +12,8 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QStandardItemModel>
 #include <QDoubleSpinBox>
 #include <QStyle>
 #include <QVBoxLayout>
@@ -32,6 +34,7 @@
 
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/engine.hpp>
+#include <engine/physics/PhysicsComponents.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/Scene.hpp>
 
@@ -243,6 +246,171 @@ void buildBounds(PropertyForm& form, editor::EditorContext& context, const entt:
     form.addVec3(QObject::tr("Max"), [local]() -> Vector3* {
         engine::Aabb* aabb = local();
         return aabb != nullptr ? &aabb->max : nullptr;
+    });
+}
+
+void buildRigidBody(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
+    auto& scene = context.scene();
+    auto* motion = new QComboBox;
+    motion->addItem(QObject::tr("Static"), static_cast<int>(engine::MotionType::Static));
+    motion->addItem(QObject::tr("Dynamic"), static_cast<int>(engine::MotionType::Dynamic));
+    motion->addItem(QObject::tr("Kinematic"), static_cast<int>(engine::MotionType::Kinematic));
+    motion->setToolTip(QObject::tr("Dynamic bodies need no parent. Moving mesh bodies always use a convex hull."));
+    QObject::connect(motion, &QComboBox::activated, motion, [&context, &scene, entity, motion](int index) {
+        auto* body = scene.TryGetComponent<engine::RigidBody>(entity);
+        if (!body) return;
+        const auto type = static_cast<engine::MotionType>(motion->itemData(index).toInt());
+        if (type == engine::MotionType::Dynamic && scene.GetParent(entity) != entt::null) return;
+        auto* collider = scene.TryGetComponent<engine::Collider>(entity);
+        if (type != engine::MotionType::Static && collider && collider->shape == engine::ColliderShape::TriangleMesh)
+            collider->shape = engine::ColliderShape::ConvexMesh;
+        if (body->motionType != type) {
+            body->motionType = type;
+            context.sceneDocument().markDirty();
+        }
+    });
+    form.addRow(QObject::tr("Motion type"), motion, [&scene, entity, motion] {
+        const auto* body = scene.TryGetComponent<engine::RigidBody>(entity);
+        if (!body) return;
+        if (auto* model = qobject_cast<QStandardItemModel*>(motion->model()))
+            model->item(motion->findData(static_cast<int>(engine::MotionType::Dynamic)))->setEnabled(scene.GetParent(entity) == entt::null);
+        if (!motion->view()->isVisible()) {
+            const QSignalBlocker blocker(motion);
+            motion->setCurrentIndex(motion->findData(static_cast<int>(body->motionType)));
+        }
+    });
+    form.addFloat(QObject::tr("Mass (kg)"), field(scene, entity, &engine::RigidBody::mass),
+                  {.step = 0.1, .decimals = 3, .minimum = 0.001, .maximum = 1.0e6});
+    form.addFloat(QObject::tr("Friction"), field(scene, entity, &engine::RigidBody::friction),
+                  {.step = 0.05, .decimals = 3, .minimum = 0, .maximum = 1.0e4});
+    form.addFloat(QObject::tr("Restitution"), field(scene, entity, &engine::RigidBody::restitution),
+                  {.step = 0.05, .decimals = 3, .minimum = 0, .maximum = 1});
+}
+
+void buildCollider(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
+    using Shape = engine::ColliderShape;
+    auto& scene = context.scene();
+    const auto component = [&scene, entity] { return scene.TryGetComponent<engine::Collider>(entity); };
+    const auto mesh = [&context, &scene, entity] {
+        const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity);
+        return renderer ? context.engine().GetSceneAssets().Peek(renderer->mesh) : entt::resource<engine::MeshAsset>{};
+    };
+    auto* shape = new QComboBox;
+    for (const auto& [label, value] : std::initializer_list<std::pair<const char*, Shape>>{
+             {"Cube", Shape::Cube}, {"Box (parallelepiped)", Shape::Box}, {"Sphere", Shape::Sphere},
+             {"Capsule", Shape::Capsule}, {"Mesh", Shape::ConvexMesh}})
+        shape->addItem(QObject::tr(label), static_cast<int>(value));
+    shape->setToolTip(QObject::tr("Mesh uses Mesh Renderer geometry. Enable Convex to generate a convex hull."));
+    QObject::connect(shape, &QComboBox::activated, shape, [&context, &scene, entity, component, shape](int index) {
+        auto* collider = component();
+        const auto* body = scene.TryGetComponent<engine::RigidBody>(entity);
+        if (!collider || !body) return;
+        auto chosen = static_cast<Shape>(shape->itemData(index).toInt());
+        if (chosen == Shape::ConvexMesh) {
+            if (!scene.HasComponent<engine::MeshRenderer>(entity)) return;
+            if (body->motionType == engine::MotionType::Static && collider->shape != Shape::ConvexMesh) chosen = Shape::TriangleMesh;
+        }
+        collider->shape = chosen;
+        context.sceneDocument().markDirty();
+    });
+    form.addRow(QObject::tr("Shape"), shape, [&scene, entity, component, shape] {
+        const auto* collider = component();
+        const auto* body = scene.TryGetComponent<engine::RigidBody>(entity);
+        if (!collider || !body) return;
+        if (auto* model = qobject_cast<QStandardItemModel*>(shape->model())) {
+            const bool hasMesh = scene.HasComponent<engine::MeshRenderer>(entity);
+            model->item(shape->findData(static_cast<int>(Shape::ConvexMesh)))->setEnabled(hasMesh);
+        }
+        if (!shape->view()->isVisible()) {
+            const QSignalBlocker blocker(shape);
+            shape->setCurrentIndex(shape->findData(static_cast<int>(collider->shape == Shape::TriangleMesh ? Shape::ConvexMesh : collider->shape)));
+        }
+    });
+    auto* convexPanel = new QWidget;
+    auto* convexLayout = new QHBoxLayout(convexPanel);
+    convexLayout->setContentsMargins(0, 0, 0, 0);
+    auto* convex = new QCheckBox(QObject::tr("Convex (convex hull)"));
+    convex->setToolTip(QObject::tr("Generate a convex hull from mesh vertices. Fills holes and concavities. Required for Dynamic/Kinematic."));
+    convexLayout->addWidget(convex);
+    QObject::connect(convex, &QCheckBox::clicked, convex, [&context, &scene, entity, component](bool checked) {
+        auto* collider = component();
+        const auto* body = scene.TryGetComponent<engine::RigidBody>(entity);
+        if (!collider || !body || collider->shape < Shape::ConvexMesh) return;
+        if (!checked && body->motionType != engine::MotionType::Static) return;
+        collider->shape = checked ? Shape::ConvexMesh : Shape::TriangleMesh;
+        context.sceneDocument().markDirty();
+    });
+    form.addRow(convexPanel, [&scene, entity, component, convex, convexPanel] {
+        const auto* collider = component();
+        const auto* body = scene.TryGetComponent<engine::RigidBody>(entity);
+        convexPanel->setVisible(collider && collider->shape >= Shape::ConvexMesh);
+        convex->setEnabled(body && body->motionType == engine::MotionType::Static);
+        const QSignalBlocker blocker(convex);
+        convex->setChecked(collider && collider->shape == Shape::ConvexMesh);
+    });
+    form.addBool(QObject::tr("Show collider"), field(scene, entity, &engine::Collider::showDebug));
+    form.addVec3(QObject::tr("Center"), field(scene, entity, &engine::Collider::center));
+    // Separate forms show only the dimensions that the selected shape uses.
+    const auto dimensions = [&](Shape kind) {
+        auto* fields = new PropertyForm([&context] { context.sceneDocument().markDirty(); });
+        form.addRow(fields, [component, fields, kind] {
+            const auto* collider = component();
+            fields->setVisible(collider && collider->shape == kind);
+            fields->refresh();
+        });
+        return fields;
+    };
+    constexpr PropertyForm::NumberFormat positive{.step = 0.1, .decimals = 3, .minimum = 0.001, .maximum = 1.0e6};
+    dimensions(Shape::Cube)->addFloat(QObject::tr("Half side"), [component]() -> float* {
+        auto* collider = component(); return collider ? &collider->halfExtents.x : nullptr;
+    }, positive);
+    dimensions(Shape::Box)->addVec3(QObject::tr("Half extents"), field(scene, entity, &engine::Collider::halfExtents), positive);
+    dimensions(Shape::Sphere)->addFloat(QObject::tr("Radius"), field(scene, entity, &engine::Collider::radius), positive);
+    auto* capsule = dimensions(Shape::Capsule);
+    capsule->addFloat(QObject::tr("Radius"), field(scene, entity, &engine::Collider::radius), positive);
+    capsule->addFloat(QObject::tr("Cylinder half height"), field(scene, entity, &engine::Collider::halfHeight),
+                      {.step = 0.1, .decimals = 3, .minimum = 0, .maximum = 1.0e6});
+    auto* buttons = new QWidget;
+    auto* row = new QHBoxLayout(buttons);
+    row->setContentsMargins(0, 0, 0, 0);
+    auto* fit = new QPushButton(QObject::tr("Fit to mesh"));
+    auto* fromMesh = new QPushButton(QObject::tr("From mesh"));
+    fit->setToolTip(QObject::tr("Fit this primitive to the loaded mesh bounds. Capsule axis is local Y."));
+    fromMesh->setToolTip(QObject::tr("Use Mesh Renderer geometry. Moving bodies require Convex; Static can toggle it. Resets Center."));
+    row->addWidget(fit);
+    row->addWidget(fromMesh);
+    QObject::connect(fit, &QPushButton::clicked, fit, [&context, component, mesh] {
+        auto* collider = component();
+        const auto asset = mesh();
+        if (!collider || !asset) return;
+        const Vector3 half = (asset->bounds.max - asset->bounds.min) * 0.5f;
+        collider->center = (asset->bounds.min + asset->bounds.max) * 0.5f;
+        collider->halfExtents = Vector3::Max(half, Vector3(0.001f));
+        if (collider->shape == Shape::Cube) collider->halfExtents = Vector3((std::max)({half.x, half.y, half.z, 0.001f}));
+        collider->radius = (std::max)(0.001f, collider->shape == Shape::Sphere ? half.Length() : (std::max)(half.x, half.z));
+        collider->halfHeight = (std::max)(0.0f, half.y - collider->radius);
+        context.sceneDocument().markDirty();
+    });
+    QObject::connect(fromMesh, &QPushButton::clicked, fromMesh, [&context, &scene, entity, component, mesh] {
+        auto* collider = component();
+        const auto* body = scene.TryGetComponent<engine::RigidBody>(entity);
+        const auto asset = mesh();
+        if (!collider || !body || !asset || !asset->geometry) return;
+        collider->shape = body->motionType != engine::MotionType::Static || collider->shape == Shape::ConvexMesh ? Shape::ConvexMesh : Shape::TriangleMesh;
+        collider->center = {};
+        context.sceneDocument().markDirty();
+    });
+    form.addRow(buttons, [component, mesh, fit, fromMesh] {
+        const auto* collider = component();
+        const auto asset = mesh();
+        fit->setEnabled(collider && asset && collider->shape <= Shape::Capsule);
+        fromMesh->setEnabled(collider && asset && asset->geometry);
+    });
+    form.addText({}, [component, mesh] {
+        const auto* collider = component();
+        if (!mesh()) return QObject::tr("Assign a mesh in Mesh Renderer and wait for it to load to use mesh tools.");
+        return collider && collider->shape == Shape::ConvexMesh ? QObject::tr("Convex hull fills holes and concavities.")
+             : collider && collider->shape == Shape::TriangleMesh ? QObject::tr("Triangle mesh: Static only, one-sided surfaces.") : QString{};
     });
 }
 
@@ -464,6 +632,18 @@ void addBounds(editor::EditorContext& context, const entt::entity entity) {
     scene.AddComponent<engine::Bounds>(entity, bounds);
 }
 
+// The scene codec requires the pair. Either menu action produces a saveable
+// default Static body; removing either component also removes its companion.
+void addPhysics(editor::EditorContext& context, const entt::entity entity) {
+    auto& scene = context.scene();
+    if (!scene.HasComponent<engine::Collider>(entity)) scene.AddComponent<engine::Collider>(entity);
+    if (!scene.HasComponent<engine::RigidBody>(entity)) scene.AddComponent<engine::RigidBody>(entity);
+}
+void removePhysics(editor::EditorContext& context, const entt::entity entity) {
+    context.scene().RemoveComponent<engine::RigidBody>(entity);
+    context.scene().RemoveComponent<engine::Collider>(entity);
+}
+
 }  // namespace
 
 void addMeshRenderer(editor::EditorContext& context, const entt::entity entity) {
@@ -504,6 +684,10 @@ std::span<const ComponentInspector> componentInspectors() {
          addComponent<engine::SpotLight>, removeComponent<engine::SpotLight>},
         {entt::type_hash<engine::Bounds>::value(), QObject::tr("Bounds"), buildBounds, addBounds,
          removeComponent<engine::Bounds>},
+        {entt::type_hash<engine::RigidBody>::value(), QObject::tr("Rigid Body"), buildRigidBody,
+         addPhysics, removePhysics, QObject::tr("Remove Rigid Body and Collider")},
+        {entt::type_hash<engine::Collider>::value(), QObject::tr("Collider"), buildCollider,
+         addPhysics, removePhysics, QObject::tr("Remove Rigid Body and Collider")},
         {entt::type_hash<engine::GamePersistence>::value(), QObject::tr("Game Persistence"), buildGamePersistence,
          addComponent<engine::GamePersistence>, removeComponent<engine::GamePersistence>},
     };

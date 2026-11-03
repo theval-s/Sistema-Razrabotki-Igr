@@ -23,7 +23,7 @@ namespace {
 template <typename T>
 T MakeValue(const AssetDesc& desc, const CpuPayload& cpu, const GpuPayload& gpu) {
     if constexpr (std::is_same_v<T, MeshAsset>) {
-        return MeshAsset{gpu.mesh, cpu.mesh.bounds};
+        return MeshAsset{gpu.mesh, cpu.mesh.bounds, cpu.mesh.geometry};
     } else if constexpr (std::is_same_v<T, TextureAsset>) {
         return TextureAsset{gpu.texture};
     } else if constexpr (std::is_same_v<T, ShaderAsset>) {

@@ -27,6 +27,8 @@ struct ComponentInspector {
     void (*add)(editor::EditorContext& context, entt::entity entity) = nullptr;
     /// Null for required components.
     void (*remove)(editor::EditorContext& context, entt::entity entity) = nullptr;
+    /// Optional tooltip when removal affects companion components too.
+    QString removeToolTip{};
 };
 
 /// Gives `entity` a MeshRenderer drawing the built-in cube with the default material, referenced

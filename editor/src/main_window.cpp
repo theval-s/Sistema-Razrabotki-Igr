@@ -1,3 +1,4 @@
+#include <engine/physics/PhysicsSubsystem.hpp>
 #include <editor/main_window.hpp>
 
 #include <QAction>
@@ -66,6 +67,12 @@ public:
         world.editorLines.clear();
         auto& assets = GetEngine().GetSceneAssets();
         const auto& scene = GetEngine().GetScene();
+        if (auto* physics = GetEngine().GetSubsystem<engine::PhysicsSubsystem>()) {
+            std::string ignored;
+            // The inspector edits the primary entity. Preview also works in Edit,
+            // without registering simulation bodies or advancing the fixed clock.
+            (void)physics->AppendColliderDebugLines(selection_.primary(), world.editorLines, ignored);
+        }
         for (const auto entity : selection_.entities()) {
             if (!scene.IsValid(entity)) continue;
             lightLines(world.editorLines, scene, entity);
@@ -226,6 +233,7 @@ void MainWindow::startEngine() {
     viewport_->setInput(engine_.AddSubsystem<engine::InputSubsystem>());
     engine_.AddSubsystem<engine::ScriptSubsystem>();
     engine_.AddSubsystem<engine::RenderingSubsystem>();
+    engine_.AddSubsystem<engine::PhysicsSubsystem>();
     engine_.AddSubsystem<engine::RenderExtractionSubsystem>();
     camera_ = engine_.AddSubsystem<EditorCameraSubsystem>();
     engine_.AddSubsystem<SelectionRenderSubsystem>(context_->selection());

@@ -1,3 +1,4 @@
+#include <engine/physics/PhysicsSubsystem.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -271,6 +272,7 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
     engine.AddSubsystem<engine::InputSubsystem>();
     engine.AddSubsystem<engine::RenderingSubsystem>();
     engine.AddSubsystem<ExampleGameLogic>(window);
+    engine.AddSubsystem<engine::PhysicsSubsystem>();
     engine.AddSubsystem<engine::RenderExtractionSubsystem>();
     if (!engine.GetScene().RegisterController("example/sign", MotionRegistration(false)) ||
         !engine.GetScene().RegisterController("example/hammer", MotionRegistration(true)) ||

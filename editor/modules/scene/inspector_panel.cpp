@@ -200,7 +200,7 @@ void InspectorPanel::addSection(const engine::Scene::ComponentType& type) {
         auto* remove = new QToolButton(section);
         remove->setIcon(style()->standardIcon(QStyle::SP_TitleBarCloseButton));
         remove->setAutoRaise(true);
-        remove->setToolTip(tr("Remove %1").arg(known->title));
+        remove->setToolTip(known->removeToolTip.isEmpty() ? tr("Remove %1").arg(known->title) : known->removeToolTip);
         // The rebuild that follows deletes this button later, not while it's in its signal.
         connect(remove, &QToolButton::clicked, this, [this, remover = known->remove] {
             if (entity_ != entt::null && context_.scene().IsValid(entity_)) {
