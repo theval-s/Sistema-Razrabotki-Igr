@@ -5,9 +5,13 @@
 #include <cstdint>
 
 namespace engine {
-enum class PhysicsContactKind { CollisionEnter, CollisionExit, TriggerEnter, TriggerExit };
+enum class PhysicsContactKind {
+    CollisionEnter, CollisionExit,
+    TriggerEnter, TriggerExit,
+    CollisionStay, TriggerStay,
+};
 
-/// One notification per entity pair and fixed step. The normal points from first to second.
+/// One notification per kind, entity pair and fixed step. The normal points from first to second.
 struct PhysicsContactEvent {
     PhysicsContactKind kind;
     entt::entity first, second;

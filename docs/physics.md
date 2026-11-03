@@ -180,6 +180,40 @@ scene-local integer that stays the same for the pair, including on Exit.
 Events are delivered on the main thread before the next frame's OnUpdate.
 Scene changes and Stop discard queued events.
 
+`OnCollisionStay` and `OnTriggerStay` run once per fixed step for a pair
+that was active in the previous step, including sleeping contacts. Enter
+covers the first step and Exit covers the step in which the pair ends.
+Several fixed steps can be delivered before one OnUpdate.
+
+A script can use the contact normal to track floor support and gate a jump.
+
+~~~lua
+local supports = {}
+
+local function updateSupport(_, contact)
+    supports[contact.otherId] = contact.normal.y >= 0.65 and true or nil
+end
+
+function OnCollisionEnter(other, contact)
+    updateSupport(other, contact)
+end
+
+function OnCollisionStay(other, contact)
+    updateSupport(other, contact)
+end
+
+function OnCollisionExit(_, contact)
+    supports[contact.otherId] = nil
+end
+
+function isOnFloor()
+    return next(supports) ~= nil
+end
+~~~
+
+The normal is a representative sample for the pair. A single mesh with
+both floor and wall faces can report either surface at their seam.
+
 ## Demonstration and checks
 
 ExampleGame's demo scene contains a static floor and three falling boxes tagged

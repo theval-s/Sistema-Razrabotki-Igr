@@ -225,7 +225,10 @@ struct ContactListener final : JPH::ContactListener {
             events.enqueue(event);
         }
         for (auto event : current) {
-            if (std::binary_search(previous.begin(), previous.end(), event, less)) continue;
+            if (std::binary_search(previous.begin(), previous.end(), event, less)) {
+                event.kind = event.kind == PhysicsContactKind::TriggerEnter
+                    ? PhysicsContactKind::TriggerStay : PhysicsContactKind::CollisionStay;
+            }
             event.stepIndex = step;
             events.enqueue(event);
         }
