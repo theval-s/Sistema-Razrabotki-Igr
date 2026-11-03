@@ -18,4 +18,10 @@ struct PhysicsContactEvent {
     DirectX::SimpleMath::Vector3 point, normal;
     std::uint64_t stepIndex;
 };
+/// A dynamic solid body changed activity between fixed steps.
+struct PhysicsActivityEvent {
+    entt::entity entity;
+    bool awake;
+    std::uint64_t stepIndex;
+};
 } // namespace engine

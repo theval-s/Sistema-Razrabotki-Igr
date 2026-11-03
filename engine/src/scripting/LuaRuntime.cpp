@@ -48,6 +48,7 @@ namespace engine {
             "OnCollisionEnter", "OnCollisionExit",
             "OnTriggerEnter", "OnTriggerExit",
             "OnCollisionStay", "OnTriggerStay",
+            "OnSleep", "OnWake",
         };
 
         // Runtime failures are logged here only. Callers propagate the returned text.
@@ -598,6 +599,17 @@ namespace engine {
         return record.Invoke(record.start, "OnStart", error);
     }
 
+    bool LuaRuntime::NotifyPhysicsActivity(InstanceId instance, bool awake, std::string& error) {
+        error.clear();
+        if (!IsInitialized() || instance.session_ != impl_->session || impl_->shuttingDown) return true;
+        auto* record = impl_->Find(instance);
+        if (!record || !record->started || record->faulted || record->destroying ||
+            !record->desc.owner || !record->desc.owner->IsValid()) return true;
+        constexpr auto sleep = static_cast<std::size_t>(PhysicsContactKind::TriggerStay) + 1;
+        const auto index = sleep + static_cast<std::size_t>(awake);
+        return record->Invoke(record->physicsCallbacks[index], physicsCallbackNames[index], error);
+    }
+
     bool LuaRuntime::NotifyPhysicsContact(InstanceId instance, const PhysicsContactEvent& event,
                                           entt::entity other, std::string& error) {
         error.clear();
@@ -605,7 +617,7 @@ namespace engine {
         auto* record = impl_->Find(instance);
         if (!record || !record->started || record->faulted || record->destroying || !record->desc.owner) return true;
         const auto index = static_cast<std::size_t>(event.kind);
-        if (index >= physicsCallbackNames.size() || !record->physicsCallbacks[index]) return true;
+        if (index > static_cast<std::size_t>(PhysicsContactKind::TriggerStay) || !record->physicsCallbacks[index]) return true;
         const auto& owner = *record->desc.owner;
         if (!owner.IsValid()) return true;
         sol::object otherEntity = sol::make_object(*impl_->state, sol::nil);

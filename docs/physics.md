@@ -214,6 +214,14 @@ end
 The normal is a representative sample for the pair. A single mesh with
 both floor and wall faces can report either surface at their seam.
 
+## Sleep and wake callbacks in Lua
+
+An enabled script on a Dynamic solid body can define `OnSleep()` and
+`OnWake()`. The callbacks run when the body's activity changes between
+fixed steps. Each new body starts awake. Like contacts, activity events
+are delivered before the next frame's OnUpdate and cleared on Stop or scene
+change. A script that returns a table receives `self`.
+
 ## Demonstration and checks
 
 ExampleGame's demo scene contains a static floor and three falling boxes tagged

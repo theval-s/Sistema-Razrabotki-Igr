@@ -262,6 +262,7 @@ struct PhysicsSubsystem::Impl {
         Vector3 position;
         Quaternion rotation;
         std::shared_ptr<const MeshGeometry> geometry;
+        bool awake = true;
     };
     struct ShapeInput {
         Collider collider;
@@ -461,6 +462,7 @@ void PhysicsSubsystem::Shutdown() {
 void PhysicsSubsystem::ResetSimulation() {
     if (impl_) impl_->Clear();
     GetEngine().GetEvents().clear<PhysicsContactEvent>();
+    GetEngine().GetEvents().clear<PhysicsActivityEvent>();
 }
 void PhysicsSubsystem::FixedUpdate(const FixedUpdateContext& step) {
     if (!impl_) return;
@@ -469,16 +471,23 @@ void PhysicsSubsystem::FixedUpdate(const FixedUpdateContext& step) {
     impl_->Synchronize(dt);
     const auto result = impl_->world.Update(dt, 1, &impl_->allocator, &impl_->jobs);
     if (result != JPH::EPhysicsUpdateError::None) spdlog::error("Jolt capacity error: {}", static_cast<unsigned>(result));
-    for (const auto& [entity, body] : impl_->bodies) {
+    auto& events = GetEngine().GetEvents();
+    for (auto& [entity, body] : impl_->bodies) {
         if (body.settings.motionType != MotionType::Dynamic) continue;
-        JPH::RVec3 position;
-        JPH::Quat rotation;
-        impl_->world.GetBodyInterface().GetPositionAndRotation(body.id, position, rotation);
+        const JPH::BodyLockRead lock(impl_->world.GetBodyLockInterface(), body.id);
+        if (!lock.Succeeded()) continue;
+        const auto& simulated = lock.GetBody();
+        const auto position = simulated.GetPosition();
+        const auto rotation = simulated.GetRotation();
         auto& transform = impl_->scene->GetTransform(entity);
         transform.position = {static_cast<float>(position.GetX()), static_cast<float>(position.GetY()), static_cast<float>(position.GetZ())};
         transform.rotation = {rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW()};
+        if (!body.collider.isTrigger && simulated.IsActive() != body.awake) {
+            body.awake = simulated.IsActive();
+            events.enqueue(PhysicsActivityEvent{entity, body.awake, step.stepIndex});
+        }
     }
-    impl_->listener.Publish(impl_->world.GetBodyInterface(), GetEngine().GetEvents(), step.stepIndex);
+    impl_->listener.Publish(impl_->world.GetBodyInterface(), events, step.stepIndex);
 }
 bool PhysicsSubsystem::SetLinearVelocity(entt::entity entity, Vector3 velocity, std::string& error) {
     if (!impl_ || !detail::Finite(velocity)) { error = "physics is not initialized or velocity is not finite"; return false; }
