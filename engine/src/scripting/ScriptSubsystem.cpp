@@ -143,6 +143,20 @@ void ScriptSubsystem::EndPlay() noexcept {
     endingPlay_ = false;
 }
 
+void ScriptSubsystem::OnPhysicsContact(const PhysicsContactEvent& event) {
+    if (!playing_ || !scene_) return;
+    const auto notify = [&](entt::entity entity, entt::entity other) {
+        const auto it = sceneInstances_.find(entity);
+        if (it == sceneInstances_.end() || !it->second.created) return;
+        const auto* component = scene_->TryGetComponent<ScriptComponent>(entity);
+        if (!component || !component->enabled || component->script.id != it->second.asset) return;
+        std::string error;
+        (void)runtime_.NotifyPhysicsContact(it->second.instance, event, other, error);
+    };
+    notify(event.first, event.second);
+    notify(event.second, event.first);
+}
+
 void ScriptSubsystem::Update(const FrameContext& frame) {
     if (!playing_ || frame.paused || frame.deltaSeconds <= 0.0) return;
     ReconcileSceneScripts();
@@ -163,6 +177,8 @@ void ScriptSubsystem::RemoveSceneScript(entt::entity entity) noexcept {
 }
 
 void ScriptSubsystem::ClearSceneScripts() noexcept {
+    if (scene_)
+        GetEngine().GetEvents().sink<PhysicsContactEvent>().disconnect<&ScriptSubsystem::OnPhysicsContact>(*this);
     while (!sceneInstances_.empty()) RemoveSceneScript(sceneInstances_.begin()->first);
     if (scene_) scene_->RemoveLifecycleObserver(observer_);
     scene_ = nullptr;
@@ -172,6 +188,7 @@ void ScriptSubsystem::StartSceneScripts(Scene& scene) {
     ClearSceneScripts();
     if (!playing_) return;
     scene_ = &scene;
+    GetEngine().GetEvents().sink<PhysicsContactEvent>().connect<&ScriptSubsystem::OnPhysicsContact>(*this);
     observer_ = scene.AddLifecycleObserver([this](Scene::LifecycleEvent event, entt::entity entity,
                                                  entt::id_type component) {
         if (event == Scene::LifecycleEvent::EntityDestroying ||

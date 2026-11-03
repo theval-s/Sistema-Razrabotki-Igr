@@ -41,6 +41,7 @@ public:
     [[nodiscard]] const LuaRuntime& GetRuntime() const noexcept { return runtime_; }
 
 private:
+    void OnPhysicsContact(const PhysicsContactEvent& event);
     void ReconcileSceneScripts();
     void RemoveSceneScript(entt::entity entity) noexcept;
     struct SceneInstance {

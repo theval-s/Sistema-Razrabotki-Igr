@@ -151,7 +151,24 @@ Only one preview geometry is cached; unchanged shapes are not cooked each frame.
 Bodies are batch-added using Jolt's broadphase interface. Removal of either
 component, destruction of an entity, scene replacement and Shutdown release bodies.
 Queries in SceneQueries remain the existing scene/AABB queries; they also cover
-nonphysical objects. This PR does not add physics-specific queries or contact events.
+nonphysical objects.
+
+## Contact callbacks in Lua
+
+Attach an enabled Script component to either participant to receive
+`OnCollisionEnter(other, contact)` and `OnCollisionExit(other, contact)`.
+Scripts that return a table receive `self` before these arguments.
+Events describe pairs of entities. Enter is emitted on the first contact and
+Exit after the last contact ends. Sleeping contacts stay active. When an
+entity is destroyed, the surviving script can receive Exit with `other == nil`.
+
+`contact.point` is a representative world-space contact point.
+`contact.normal` points away from the other body toward the recipient.
+Exit carries the last reported contact sample. `contact.otherId` is an opaque
+scene-local integer that stays the same for the pair, including on Exit.
+`contact.stepIndex` identifies the fixed step that produced the event.
+Events are delivered on the main thread before the next frame's OnUpdate.
+Scene changes and Stop discard queued events.
 
 ## Demonstration and checks
 
@@ -168,4 +185,4 @@ No CTest integration or new test suites are required. Check fixed stepping, floo
 contacts, removal, repeated initialization, paused frames and scene replacement.
 
 Not included: interpolated rendering, character controllers, asynchronous shape cooking,
-constraints, ragdolls, Lua physics bindings, contact events.
+constraints, ragdolls, Lua physics commands.

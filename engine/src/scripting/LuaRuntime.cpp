@@ -6,6 +6,7 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cwchar>
@@ -42,6 +43,8 @@ namespace engine {
     }
 
     namespace {
+
+        constexpr std::array physicsCallbackNames{"OnCollisionEnter", "OnCollisionExit"};
 
         // Runtime failures are logged here only. Callers propagate the returned text.
         bool SetError(std::string& error, const std::string& message, bool log = true) {
@@ -145,6 +148,7 @@ namespace engine {
             sol::environment environment;
             sol::table table;
             std::optional<sol::protected_function> start, update, destroy;
+            std::array<std::optional<sol::protected_function>, physicsCallbackNames.size()> physicsCallbacks;
             bool started = false;
             bool environmentCallbacks = false;
             bool faulted = false;
@@ -547,6 +551,15 @@ namespace engine {
                 }
                 *callback = value.as<sol::protected_function>();
             }
+            for (std::size_t i = 0; i < physicsCallbackNames.size(); ++i) {
+                const auto* name = physicsCallbackNames[i];
+                sol::object value = record->environmentCallbacks
+                    ? record->table.raw_get<sol::object>(name) : record->table.get<sol::object>(name);
+                if (value.get_type() == sol::type::nil) continue;
+                if (value.get_type() != sol::type::function)
+                    return record->Fail(error, std::string(name) + " must be a function or nil");
+                record->physicsCallbacks[i] = value.as<sol::protected_function>();
+            }
             // Publish the actual instance before OnStart, retaining its private locals/closures.
             if (!desc.autoloadName.empty()) impl_->autoloads.raw_set(desc.autoloadName, record->table);
             try {
@@ -579,6 +592,36 @@ namespace engine {
         }
         record.started = true;
         return record.Invoke(record.start, "OnStart", error);
+    }
+
+    bool LuaRuntime::NotifyPhysicsContact(InstanceId instance, const PhysicsContactEvent& event,
+                                          entt::entity other, std::string& error) {
+        error.clear();
+        if (!IsInitialized() || instance.session_ != impl_->session || impl_->shuttingDown) return true;
+        auto* record = impl_->Find(instance);
+        if (!record || !record->started || record->faulted || record->destroying || !record->desc.owner) return true;
+        const auto index = static_cast<std::size_t>(event.kind);
+        if (index >= physicsCallbackNames.size() || !record->physicsCallbacks[index]) return true;
+        const auto& owner = *record->desc.owner;
+        if (!owner.IsValid()) return true;
+        sol::object otherEntity = sol::make_object(*impl_->state, sol::nil);
+        if (owner.scene->IsValid(other))
+            otherEntity = sol::make_object(*impl_->state, ScriptEntityHandle{owner.scene, other, owner.lifetime});
+        sol::table contact = impl_->state->create_table();
+        contact["point"] = event.point;
+        contact["normal"] = owner.entity == event.first ? -event.normal : event.normal;
+        contact["stepIndex"] = event.stepIndex;
+        contact["otherId"] = entt::to_integral(other);
+        const auto context = [&] { return record->Context() + " [callback=" + physicsCallbackNames[index] + "]"; };
+        const auto& callback = *record->physicsCallbacks[index];
+        const bool clean = record->environmentCallbacks
+            ? ProtectedCall(callback, error, context, otherEntity, contact)
+            : ProtectedCall(callback, error, context, record->table, otherEntity, contact);
+        if (!clean) {
+            record->faulted = true;
+            record->failure = error;
+        }
+        return clean;
     }
 
     bool LuaRuntime::UpdateInstance(InstanceId instance, double deltaSeconds, std::string& error) {
