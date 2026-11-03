@@ -33,7 +33,6 @@
 #include <array>
 #include <stdexcept>
 #include <unordered_map>
-#include <unordered_set>
 
 namespace engine {
 namespace {
@@ -191,6 +190,7 @@ struct PhysicsSubsystem::Impl {
     std::unordered_map<entt::entity, ShapeInput> failedShapes;
     std::unordered_map<entt::entity, Body> bodies;
     std::unordered_map<entt::entity, std::string> failures;
+    std::vector<JPH::BodyID> added;
     Scene* scene = nullptr;
     AssetSystem* assets = nullptr;
     std::size_t observer = 0;
@@ -257,13 +257,13 @@ struct PhysicsSubsystem::Impl {
         return true;
     }
     void Synchronize(float dt) {
-        std::unordered_set<entt::entity> live;
-        std::vector<JPH::BodyID> added;
+        added.clear();
+        // The scene lifecycle observer removes bodies when entities or components are removed.
+        // TODO: Use change notifications to avoid polling authored body settings.
         auto& api = world.GetBodyInterface();
         scene->ForEach<RigidBody>([&](entt::entity entity, const RigidBody& settings) {
             const auto* collider = scene->TryGetComponent<Collider>(entity);
             if (!collider) { Remove(entity); return; }
-            live.insert(entity);
             std::string error;
             detail::PhysicsPose pose;
             ShapeInput input;
@@ -312,10 +312,6 @@ struct PhysicsSubsystem::Impl {
                 it->second.rotation = pose.rotation;
             }
         });
-        for (auto it = bodies.begin(); it != bodies.end();) {
-            if (!live.contains(it->first)) { const auto entity = it++->first; Remove(entity); }
-            else ++it;
-        }
         if (!added.empty()) {
             const int count = static_cast<int>(added.size());
             const auto state = api.AddBodiesPrepare(added.data(), count);
