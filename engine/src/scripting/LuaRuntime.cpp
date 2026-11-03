@@ -44,7 +44,7 @@ namespace engine {
 
     namespace {
 
-        constexpr std::array physicsCallbackNames{"OnCollisionEnter", "OnCollisionExit"};
+        constexpr std::array physicsCallbackNames{"OnCollisionEnter", "OnCollisionExit", "OnTriggerEnter", "OnTriggerExit"};
 
         // Runtime failures are logged here only. Callers propagate the returned text.
         bool SetError(std::string& error, const std::string& message, bool log = true) {

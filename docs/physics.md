@@ -58,7 +58,7 @@ Collider shapes and their JSON fields:
 
 RigidBody JSON requires motionType, mass, friction and restitution. Collider JSON
 requires shape, center, showDebug and the dimension fields listed for that shape;
-mesh shapes have no dimension fields. Unknown or missing fields are rejected.
+mesh shapes have no dimension fields. Unknown fields and missing required fields are rejected.
 Scenes may contain no physics components; their existing scene/asset formats
 remain supported. The physics interface consists of RigidBody and Collider.
 Box/Cube dimensions and mesh vertices follow world scale per axis (a Cube under
@@ -158,6 +158,16 @@ nonphysical objects.
 Attach an enabled Script component to either participant to receive
 `OnCollisionEnter(other, contact)` and `OnCollisionExit(other, contact)`.
 Scripts that return a table receive `self` before these arguments.
+Create a separate zone entity with RigidBody and Collider, then enable
+**Is trigger** in its inspector. The zone uses the same shape selector and
+wireframe as a solid collider. For a mesh volume, use a convex hull.
+A triangle mesh represents surfaces. The optional JSON boolean
+`isTrigger` defaults to false and is included when saving. Triggers overlap
+Dynamic and Kinematic solid bodies without pushing them. Both participants
+can receive `OnTriggerEnter(other, contact)` and `OnTriggerExit(other, contact)`.
+Static triggers detect active bodies. Use a Kinematic trigger when the zone
+needs to detect bodies that are already sleeping.
+
 Events describe pairs of entities. Enter is emitted on the first contact and
 Exit after the last contact ends. Sleeping contacts stay active. When an
 entity is destroyed, the surviving script can receive Exit with `other == nil`.

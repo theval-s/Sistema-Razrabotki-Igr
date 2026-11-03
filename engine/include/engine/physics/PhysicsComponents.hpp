@@ -21,6 +21,7 @@ struct Collider {
     float radius = 0.5f; // sphere/capsule
     float halfHeight = 0.5f; // capsule cylinder, along local Y (without caps)
     bool showDebug = true; // editor wireframe; does not affect simulation
+    bool isTrigger = false;
     bool operator==(const Collider&) const = default;
 };
 } // namespace engine

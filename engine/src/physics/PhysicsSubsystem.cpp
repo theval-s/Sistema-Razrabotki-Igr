@@ -35,6 +35,7 @@
 #include <array>
 #include <stdexcept>
 #include <unordered_map>
+#include <tuple>
 
 namespace engine {
 namespace {
@@ -82,7 +83,7 @@ struct RuntimeLease {
         }
     }
 };
-constexpr JPH::ObjectLayer StaticLayer = 0, MovingLayer = 1;
+constexpr JPH::ObjectLayer StaticLayer = 0, MovingLayer = 1, TriggerLayer = 2;
 constexpr std::string_view WaitingForMesh = "waiting for mesh collision geometry";
 JPH::EMotionType Motion(MotionType type) {
     switch (type) {
@@ -168,7 +169,9 @@ struct ContactListener final : JPH::ContactListener {
         const auto n = manifold.mWorldSpaceNormal;
         const auto a = static_cast<entt::entity>(first.GetUserData());
         const auto b = static_cast<entt::entity>(second.GetUserData());
-        PhysicsContactEvent event{PhysicsContactKind::CollisionEnter, a, b,
+        const auto kind = first.IsSensor() || second.IsSensor()
+            ? PhysicsContactKind::TriggerEnter : PhysicsContactKind::CollisionEnter;
+        PhysicsContactEvent event{kind, a, b,
             {static_cast<float>(p.GetX()), static_cast<float>(p.GetY()), static_cast<float>(p.GetZ())},
             {n.GetX(), n.GetY(), n.GetZ()}, 0};
         if (event.second < event.first) {
@@ -206,7 +209,7 @@ struct ContactListener final : JPH::ContactListener {
             return !bodies.IsAdded(a) || !bodies.IsAdded(b) || bodies.IsActive(a) || bodies.IsActive(b);
         });
         const auto less = [](const auto& a, const auto& b) {
-            return std::pair(a.first, a.second) < std::pair(b.first, b.second);
+            return std::tie(a.first, a.second, a.kind) < std::tie(b.first, b.second, b.kind);
         };
         current.clear();
         for (const auto& [key, contact] : contacts) current.push_back(contact.event);
@@ -216,7 +219,8 @@ struct ContactListener final : JPH::ContactListener {
         }), current.end());
         for (auto event : previous) {
             if (std::binary_search(current.begin(), current.end(), event, less)) continue;
-            event.kind = PhysicsContactKind::CollisionExit;
+            event.kind = event.kind == PhysicsContactKind::TriggerEnter
+                ? PhysicsContactKind::TriggerExit : PhysicsContactKind::CollisionExit;
             event.stepIndex = step;
             events.enqueue(event);
         }
@@ -240,8 +244,8 @@ bool ValidPose(Vector3 position, Quaternion rotation, std::string& error) {
 
 struct PhysicsSubsystem::Impl {
     RuntimeLease runtime; // first constructed / last destroyed, before Jolt allocations
-    JPH::BroadPhaseLayerInterfaceTable broadPhase{2, 2};
-    JPH::ObjectLayerPairFilterTable pairs{2};
+    JPH::BroadPhaseLayerInterfaceTable broadPhase{3, 3};
+    JPH::ObjectLayerPairFilterTable pairs{3};
     std::unique_ptr<JPH::ObjectVsBroadPhaseLayerFilterTable> broadPhaseFilter;
     JPH::TempAllocatorImpl allocator;
     JPH::JobSystemThreadPool jobs;
@@ -279,9 +283,11 @@ struct PhysicsSubsystem::Impl {
                                                      static_cast<int>(config.workerThreads)) {
         broadPhase.MapObjectToBroadPhaseLayer(StaticLayer, JPH::BroadPhaseLayer(0));
         broadPhase.MapObjectToBroadPhaseLayer(MovingLayer, JPH::BroadPhaseLayer(1));
+        broadPhase.MapObjectToBroadPhaseLayer(TriggerLayer, JPH::BroadPhaseLayer(2));
+        pairs.EnableCollision(TriggerLayer, MovingLayer);
         pairs.EnableCollision(StaticLayer, MovingLayer);
         pairs.EnableCollision(MovingLayer, MovingLayer);
-        broadPhaseFilter = std::make_unique<JPH::ObjectVsBroadPhaseLayerFilterTable>(broadPhase, 2, pairs, 2);
+        broadPhaseFilter = std::make_unique<JPH::ObjectVsBroadPhaseLayerFilterTable>(broadPhase, 3, pairs, 3);
         world.Init(config.maxBodies, 0, config.maxBodyPairs, config.maxContactConstraints,
                    broadPhase, *broadPhaseFilter, pairs);
         world.SetGravity(Vec(config.gravity));
@@ -372,8 +378,11 @@ struct PhysicsSubsystem::Impl {
                     return;
                 }
                 failedShapes.erase(entity);
+                const auto layer = collider->isTrigger ? TriggerLayer
+                    : settings.motionType == MotionType::Static ? StaticLayer : MovingLayer;
                 JPH::BodyCreationSettings creation(shape.Get(), Position(pose.position), Quat(pose.rotation),
-                    Motion(settings.motionType), settings.motionType == MotionType::Static ? StaticLayer : MovingLayer);
+                    Motion(settings.motionType), layer);
+                creation.mIsSensor = collider->isTrigger;
                 creation.mFriction = settings.friction;
                 creation.mRestitution = settings.restitution;
                 creation.mUserData = static_cast<JPH::uint64>(entt::to_integral(entity));

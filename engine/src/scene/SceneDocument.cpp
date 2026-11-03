@@ -116,26 +116,30 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         value.center = {center[0], center[1], center[2]};
         if (!collider.at("showDebug").is_boolean()) throw std::invalid_argument("Collider showDebug must be boolean");
         value.showDebug = collider.at("showDebug").get<bool>();
+        if (collider.contains("isTrigger")) {
+            if (!collider.at("isTrigger").is_boolean()) throw std::invalid_argument("Collider isTrigger must be boolean");
+            value.isTrigger = collider.at("isTrigger").get<bool>();
+        }
         switch (value.shape) {
         case ColliderShape::Cube:
         case ColliderShape::Box: {
-            Fields(collider, {"shape", "center", "showDebug", "halfExtents"});
+            Fields(collider, {"shape", "center", "showDebug", "isTrigger", "halfExtents"});
             const auto extents = Numbers<3>(collider.at("halfExtents"));
             value.halfExtents = {extents[0], extents[1], extents[2]};
             break;
         }
         case ColliderShape::Sphere:
-            Fields(collider, {"shape", "center", "showDebug", "radius"});
+            Fields(collider, {"shape", "center", "showDebug", "isTrigger", "radius"});
             value.radius = Number(collider.at("radius"));
             break;
         case ColliderShape::Capsule:
-            Fields(collider, {"shape", "center", "showDebug", "radius", "halfHeight"});
+            Fields(collider, {"shape", "center", "showDebug", "isTrigger", "radius", "halfHeight"});
             value.radius = Number(collider.at("radius"));
             value.halfHeight = Number(collider.at("halfHeight"));
             break;
         case ColliderShape::ConvexMesh:
         case ColliderShape::TriangleMesh:
-            Fields(collider, {"shape", "center", "showDebug"});
+            Fields(collider, {"shape", "center", "showDebug", "isTrigger"});
             break;
         }
         entity.collider = value;
@@ -359,7 +363,7 @@ Json Encode(const SceneDocument& document) {
             case ColliderShape::TriangleMesh: shape = "TriangleMesh"; break;
             }
             auto& json = components["Collider"];
-            json = {{"shape", shape}, {"center", Encode(c.center)}, {"showDebug", c.showDebug}};
+            json = {{"shape", shape}, {"center", Encode(c.center)}, {"showDebug", c.showDebug}, {"isTrigger", c.isTrigger}};
             if (c.shape == ColliderShape::Cube || c.shape == ColliderShape::Box) json["halfExtents"] = Encode(c.halfExtents);
             if (c.shape == ColliderShape::Sphere || c.shape == ColliderShape::Capsule) json["radius"] = c.radius;
             if (c.shape == ColliderShape::Capsule) json["halfHeight"] = c.halfHeight;
