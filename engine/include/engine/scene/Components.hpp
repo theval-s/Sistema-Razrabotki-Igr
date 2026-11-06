@@ -37,4 +37,9 @@ struct Hierarchy {
     std::vector<entt::entity> children;
 };
 
+// Editor-only group. Saved with the scene and ignored at runtime.
+struct EditorFolder {
+    std::string path;
+};
+
 }  // namespace engine

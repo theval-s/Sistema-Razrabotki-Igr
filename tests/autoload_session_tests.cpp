@@ -1,6 +1,7 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/core/FileSystem.hpp>
+#include <engine/core/Log.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/engine.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
@@ -48,15 +49,14 @@ struct Fixture {
 struct LogCapture {
     std::vector<std::string> messages;
     std::vector<std::string> errors;
-    std::shared_ptr<spdlog::logger> logger = spdlog::default_logger();
-    spdlog::level::level_enum previous = logger->level();
     std::shared_ptr<spdlog::sinks::sink> sink =
         std::make_shared<spdlog::sinks::callback_sink_mt>([this](const spdlog::details::log_msg& message) {
             messages.emplace_back(message.payload.data(), message.payload.size());
             if (message.level == spdlog::level::err) errors.push_back(messages.back());
         });
-    LogCapture() { logger->sinks().push_back(sink); logger->set_level(spdlog::level::info); }
-    ~LogCapture() { std::erase(logger->sinks(), sink); logger->set_level(previous); }
+    // Every channel: script output (Game) as well as the runtime's errors (Lua).
+    LogCapture() { engine::log::Sinks()->add_sink(sink); }
+    ~LogCapture() { engine::log::Sinks()->remove_sink(sink); }
     auto Count(const char* message) const { return std::count(messages.begin(), messages.end(), message); }
 };
 
@@ -163,8 +163,8 @@ TEST(ScriptAutoloads, StartOrderUsesOneStateAndSharedModulesAndStopReversesOrder
     LogCapture capture;
     ASSERT_TRUE(fixture.scripts->BeginPlay(fixture.root, definitions, error)) << error;
     ASSERT_GE(capture.messages.size(), 2u);
-    EXPECT_EQ(capture.messages[capture.messages.size() - 2], "[Lua] first-start");
-    EXPECT_EQ(capture.messages.back(), "[Lua] second-start");
+    EXPECT_EQ(capture.messages[capture.messages.size() - 2], "first-start");
+    EXPECT_EQ(capture.messages.back(), "second-start");
     EXPECT_FALSE(fixture.scripts->BeginPlay(fixture.root, definitions, error));
     EXPECT_FALSE(fixture.scripts->BeginPlay(fixture.root, error));
     ASSERT_TRUE(fixture.scripts->GetRuntime().ExecuteString(
@@ -172,18 +172,18 @@ TEST(ScriptAutoloads, StartOrderUsesOneStateAndSharedModulesAndStopReversesOrder
     engine::FrameContext frame;
     frame.deltaSeconds = 0.25;
     fixture.scripts->Update(frame);
-    EXPECT_EQ(capture.Count("[Lua] first-update-1"), 1);
+    EXPECT_EQ(capture.Count("first-update-1"), 1);
     fixture.scripts->EndPlay();
-    const auto secondStop = std::find(capture.messages.begin(), capture.messages.end(), "[Lua] second-stop");
-    const auto firstStop = std::find(capture.messages.begin(), capture.messages.end(), "[Lua] first-stop");
+    const auto secondStop = std::find(capture.messages.begin(), capture.messages.end(), "second-stop");
+    const auto firstStop = std::find(capture.messages.begin(), capture.messages.end(), "first-stop");
     ASSERT_NE(secondStop, capture.messages.end());
     ASSERT_NE(firstStop, capture.messages.end());
     EXPECT_LT(secondStop, firstStop);
     fixture.scripts->EndPlay();
-    EXPECT_EQ(capture.Count("[Lua] first-stop"), 1);
+    EXPECT_EQ(capture.Count("first-stop"), 1);
     ASSERT_TRUE(fixture.scripts->BeginPlay(fixture.root, definitions, error)) << error;
     fixture.scripts->EndPlay();
-    EXPECT_EQ(capture.Count("[Lua] first-start"), 2);  // A fresh require cache on the second Play.
+    EXPECT_EQ(capture.Count("first-start"), 2);  // A fresh require cache on the second Play.
 }
 
 TEST(ScriptAutoloads, ResolvesUuidAfterMoveUsingSharedCatalogEvenWhenSceneCatalogIsEmpty) {
@@ -205,7 +205,7 @@ TEST(ScriptAutoloads, ResolvesUuidAfterMoveUsingSharedCatalogEvenWhenSceneCatalo
     const std::vector<engine::AutoloadDefinition> definitions{definition};
     LogCapture capture;
     ASSERT_TRUE(fixture.scripts->BeginPlay(fixture.root, definitions, error)) << error;
-    EXPECT_EQ(capture.Count("[Lua] moved-start"), 1);
+    EXPECT_EQ(capture.Count("moved-start"), 1);
     fixture.scripts->EndPlay();
 }
 
@@ -235,7 +235,7 @@ TEST(ScriptAutoloads, PreflightRejectsMissingWrongKindAndOutsideRootBeforeRunnin
     EXPECT_FALSE(fixture.scripts->BeginPlay(fixture.root, definitions, error));
     EXPECT_NE(error.find("Second"), std::string::npos);
     EXPECT_FALSE(fixture.scripts->IsPlaying());
-    EXPECT_EQ(capture.Count("[Lua] must-not-start"), 0);
+    EXPECT_EQ(capture.Count("must-not-start"), 0);
     definitions[1].enabled = false;
     ASSERT_TRUE(fixture.scripts->BeginPlay(fixture.root, definitions, error)) << error;
     fixture.scripts->EndPlay();
@@ -255,13 +255,13 @@ TEST(ScriptAutoloads, StartupErrorCleansUpAndAllowsRetry) {
     EXPECT_FALSE(fixture.scripts->IsPlaying());
     EXPECT_FALSE(fixture.scripts->GetRuntime().IsInitialized());
     EXPECT_TRUE(fixture.scripts->GetRoot().empty());
-    EXPECT_EQ(capture.Count("[Lua] rollback-first"), 1);
+    EXPECT_EQ(capture.Count("rollback-first"), 1);
     // Creation failures also unwind instances already started before the bad asset.
     ASSERT_TRUE(engine::WriteFileAtomic(fixture.root / "Broken.lua", "return 42", error)) << error;
     EXPECT_FALSE(fixture.scripts->BeginPlay(fixture.root, definitions, error));
     EXPECT_NE(error.find("Broken"), std::string::npos);
     EXPECT_FALSE(fixture.scripts->GetRuntime().IsInitialized());
-    EXPECT_EQ(capture.Count("[Lua] rollback-first"), 2);
+    EXPECT_EQ(capture.Count("rollback-first"), 2);
     const std::vector<engine::AutoloadDefinition> retry{first};
     ASSERT_TRUE(fixture.scripts->BeginPlay(fixture.root, retry, error)) << error;
     fixture.scripts->EndPlay();
@@ -281,7 +281,7 @@ TEST(ScriptAutoloads, LuaFailureLogsOwnerUuidAndSourceLineExactlyOnce) {
     EXPECT_NE(error.find("Broken.lua:3:"), std::string::npos);
     EXPECT_EQ(error.find("entity="), std::string::npos);
     ASSERT_EQ(capture.errors.size(), 1u);
-    EXPECT_EQ(capture.errors.front(), "[Lua] " + error);
+    EXPECT_EQ(capture.errors.front(), error);
     fixture.scripts->EndPlay();
     EXPECT_EQ(capture.errors.size(), 1u);
 }
@@ -298,7 +298,7 @@ TEST(ScriptAutoloads, SyntaxFailureAlsoIdentifiesAutoloadAndLogsOnce) {
     EXPECT_NE(error.find(definition.script.id.ToString()), std::string::npos);
     EXPECT_NE(error.find("Syntax.lua:3:"), std::string::npos);
     ASSERT_EQ(capture.errors.size(), 1u);
-    EXPECT_EQ(capture.errors.front(), "[Lua] " + error);
+    EXPECT_EQ(capture.errors.front(), error);
 }
 
 TEST(ScriptAutoloads, PreflightFailuresAreLoggedBySubsystemOnceWithoutStartingLua) {
@@ -312,11 +312,11 @@ TEST(ScriptAutoloads, PreflightFailuresAreLoggedBySubsystemOnceWithoutStartingLu
     EXPECT_NE(error.find("Missing"), std::string::npos);
     EXPECT_NE(error.find(missing.script.id.ToString()), std::string::npos);
     ASSERT_EQ(capture.errors.size(), 1u);
-    EXPECT_EQ(capture.errors.front(), "[Lua] " + error);
+    EXPECT_EQ(capture.errors.front(), error);
     EXPECT_FALSE(fixture.scripts->GetRuntime().IsInitialized());
     EXPECT_FALSE(fixture.scripts->BeginPlay(fixture.root / "missing-root", error));
     ASSERT_EQ(capture.errors.size(), 2u);
-    EXPECT_EQ(capture.errors.back(), "[Lua] " + error);
+    EXPECT_EQ(capture.errors.back(), error);
 }
 
 TEST(ScriptAutoloads, EntityDiagnosticsStillUseTheExistingEntityId) {
@@ -348,15 +348,15 @@ TEST(ScriptAutoloads, RollbackReversesAllStartedServicesEvenWhenDestroyFails) {
     std::string error;
     EXPECT_FALSE(fixture.scripts->BeginPlay(fixture.root, definitions, error));
     EXPECT_NE(error.find("autoload=Third"), std::string::npos);  // Cleanup doesn't overwrite the startup error.
-    const auto second = std::find(capture.messages.begin(), capture.messages.end(), "[Lua] rollback-B");
-    const auto first = std::find(capture.messages.begin(), capture.messages.end(), "[Lua] rollback-A");
+    const auto second = std::find(capture.messages.begin(), capture.messages.end(), "rollback-B");
+    const auto first = std::find(capture.messages.begin(), capture.messages.end(), "rollback-A");
     ASSERT_NE(second, capture.messages.end());
     ASSERT_NE(first, capture.messages.end());
     EXPECT_LT(second, first);
     EXPECT_EQ(capture.errors.size(), 2u);  // One startup error and one independent teardown error.
     EXPECT_FALSE(fixture.scripts->GetRuntime().IsInitialized());
     fixture.scripts->EndPlay();
-    EXPECT_EQ(capture.Count("[Lua] rollback-A"), 1);
+    EXPECT_EQ(capture.Count("rollback-A"), 1);
     const std::vector<engine::AutoloadDefinition> retry{definitions.front()};
     ASSERT_TRUE(fixture.scripts->BeginPlay(fixture.root, retry, error)) << error;
     fixture.scripts->EndPlay();
@@ -389,10 +389,10 @@ TEST(ScriptAutoloads, UpdateFailureDisablesOnlyItsInstanceAndIsNotReloggedOnStop
     ASSERT_EQ(capture.errors.size(), 1u);
     EXPECT_NE(capture.errors.front().find("autoload=BrokenUpdate"), std::string::npos);
     EXPECT_NE(capture.errors.front().find(broken.script.id.ToString()), std::string::npos);
-    EXPECT_EQ(capture.Count("[Lua] healthy-update"), 2);
+    EXPECT_EQ(capture.Count("healthy-update"), 2);
     fixture.scripts->EndPlay();
-    EXPECT_EQ(capture.Count("[Lua] healthy-stop"), 1);
-    EXPECT_EQ(capture.Count("[Lua] faulted-must-not-destroy"), 0);
+    EXPECT_EQ(capture.Count("healthy-stop"), 1);
+    EXPECT_EQ(capture.Count("faulted-must-not-destroy"), 0);
     EXPECT_EQ(capture.errors.size(), 1u);
     ASSERT_TRUE(fixture.scripts->BeginPlay(fixture.root, definitions, error)) << error;
     fixture.scripts->Update(frame);
@@ -415,8 +415,8 @@ TEST(ScriptAutoloads, StopDestroysEntitiesBeforeServicesAndContinuesAfterDestroy
     ASSERT_TRUE(fixture.scripts->GetRuntime().StartInstance(id, error)) << error;
     LogCapture capture;
     fixture.scripts->EndPlay();
-    const auto entityStop = std::find(capture.messages.begin(), capture.messages.end(), "[Lua] entity-stop");
-    const auto serviceStop = std::find(capture.messages.begin(), capture.messages.end(), "[Lua] service-stop");
+    const auto entityStop = std::find(capture.messages.begin(), capture.messages.end(), "entity-stop");
+    const auto serviceStop = std::find(capture.messages.begin(), capture.messages.end(), "service-stop");
     ASSERT_NE(entityStop, capture.messages.end());
     ASSERT_NE(serviceStop, capture.messages.end());
     EXPECT_LT(entityStop, serviceStop);
@@ -425,8 +425,8 @@ TEST(ScriptAutoloads, StopDestroysEntitiesBeforeServicesAndContinuesAfterDestroy
     EXPECT_FALSE(fixture.scripts->GetRuntime().IsInitialized());
     EXPECT_FALSE(fixture.scripts->GetRuntime().UpdateInstance(id, 0.25, error));
     fixture.scripts->EndPlay();
-    EXPECT_EQ(capture.Count("[Lua] entity-stop"), 1);
-    EXPECT_EQ(capture.Count("[Lua] service-stop"), 1);
+    EXPECT_EQ(capture.Count("entity-stop"), 1);
+    EXPECT_EQ(capture.Count("service-stop"), 1);
     EXPECT_EQ(capture.errors.size(), 1u);
 }
 

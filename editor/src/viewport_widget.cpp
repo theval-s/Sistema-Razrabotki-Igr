@@ -98,6 +98,16 @@ QPaintEngine* ViewportWidget::paintEngine() const {
     return nullptr;
 }
 
+bool ViewportWidget::event(QEvent* event) {
+    // Accepting the override keeps a shortcut (F, Ctrl+A...) from taking the key: it arrives
+    // in keyPressEvent instead, and from there at the camera.
+    if (event->type() == QEvent::ShortcutOverride && cursor_pinned_) {
+        event->accept();
+        return true;
+    }
+    return QWidget::event(event);
+}
+
 void ViewportWidget::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     const QSize size = pixelSize();
@@ -135,12 +145,12 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
     // Clicking the viewport is how it gets the keyboard, so WASD works right away.
     setFocus(Qt::MouseFocusReason);
     last_cursor_ = event->globalPosition().toPoint();
+    if (!cursor_pinned_) {
+        emit mousePressed(event->position(), event->button(), event->modifiers());
+    }
     if (!playing_ && event->button() == Qt::RightButton) {
         cursor_pinned_ = true;
         setCursor(Qt::BlankCursor);
-    }
-    if (event->button() == Qt::LeftButton && !cursor_pinned_) {
-        emit pickRequested(event->position(), event->modifiers() & Qt::ControlModifier);
     }
     if (const auto button = toEngineButton(event->button()); input_ != nullptr && button) {
         input_->OnMouseButton(*button, true);
@@ -150,6 +160,8 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
 void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::RightButton) {
         releaseCursor();
+    } else if (!cursor_pinned_) {
+        emit mouseReleased(event->position(), event->button());
     }
     if (const auto button = toEngineButton(event->button()); input_ != nullptr && button) {
         input_->OnMouseButton(*button, false);
@@ -157,6 +169,9 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void ViewportWidget::mouseMoveEvent(QMouseEvent* event) {
+    if (!cursor_pinned_) {
+        emit mouseMoved(event->position());
+    }
     const QPoint cursor = event->globalPosition().toPoint();
     if (!last_cursor_) {
         last_cursor_ = cursor;

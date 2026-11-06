@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/engine.hpp>
@@ -16,7 +16,7 @@ std::string_view RenderExtractionSubsystem::GetName() const { return "RenderExtr
 
 bool RenderExtractionSubsystem::Initialize() {
     rendering_ = GetEngine().GetSubsystem<RenderingSubsystem>();
-    if (!rendering_) spdlog::error("RenderExtractionSubsystem needs RenderingSubsystem");
+    if (!rendering_) log::Render().error("RenderExtractionSubsystem needs RenderingSubsystem");
     return rendering_ != nullptr;
 }
 

@@ -6,7 +6,7 @@
 #include <string>
 #include <utility>
 
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 #include <engine/rendering/RenderingContext.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
@@ -70,7 +70,7 @@ std::string ShaderVariantName(const AssetDesc& desc) {
 template <typename T>
 entt::resource<T> FailLoad(AssetTable<T>& table, const AssetHandle<T> handle, const std::string& error) {
     const typename AssetTable<T>::Record* record = table.Get(handle);
-    spdlog::error("AssetSystem: failed to load '{}': {}",
+    log::Assets().error("Failed to load '{}': {}",
                   record != nullptr ? record->desc.name : std::string{}, error);
     table.Fail(handle, error);
     return {};
@@ -102,7 +102,7 @@ AssetSystem::~AssetSystem() = default;
 
 void AssetSystem::Initialize() {
     if (!catalog_.Scan(AssetPathResolver::GetGameRoot(), AssetPathResolver::GetRoot() / "engine", catalogError_)) {
-        spdlog::error("AssetSystem: cannot build asset catalog: {}", catalogError_);
+        log::Assets().error("Cannot build asset catalog: {}", catalogError_);
     }
     importers_[static_cast<size_t>(AssetKind::Mesh)] = std::make_unique<AssimpMeshImporter>();
     importers_[static_cast<size_t>(AssetKind::Texture)] = std::make_unique<TextureImporter>();
@@ -205,11 +205,11 @@ bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& err
     if (job.cpuOk && ResolveDependencies(job, true) == DependencyState::Failed) job.cpuOk = false;
     if (!job.cpuOk) {
         error = job.error;
-        spdlog::error("AssetSystem: live reload failed for '{}': {}", normalized, error);
+        log::Assets().error("Live reload failed for '{}': {}", normalized, error);
         return false;
     }
     if (!ReloadReady(job, error)) {
-        spdlog::error("AssetSystem: live reload failed for '{}': {}", normalized, error);
+        log::Assets().error("Live reload failed for '{}': {}", normalized, error);
         return false;
     }
     engine_.GetEvents().trigger(AssetLoadedEvent{job.id, job.name, job.kind});
@@ -323,7 +323,7 @@ AssetHandle<ShaderAsset> AssetSystem::RequestShaderVariant(AssetDesc&& desc) {
     std::ranges::sort(defines, {}, &ShaderDefine::name);
     for (std::size_t i = 0; i < defines.size(); ++i) {
         if (defines[i].name.empty() || (i > 0 && defines[i].name == defines[i - 1].name)) {
-            spdlog::error("Invalid or duplicate shader define for '{}'", ToUtf8(desc.path));
+            log::Assets().error("Invalid or duplicate shader define for '{}'", ToUtf8(desc.path));
             return AssetHandle<ShaderAsset>::Invalid();
         }
     }
@@ -333,7 +333,7 @@ AssetHandle<ShaderAsset> AssetSystem::RequestShaderVariant(AssetDesc&& desc) {
     if (const auto existing = shaders_.Find(desc.name)) {
         if (shaders_.Get(existing)->desc.shaderSource != desc.shaderSource ||
             shaders_.Get(existing)->desc.shaderFromMemory != desc.shaderFromMemory) {
-            spdlog::error("Shader source identity collision for '{}'", ToUtf8(desc.path));
+            log::Assets().error("Shader source identity collision for '{}'", ToUtf8(desc.path));
             return AssetHandle<ShaderAsset>::Invalid();
         }
     }
@@ -388,11 +388,11 @@ std::optional<AssetReference> AssetSystem::ReferenceFor(AssetHandle<MaterialInst
 const CatalogEntry* AssetSystem::Resolve(const AssetReference& reference, const CatalogAssetKind kind) const {
     const CatalogEntry* entry = catalog_.Find(reference.id, kind);
     if (entry == nullptr) {
-        spdlog::error("AssetSystem: missing or wrong-kind UUID '{}' (hint '{}')", reference.id.ToString(), reference.path);
+        log::Assets().error("Missing or wrong-kind UUID '{}' (hint '{}')", reference.id.ToString(), reference.path);
         return nullptr;
     }
     if (NormalizeName(reference.path) != NormalizeName(entry->path)) {
-        spdlog::warn("AssetSystem: stale path hint '{}' for UUID '{}', now at '{}'",
+        log::Assets().warn("Stale path hint '{}' for UUID '{}', now at '{}'",
                       reference.path, reference.id.ToString(), entry->path);
     }
     return entry;
@@ -434,7 +434,7 @@ AssetHandle<T> AssetSystem::Request(AssetDesc&& desc) {
     AssetHandle<T> handle = table.Acquire(std::move(desc));
     if (!handle) {
         const typename AssetTable<T>::Record* collision = table.FindCollision(name);
-        spdlog::error("AssetSystem: name '{}' hashes to the same id as already registered '{}'",
+        log::Assets().error("Name '{}' hashes to the same id as already registered '{}'",
                       name, collision != nullptr ? collision->desc.name : std::string{});
         return AssetHandle<T>::Invalid();
     }
@@ -492,7 +492,7 @@ void AssetSystem::DispatchJob(const AssetKind kind, const AssetDesc& desc, const
         job->device = rendering->GetContext().GetDevice();
     }
     job->queuedAt = std::chrono::steady_clock::now();
-    spdlog::info("AssetSystem: queued '{}' ({}) on frame {}", desc.name, ToString(kind),
+    log::Assets().info("Queued '{}' ({}) on frame {}", desc.name, ToString(kind),
                  engine_.GetFrame().frameIndex);
     LoadJob* scheduled = job.get();
     inFlight_.push_back(std::move(job));
@@ -624,7 +624,7 @@ entt::resource<T> AssetSystem::FinishTyped(const LoadJob& job, AssetTable<T>& ta
 
     const auto totalSeconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - job.queuedAt).count();
-    spdlog::info("AssetSystem: '{}' ({}) published on frame {} ({} s after queueing)",
+    log::Assets().info("'{}' ({}) published on frame {} ({} s after queueing)",
                  job.name, ToString(job.kind), frameIndex, totalSeconds);
 
     entt::resource<T> value = table.Publish(handle, MakeValue<T>(record->desc, job.payload, gpu));

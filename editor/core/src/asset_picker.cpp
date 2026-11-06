@@ -6,6 +6,7 @@
 #include <QLineEdit>
 #include <QMimeData>
 #include <QSignalBlocker>
+#include <QWheelEvent>
 
 #include <engine/assets/AssetPathResolver.hpp>
 
@@ -100,6 +101,11 @@ void AssetPicker::dropEvent(QDropEvent* event) {
     selectId(entry->metadata.id);  // not quietly: this is the user's choice
     event->setDropAction(Qt::CopyAction);
     event->accept();
+}
+
+void AssetPicker::wheelEvent(QWheelEvent* event) {
+    // we don't want to scroll the asset accidentally....
+    event->ignore();
 }
 
 const engine::CatalogEntry* AssetPicker::droppedEntry(const QMimeData* mime) const {

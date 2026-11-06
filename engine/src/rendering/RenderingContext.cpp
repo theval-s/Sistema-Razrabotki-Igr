@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 #include "engine/window.hpp"
 
@@ -22,7 +22,7 @@ RenderingContext::~RenderingContext() {
 
 bool RenderingContext::Initialize(const NativeSurface& surface) {
     if (!surface.IsValid()) {
-        spdlog::error("RenderingContext::Initialize: the engine has no valid native surface");
+        log::Render().error("RenderingContext::Initialize: the engine has no valid native surface");
         return false;
     }
     return CreateDeviceAndSwapChain(static_cast<HWND>(surface.windowHandle), surface.width, surface.height);
@@ -34,7 +34,7 @@ bool RenderingContext::Reinitialize(const NativeSurface& surface) const {
     }
     const auto r = swapChain_->ResizeBuffers(0, surface.width, surface.height, DXGI_FORMAT_UNKNOWN, 0);
     if (FAILED(r)) {
-        spdlog::error("Failed to resize swap chain: {:08x}", static_cast<unsigned long>(r));
+        log::Render().error("Failed to resize swap chain: {:08x}", static_cast<unsigned long>(r));
         return false;
     }
     return true;
@@ -75,7 +75,7 @@ bool RenderingContext::CreateDeviceAndSwapChain(const HWND hwnd, const uint32_t 
         nullptr,
         deviceContext_.GetAddressOf());
     if (FAILED(r)) {
-        spdlog::critical("D3D11CreateDeviceAndSwapChain failed: {:08x}", static_cast<unsigned long>(r));
+        log::Render().critical("D3D11CreateDeviceAndSwapChain failed: {:08x}", static_cast<unsigned long>(r));
         return false;
     }
     resourceManager_.Initialize(device_.Get());
@@ -153,7 +153,7 @@ void RenderingContext::RawDraw(const uint32_t vertexCount, const uint32_t baseVe
     deviceContext_->Draw(vertexCount, baseVertex);
 }
 
-void RenderingContext::DrawLines(const std::span<const DirectX::SimpleMath::Vector3> endpoints) {
+void RenderingContext::DrawLines(const std::span<const LineVertex> endpoints) {
     if (endpoints.empty() || endpoints.size() % 2 != 0 ||
         endpoints.size_bytes() > std::numeric_limits<uint32_t>::max()) return;
     const auto bytes = static_cast<uint32_t>(endpoints.size_bytes());
@@ -175,13 +175,14 @@ void RenderingContext::DrawLines(const std::span<const DirectX::SimpleMath::Vect
 
     if (!lineLayout_) {
         VertexLayout layout;
-        layout.Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0);
+        layout.Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, offsetof(LineVertex, position));
+        layout.Add("COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, offsetof(LineVertex, color));
         lineLayout_ = resourceManager_.inputLayoutCache_.RegisterMeshLayout(std::move(layout));
     }
     const auto inputLayout = resourceManager_.inputLayoutCache_.GetInputLayout(device_.Get(), lineLayout_, vsInputLayout_);
     if (!inputLayout) return;
     deviceContext_->IASetInputLayout(inputLayout);
-    const UINT stride = sizeof(DirectX::SimpleMath::Vector3), offset = 0;
+    const UINT stride = sizeof(LineVertex), offset = 0;
     ID3D11Buffer* buffer = lineBuffer_.Get();
     deviceContext_->IASetVertexBuffers(0, 1, &buffer, &stride, &offset);
     deviceContext_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
@@ -352,7 +353,7 @@ void RenderingContext::Present() const {
 
 void RenderingContext::checkResult(const HRESULT result, const char* message) {
     if (FAILED(result)) {
-        spdlog::critical(message);
+        log::Render().critical(message);
         std::exit(1);
     }
 }

@@ -20,7 +20,7 @@
 #include <utility>
 
 #include <editor/editor_context.hpp>
-#include <editor/scene_document.hpp>
+#include <editor/scene_events.hpp>
 #include <editor/selection.hpp>
 
 #include "component_inspectors.hpp"
@@ -78,10 +78,16 @@ InspectorPanel::InspectorPanel(editor::EditorContext& context, QWidget* parent) 
 
     connect(name_, &QLineEdit::editingFinished, this, &InspectorPanel::applyName);
 
-    // Same reason as the hierarchy: the scene has no change notifications.
+    connect(&context_.sceneEvents(), &editor::SceneEvents::changed, this, [this](const editor::SceneChanges& changes) {
+        if (entity_ != entt::null && changes.entities.contains(entity_)) {
+            refresh();
+        }
+    });
+    // Some of what the forms show isn't in the scene: whether a mesh has loaded yet (Collider's
+    // mesh tools, the asset slots) and the script files on disk (Script's properties).
     auto* timer = new QTimer(this);
     connect(timer, &QTimer::timeout, this, &InspectorPanel::refresh);
-    timer->start(100);
+    timer->start(500);
 
     // Only on a new primary: rebuilding for the same entity would reset the rotation angles being edited.
     editor::Selection& selection = context_.selection();
@@ -214,8 +220,7 @@ void InspectorPanel::addSection(const engine::Scene::ComponentType& type) {
 
     QWidget* body = nullptr;
     if (known != inspectors.end()) {
-        // Field edits aren't structural, so the scene's revision doesn't count them.
-        auto* form = new PropertyForm([this] { context_.sceneDocument().markDirty(); }, section);
+        auto* form = new PropertyForm(section);
         known->build(*form, context_, entity_);
         forms_.push_back(form);
         body = form;

@@ -3,7 +3,7 @@
 #include <cassert>
 #include <utility>
 #include <vector>
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 namespace engine {
 
@@ -50,7 +50,7 @@ ComPtr<ID3D11InputLayout> InputLayoutCache::CreateInputLayout(ID3D11Device* devi
     for (auto& att : shaderLayout.attributes) {
         const auto* meshAttribute = meshLayout.FindAttribute(att.semantic, att.semanticIndex);
         if (meshAttribute == nullptr) {
-            spdlog::error("Failed to create input layout! Mesh vertex is missing attribute {} {}!", att.semantic,
+            log::Render().error("Failed to create input layout! Mesh vertex is missing attribute {} {}!", att.semantic,
                           att.semanticIndex);
             return {};
         }
@@ -73,7 +73,7 @@ ComPtr<ID3D11InputLayout> InputLayoutCache::CreateInputLayout(ID3D11Device* devi
         &result);
     if (FAILED(success)) {
         // We kindly expect those upper on the callstack to print some more helpful info
-        spdlog::error("Failed to create input layout!");
+        log::Render().error("Failed to create input layout!");
     }
     return result;
 }

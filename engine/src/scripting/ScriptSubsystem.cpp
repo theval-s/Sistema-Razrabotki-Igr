@@ -9,7 +9,7 @@
 #include <engine/core/PathUtils.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/engine.hpp>
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 namespace engine {
 namespace {
@@ -17,7 +17,7 @@ namespace {
 // Runtime failures are already logged by LuaRuntime. Only orchestration/preflight errors use this.
 bool StartupError(std::string& error, std::string message) {
     error = std::move(message);
-    spdlog::error("[Lua] {}", error);
+    log::Lua().error("{}", error);
     return false;
 }
 
@@ -233,7 +233,7 @@ void ScriptSubsystem::ReconcileSceneScripts() {
         if (!component.enabled || !component.script.id.IsValid()) return;
         const auto* entry = GetEngine().GetAssets().GetCatalog().Find(record.asset, CatalogAssetKind::Script);
         if (!entry) {
-            spdlog::error("[Lua] Entity {} [script={}]: missing Script UUID", scene_->GetId(entity).ToString(),
+            log::Lua().error("Entity {} [script={}]: missing Script UUID", scene_->GetId(entity).ToString(),
                           record.asset.ToString());
             return; // Remember the failed attachment; do not repeat the error every frame.
         }

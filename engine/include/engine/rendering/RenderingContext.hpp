@@ -23,6 +23,12 @@
 namespace engine {
 using Microsoft::WRL::ComPtr;
 
+/// One end of a line drawn by RenderingContext::DrawLines().
+struct LineVertex {
+    DirectX::SimpleMath::Vector3 position;
+    DirectX::SimpleMath::Color color;
+};
+
 /**
  * Simple thin wrapper around DX11 Context, helps to set shaders and resources via Handles
  * To simplify architecture we are keeping most resources bound during render pass
@@ -48,8 +54,8 @@ struct ENGINE_API RenderingContext {
     void BindMesh(MeshHandle h);
     void RawDrawIndexed(uint32_t indexCount, uint32_t baseIndex = 0, uint32_t baseVertex = 0) const;
     void RawDraw(uint32_t vertexCount, uint32_t baseVertex = 0) const;
-    /// Draw world-space line pairs with the currently bound vertex shader (POSITION input).
-    void DrawLines(std::span<const DirectX::SimpleMath::Vector3> endpoints);
+    /// Draws line pairs with the currently bound shaders (POSITION and COLOR input).
+    void DrawLines(std::span<const LineVertex> endpoints);
     void DrawMesh(MeshHandle h);
     void BindCBuffer(BindSlot slot, BufferHandle h);
     void UnbindCBuffer(BindSlot slot);

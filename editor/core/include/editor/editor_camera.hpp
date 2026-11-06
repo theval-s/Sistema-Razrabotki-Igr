@@ -36,6 +36,8 @@ public:
     void ResetToSceneCamera();
     void SetInputActive(bool active);
     void SetNavigationEnabled(bool enabled) { navigation_enabled_ = enabled; }
+    /// Move camera to object
+    void Focus(const DirectX::SimpleMath::Vector3& center, float radius);
 
     /// The viewpoint, in world space.
     [[nodiscard]] DirectX::SimpleMath::Vector3 GetPosition() const noexcept;

@@ -1,5 +1,5 @@
 ﻿#include <engine/rendering/RenderingSystem.hpp>
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 namespace engine {
 
@@ -22,7 +22,7 @@ bool RenderingSystem::Reinitialize(const NativeSurface& surface) {
     auto& resourceManager = renderingContext_.GetResourceManager();
     for (const auto& renderPass : renderPasses_) {
         if (!renderPass->PreReinitialize(resourceManager, renderingContext_, resources_)) {
-            spdlog::error("Rendering pass failed to release resources before resize");
+            log::Render().error("Rendering pass failed to release resources before resize");
             return false;
         }
     }
@@ -33,7 +33,7 @@ bool RenderingSystem::Reinitialize(const NativeSurface& surface) {
         // the next resize attempt can release it again and retry cleanly.
         for (const auto& renderPass : renderPasses_) {
             if (!renderPass->Reinitialize(resourceManager, renderingContext_, resources_)) {
-                spdlog::error("Failed to restore pass resources after resize failure");
+                log::Render().error("Failed to restore pass resources after resize failure");
             }
         }
         return false;
@@ -42,7 +42,7 @@ bool RenderingSystem::Reinitialize(const NativeSurface& surface) {
     resources_.screenHeight = surface.height;
     for (const auto& renderPass : renderPasses_) {
         if (!renderPass->Reinitialize(resourceManager, renderingContext_, resources_)) {
-            spdlog::error("Rendering pass failed to recreate resources after resize");
+            log::Render().error("Rendering pass failed to recreate resources after resize");
             return false;
         }
     }

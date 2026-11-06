@@ -24,8 +24,9 @@
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/core/FrameContext.hpp>
+#include <engine/rendering/DebugDraw.hpp>
 #include "PhysicsValidation.hpp"
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
@@ -50,11 +51,11 @@ void Trace(const char* format, ...) {
     va_start(args, format);
     vsnprintf(text, sizeof(text), format, args);
     va_end(args);
-    spdlog::info("Jolt: {}", text);
+    log::Physics().info("Jolt: {}", text);
 }
 #ifdef JPH_ENABLE_ASSERTS
 bool Assert(const char* expression, const char* message, const char* file, JPH::uint line) {
-    spdlog::error("Jolt assertion {}:{}: {} ({})", file, line, expression, message ? message : "");
+    log::Physics().error("Jolt assertion {}:{}: {} ({})", file, line, expression, message ? message : "");
     return true;
 }
 #endif
@@ -318,7 +319,7 @@ struct PhysicsSubsystem::Impl {
     }
     void Reject(entt::entity entity, const std::string& error) {
         if (failures[entity] != error) {
-            spdlog::error("Physics '{}': {}", scene->GetName(entity), error);
+            log::Physics().error("Physics '{}': {}", scene->GetName(entity), error);
             failures[entity] = error;
         }
     }
@@ -435,7 +436,7 @@ bool PhysicsSubsystem::Initialize() {
     if (impl_) return true;
     if (!detail::Finite(config_.gravity) || config_.maxBodies == 0 || config_.maxBodies > 65536 ||
         config_.maxBodyPairs == 0 || config_.maxContactConstraints == 0 || config_.tempAllocatorBytes == 0 || config_.workerThreads > 64) {
-        spdlog::error("Invalid physics configuration");
+        log::Physics().error("Invalid physics configuration");
         return false;
     }
     try {
@@ -448,7 +449,7 @@ bool PhysicsSubsystem::Initialize() {
         });
         return true;
     } catch (const std::exception& e) {
-        spdlog::error("Physics initialization: {}", e.what());
+        log::Physics().error("Physics initialization: {}", e.what());
         impl_.reset();
         return false;
     }
@@ -470,7 +471,7 @@ void PhysicsSubsystem::FixedUpdate(const FixedUpdateContext& step) {
     if (!std::isfinite(dt) || dt <= 0) return;
     impl_->Synchronize(dt);
     const auto result = impl_->world.Update(dt, 1, &impl_->allocator, &impl_->jobs);
-    if (result != JPH::EPhysicsUpdateError::None) spdlog::error("Jolt capacity error: {}", static_cast<unsigned>(result));
+    if (result != JPH::EPhysicsUpdateError::None) log::Physics().error("Jolt capacity error: {}", static_cast<unsigned>(result));
     auto& events = GetEngine().GetEvents();
     for (auto& [entity, body] : impl_->bodies) {
         if (body.settings.motionType != MotionType::Dynamic) continue;
@@ -541,7 +542,8 @@ bool PhysicsSubsystem::Teleport(entt::entity entity, Vector3 position, Quaternio
     body->rotation = pose.rotation;
     error.clear(); return true;
 }
-bool PhysicsSubsystem::AppendColliderDebugLines(entt::entity entity, std::vector<Vector3>& endpoints, std::string& error) {
+bool PhysicsSubsystem::DrawCollider(entt::entity entity, DebugDraw& draw, const DirectX::SimpleMath::Color& color,
+                                    std::string& error) {
     error.clear();
     if (!impl_) { error = "physics is not initialized"; return false; }
     if (entity == entt::null) { impl_->ClearPreview(); return true; }
@@ -588,9 +590,9 @@ bool PhysicsSubsystem::AppendColliderDebugLines(entt::entity entity, std::vector
     }
     error = impl_->previewError;
     if (!error.empty()) return false;
-    endpoints.reserve(endpoints.size() + impl_->previewLines.size());
-    for (const auto point : impl_->previewLines)
-        endpoints.push_back(Vector3::Transform(point, pose.rotation) + pose.position);
+    for (std::size_t i = 0; i + 1 < impl_->previewLines.size(); i += 2)
+        draw.Line(Vector3::Transform(impl_->previewLines[i], pose.rotation) + pose.position,
+                  Vector3::Transform(impl_->previewLines[i + 1], pose.rotation) + pose.position, color);
     return true;
 }
 std::size_t PhysicsSubsystem::GetBodyCount() const { return impl_ ? impl_->bodies.size() : 0; }

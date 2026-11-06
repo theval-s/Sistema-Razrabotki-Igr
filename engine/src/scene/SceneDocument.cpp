@@ -68,7 +68,7 @@ std::optional<EntityUuid> OptionalId(const Json& j) {
 }
 
 SceneEntityDefinition DecodeEntity(const Json& j) {
-    Fields(j, {"id", "name", "tags", "parent", "components"});
+    Fields(j, {"id", "name", "tags", "parent", "editorFolder", "components"});
     SceneEntityDefinition entity;
     const auto id = j.at("id").get<std::string>();
     const auto parsed = EntityUuid::Parse(id);
@@ -86,6 +86,11 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         }
     }
     if (j.contains("parent")) entity.parent = OptionalId(j.at("parent"));
+    if (j.contains("editorFolder")) {
+        if (!j.at("editorFolder").is_string() || !Scene::IsValidEditorFolder(j.at("editorFolder").get<std::string>()))
+            throw std::invalid_argument("editorFolder must be folder names separated by '/'");
+        entity.editorFolder = j.at("editorFolder").get<std::string>();
+    }
     const auto& components = j.at("components");
     Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "RigidBody", "Collider"});
     if (components.contains("RigidBody")) {
@@ -263,6 +268,14 @@ void Validate(const SceneDocument& document) {
             current = &document.entities[it->second];
         }
     }
+    for (const auto& entity : document.entities)
+        if (entity.parent && !entity.editorFolder.empty())
+            throw std::invalid_argument("editorFolder is only allowed on root entities: " + entity.id.ToString());
+    std::set<std::string> folders;
+    for (const auto& folder : document.editorFolders) {
+        if (!Scene::IsValidEditorFolder(folder)) throw std::invalid_argument("invalid editor folder: " + folder);
+        if (!folders.insert(folder).second) throw std::invalid_argument("duplicate editor folder: " + folder);
+    }
     for (const auto& entity : document.entities) {
         if (entity.rigidBody.has_value() != entity.collider.has_value())
             throw std::invalid_argument("RigidBody and Collider must be provided together");
@@ -300,13 +313,20 @@ void Validate(const SceneDocument& document) {
 }
 
 SceneDocument Decode(const Json& j) {
-    Fields(j, {"version", "entities", "activeCamera", "directionalLight"});
+    Fields(j, {"version", "entities", "activeCamera", "directionalLight", "editorFolders"});
     if (j.at("version") != 1) throw std::invalid_argument("unsupported scene version");
     SceneDocument result;
     if (!j.at("entities").is_array()) throw std::invalid_argument("entities must be an array");
     for (const auto& item : j.at("entities")) result.entities.push_back(DecodeEntity(item));
     if (j.contains("activeCamera")) result.activeCamera = OptionalId(j.at("activeCamera"));
     if (j.contains("directionalLight")) result.directionalLight = OptionalId(j.at("directionalLight"));
+    if (j.contains("editorFolders")) {
+        if (!j.at("editorFolders").is_array()) throw std::invalid_argument("editorFolders must be an array");
+        for (const auto& folder : j.at("editorFolders")) {
+            if (!folder.is_string()) throw std::invalid_argument("editor folder must be a string");
+            result.editorFolders.push_back(folder.get<std::string>());
+        }
+    }
     Validate(result);
     return result;
 }
@@ -384,11 +404,75 @@ Json Encode(const SceneDocument& document) {
                 !SerializeStateValue(StateValue(entity.script->properties), properties, error)) throw std::invalid_argument(error);
             components["Script"]["properties"] = Json::parse(properties);
         }
-        root["entities"].push_back({{"id", entity.id.ToString()}, {"name", entity.name}, {"tags", entity.tags},
-                                     {"parent", Encode(entity.parent)},
-                                     {"components", std::move(components)}});
+        Json encoded = {{"id", entity.id.ToString()}, {"name", entity.name}, {"tags", entity.tags},
+                        {"parent", Encode(entity.parent)}, {"components", std::move(components)}};
+        // Only when used, so scenes without folders keep their exact format.
+        if (!entity.editorFolder.empty()) encoded["editorFolder"] = entity.editorFolder;
+        root["entities"].push_back(std::move(encoded));
     }
+    if (!document.editorFolders.empty()) root["editorFolders"] = document.editorFolders;
     return root;
+}
+
+SceneEntityDefinition CaptureEntity(const Scene& scene, const AssetSystem& assets, const entt::entity entity) {
+    SceneEntityDefinition definition;
+    definition.id = scene.GetId(entity);
+    definition.name = scene.GetName(entity);
+    const auto tags = scene.GetTags(entity);
+    definition.tags.assign(tags.begin(), tags.end());
+    if (const auto* controller = scene.GetControllerDefinition(entity)) definition.controller = *controller;
+    if (const auto* body = scene.TryGetComponent<RigidBody>(entity)) definition.rigidBody = *body;
+    if (const auto* box = scene.TryGetComponent<Collider>(entity)) definition.collider = *box;
+    if (const auto* bounds = scene.TryGetComponent<Bounds>(entity)) definition.bounds = *bounds;
+    if (const auto* persistence = scene.TryGetComponent<GamePersistence>(entity)) definition.persistence = *persistence;
+    if (const auto* script = scene.TryGetComponent<ScriptComponent>(entity)) definition.script = *script;
+    if (auto parent = scene.GetParent(entity); parent != entt::null)
+        definition.parent = scene.GetId(parent);
+    definition.editorFolder = scene.GetEditorFolder(entity);
+    definition.transform = scene.GetTransform(entity);
+    if (const auto* renderer = scene.TryGetComponent<MeshRenderer>(entity)) {
+        auto authored = [&](const AssetReference& ref, CatalogAssetKind kind)
+            -> std::optional<AssetReference> {
+            if (!ref.id.IsValid()) return std::nullopt;
+            if (const auto* entry = assets.GetCatalog().Find(ref.id, kind))
+                return AssetReference{ref.id, entry->path};
+            return ref; // missing asset: keep the hand-editable recovery hint
+        };
+        auto mesh = authored(renderer->meshReference, CatalogAssetKind::Mesh);
+        if (!mesh) mesh = assets.ReferenceFor(renderer->mesh);
+        auto material = authored(renderer->materialReference, CatalogAssetKind::MaterialInstance);
+        if (!material) material = assets.ReferenceFor(renderer->materialInstance);
+        if (!mesh || !material)
+            throw std::invalid_argument("renderer has no file-backed mesh or material instance on " + definition.id.ToString());
+        definition.renderer = SceneEntityDefinition::Mesh{*mesh, *material};
+    }
+    if (const auto* component = scene.TryGetComponent<Camera>(entity)) definition.camera = *component;
+    if (const auto* component = scene.TryGetComponent<DirectionalLight>(entity)) definition.directionalLight = *component;
+    if (const auto* component = scene.TryGetComponent<PointLight>(entity)) definition.pointLight = *component;
+    if (const auto* component = scene.TryGetComponent<SpotLight>(entity)) definition.spotLight = *component;
+    return definition;
+}
+
+// Everything but the parent, onto a freshly created `entity` that already has its parent.
+void ApplyEntity(const SceneEntityDefinition& definition, AssetSystem& assets, Scene& destination, const entt::entity entity) {
+    for (const auto& tag : definition.tags) destination.AddTag(entity, tag);
+    // Refused under a parent, e.g. a copied root pasted as a child.
+    if (!definition.editorFolder.empty()) destination.SetEditorFolder(entity, definition.editorFolder);
+    destination.GetTransform(entity) = definition.transform;
+    if (definition.renderer) destination.AddComponent<MeshRenderer>(entity,
+        assets.RequestMesh(definition.renderer->mesh),
+        assets.RequestMaterialInstance(definition.renderer->materialInstance),
+        definition.renderer->mesh, definition.renderer->materialInstance);
+    if (definition.camera) destination.AddComponent<Camera>(entity, *definition.camera);
+    if (definition.directionalLight) destination.AddComponent<DirectionalLight>(entity, *definition.directionalLight);
+    if (definition.pointLight) destination.AddComponent<PointLight>(entity, *definition.pointLight);
+    if (definition.spotLight) destination.AddComponent<SpotLight>(entity, *definition.spotLight);
+    if (definition.rigidBody) destination.AddComponent<RigidBody>(entity, *definition.rigidBody);
+    if (definition.collider) destination.AddComponent<Collider>(entity, *definition.collider);
+    if (definition.bounds) destination.AddComponent<Bounds>(entity, *definition.bounds);
+    if (definition.persistence) destination.AddComponent<GamePersistence>(entity, *definition.persistence);
+    if (definition.script) destination.AddComponent<ScriptComponent>(entity, *definition.script);
+    if (definition.controller) destination.AttachController(entity, *definition.controller);
 }
 
 Json Read(std::string_view text) {
@@ -430,42 +514,10 @@ bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDo
         if (camera != entt::null) captured.activeCamera = scene.GetId(camera);
         const auto light = scene.GetDirectionalLight();
         if (light != entt::null) captured.directionalLight = scene.GetId(light);
+        const auto folders = scene.GetEditorFolders();
+        captured.editorFolders.assign(folders.begin(), folders.end());
         auto visit = [&](auto&& self, const entt::entity entity) -> void {
-            SceneEntityDefinition definition;
-            definition.id = scene.GetId(entity);
-            definition.name = scene.GetName(entity);
-            const auto tags = scene.GetTags(entity);
-            definition.tags.assign(tags.begin(), tags.end());
-            if (const auto* controller = scene.GetControllerDefinition(entity)) definition.controller = *controller;
-            if (const auto* body = scene.TryGetComponent<RigidBody>(entity)) definition.rigidBody = *body;
-            if (const auto* box = scene.TryGetComponent<Collider>(entity)) definition.collider = *box;
-            if (const auto* bounds = scene.TryGetComponent<Bounds>(entity)) definition.bounds = *bounds;
-            if (const auto* persistence = scene.TryGetComponent<GamePersistence>(entity)) definition.persistence = *persistence;
-            if (const auto* script = scene.TryGetComponent<ScriptComponent>(entity)) definition.script = *script;
-            if (auto parent = scene.GetParent(entity); parent != entt::null)
-                definition.parent = scene.GetId(parent);
-            definition.transform = scene.GetTransform(entity);
-            if (const auto* renderer = scene.TryGetComponent<MeshRenderer>(entity)) {
-                auto authored = [&](const AssetReference& ref, CatalogAssetKind kind)
-                    -> std::optional<AssetReference> {
-                    if (!ref.id.IsValid()) return std::nullopt;
-                    if (const auto* entry = assets.GetCatalog().Find(ref.id, kind))
-                        return AssetReference{ref.id, entry->path};
-                    return ref; // missing asset: keep the hand-editable recovery hint
-                };
-                auto mesh = authored(renderer->meshReference, CatalogAssetKind::Mesh);
-                if (!mesh) mesh = assets.ReferenceFor(renderer->mesh);
-                auto material = authored(renderer->materialReference, CatalogAssetKind::MaterialInstance);
-                if (!material) material = assets.ReferenceFor(renderer->materialInstance);
-                if (!mesh || !material)
-                    throw std::invalid_argument("renderer has no file-backed mesh or material instance on " + definition.id.ToString());
-                definition.renderer = SceneEntityDefinition::Mesh{*mesh, *material};
-            }
-            if (const auto* component = scene.TryGetComponent<Camera>(entity)) definition.camera = *component;
-            if (const auto* component = scene.TryGetComponent<DirectionalLight>(entity)) definition.directionalLight = *component;
-            if (const auto* component = scene.TryGetComponent<PointLight>(entity)) definition.pointLight = *component;
-            if (const auto* component = scene.TryGetComponent<SpotLight>(entity)) definition.spotLight = *component;
-            captured.entities.push_back(std::move(definition));
+            captured.entities.push_back(CaptureEntity(scene, assets, entity));
             for (const auto child : scene.GetChildren(entity)) self(self, child);
         };
         for (const auto root : scene.GetRootEntities()) visit(visit, root);
@@ -482,25 +534,65 @@ void PopulateScene(const SceneDocument& document, AssetSystem& assets, Scene& de
         destination.CreateEntityWithUuid(definition.id, definition.name);
     for (const auto& definition : document.entities) {
         const auto entity = destination.FindByUuid(definition.id);
-        for (const auto& tag : definition.tags) destination.AddTag(entity, tag);
         if (definition.parent) destination.SetParent(entity, destination.FindByUuid(*definition.parent));
-        destination.GetTransform(entity) = definition.transform;
-        if (definition.renderer) destination.AddComponent<MeshRenderer>(entity,
-            assets.RequestMesh(definition.renderer->mesh),
-            assets.RequestMaterialInstance(definition.renderer->materialInstance),
-            definition.renderer->mesh, definition.renderer->materialInstance);
-        if (definition.camera) destination.AddComponent<Camera>(entity, *definition.camera);
-        if (definition.directionalLight) destination.AddComponent<DirectionalLight>(entity, *definition.directionalLight);
-        if (definition.pointLight) destination.AddComponent<PointLight>(entity, *definition.pointLight);
-        if (definition.spotLight) destination.AddComponent<SpotLight>(entity, *definition.spotLight);
-        if (definition.rigidBody) destination.AddComponent<RigidBody>(entity, *definition.rigidBody);
-        if (definition.collider) destination.AddComponent<Collider>(entity, *definition.collider);
-        if (definition.bounds) destination.AddComponent<Bounds>(entity, *definition.bounds);
-        if (definition.persistence) destination.AddComponent<GamePersistence>(entity, *definition.persistence);
-        if (definition.script) destination.AddComponent<ScriptComponent>(entity, *definition.script);
-        if (definition.controller) destination.AttachController(entity, *definition.controller);
+        ApplyEntity(definition, assets, destination, entity);
     }
     if (document.activeCamera) destination.SetActiveCamera(destination.FindByUuid(*document.activeCamera));
     if (document.directionalLight) destination.SetDirectionalLight(destination.FindByUuid(*document.directionalLight));
+    destination.SetEditorFolders(document.editorFolders);
+}
+
+bool CaptureEntities(const Scene& scene, const AssetSystem& assets, std::span<const entt::entity> entities,
+                     std::vector<SceneEntityDefinition>& result, std::string& error) {
+    try {
+        // An entity is taken with its subtree only when no ancestor of it is taken too.
+        const std::unordered_set<entt::entity> picked(entities.begin(), entities.end());
+        const auto underPicked = [&](entt::entity entity) {
+            for (auto parent = scene.GetParent(entity); parent != entt::null; parent = scene.GetParent(parent))
+                if (picked.contains(parent)) return true;
+            return false;
+        };
+        std::unordered_set<entt::entity> taken;
+        std::vector<SceneEntityDefinition> captured;
+        auto visit = [&](auto&& self, const entt::entity entity) -> void {
+            if (scene.HasUnsupportedComponents(entity))
+                throw std::invalid_argument("'" + scene.GetName(entity) + "' has components without a version 1 codec");
+            captured.push_back(CaptureEntity(scene, assets, entity));
+            for (const auto child : scene.GetChildren(entity)) self(self, child);
+        };
+        for (const auto entity : entities) {
+            if (!scene.IsValid(entity) || underPicked(entity) || !taken.insert(entity).second) continue;
+            visit(visit, entity);
+        }
+        result = std::move(captured);
+        error.clear();
+        return true;
+    } catch (const std::exception& e) { error = e.what(); return false; }
+}
+
+std::vector<entt::entity> InstantiateEntities(std::span<const SceneEntityDefinition> definitions, AssetSystem& assets,
+                                              Scene& destination, const bool freshIds) {
+    // Captured UUID -> created entity, for parents inside the set.
+    std::unordered_map<EntityUuid, entt::entity, EntityUuidHash> created;
+    std::vector<entt::entity> entities;
+    entities.reserve(definitions.size());
+    for (const auto& definition : definitions) {
+        const auto entity = freshIds ? destination.CreateEntity(definition.name)
+                                     : destination.CreateEntityWithUuid(definition.id, definition.name);
+        if (entity != entt::null) created.emplace(definition.id, entity);
+        entities.push_back(entity);
+    }
+    for (std::size_t i = 0; i < definitions.size(); ++i) {
+        const auto& definition = definitions[i];
+        const auto entity = entities[i];
+        if (entity == entt::null) continue;
+        if (definition.parent) {
+            const auto inside = created.find(*definition.parent);
+            const auto parent = inside != created.end() ? inside->second : destination.FindByUuid(*definition.parent);
+            if (parent != entt::null) destination.SetParent(entity, parent);
+        }
+        ApplyEntity(definition, assets, destination, entity);
+    }
+    return entities;
 }
 } // namespace engine

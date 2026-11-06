@@ -18,6 +18,7 @@ struct Project;
 
 namespace editor {
 
+class SceneEvents;
 class Selection;
 
 /// The scene file being edited: which one it is, whether it has unsaved changes, and
@@ -28,15 +29,15 @@ class EDITOR_CORE_API SceneDocument : public QObject {
 
 public:
     SceneDocument(engine::Engine& engine, const engine::Project& project, Selection& selection,
-                  QObject* parent = nullptr);
+                  SceneEvents& events, QObject* parent = nullptr);
 
     /// Empty while the scene is untitled (never saved).
     [[nodiscard]] const std::filesystem::path& filePath() const noexcept;
     /// File name without .scene.json, or "Untitled".
     [[nodiscard]] QString displayName() const;
-    /// Structural changes are noticed on their own (Scene::GetRevision); anything else that
-    /// edits the scene, such as moving an entity, has to call markDirty().
+    /// Every change made through the scene's API counts (SceneEvents::revision()).
     [[nodiscard]] bool isDirty() const noexcept;
+    /// For changes that the scene doesn't report.
     void markDirty();
     /// Forgets unsaved changes, e.g. after building a scene in code.
     void markClean();
@@ -84,6 +85,7 @@ private:
     engine::Engine& engine_;
     const engine::Project& project_;
     Selection& selection_;
+    SceneEvents& events_;
     std::filesystem::path file_;
     std::uint64_t clean_revision_ = 0;
     bool marked_dirty_ = false;

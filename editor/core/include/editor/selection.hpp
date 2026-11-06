@@ -16,16 +16,19 @@ class Scene;
 
 namespace editor {
 
+struct SceneChanges;
+class SceneEvents;
+
 /// The entities selected in the editor, shared by everything that shows or acts on them
 /// (hierarchy, inspector, viewport). Kept in selection order; the last one is the primary,
 /// which single-entity views such as the inspector show.
-/// Destroyed entities drop out on their own, within a poll interval: until then an entity
+/// Destroyed entities drop out on their own once SceneEvents reports them: until then an entity
 /// here may already be gone, so check Scene::IsValid() before touching it.
 class EDITOR_CORE_API Selection : public QObject {
     Q_OBJECT
 
 public:
-    explicit Selection(const engine::Scene& scene, QObject* parent = nullptr);
+    Selection(const engine::Scene& scene, SceneEvents& events, QObject* parent = nullptr);
 
     [[nodiscard]] std::span<const entt::entity> entities() const noexcept;
     /// entt::null when nothing is selected.
@@ -52,11 +55,10 @@ signals:
 private:
     /// Emits changed() if `entities` differs from the current selection.
     void assign(std::vector<entt::entity> entities);
-    void dropDestroyed();
+    void dropDestroyed(const SceneChanges& changes);
 
     const engine::Scene& scene_;
     std::vector<entt::entity> entities_;
-    std::uint64_t checked_revision_ = 0;
 };
 
 }  // namespace editor

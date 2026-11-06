@@ -7,7 +7,7 @@
 #include <string_view>
 
 #include <windows.h>
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/rendering/RenderExtractionSubsystem.hpp>
@@ -218,20 +218,20 @@ public:
         UpdateCamera(world.camera, controls_, static_cast<float>(frame.deltaSeconds));
         if (controls_.Pressed("Save")) {
             std::string error;
-            if (!GetEngine().SaveGame("game/example.save.json", error)) spdlog::error("Save game: {}", error);
-            else spdlog::info("Saved game/example.save.json");
+            if (!GetEngine().SaveGame("game/example.save.json", error)) engine::log::Game().error("Save game: {}", error);
+            else engine::log::Game().info("Saved game/example.save.json");
         }
         if (controls_.Pressed("Load")) {
             std::string error;
-            if (!GetEngine().LoadGame("game/example.save.json", error)) spdlog::error("Load game: {}", error);
-            else if (!error.empty()) spdlog::warn("Load game: {}", error);
+            if (!GetEngine().LoadGame("game/example.save.json", error)) engine::log::Game().error("Load game: {}", error);
+            else if (!error.empty()) engine::log::Game().warn("Load game: {}", error);
         }
         if (controls_.Pressed("Raycast")) {
             const Matrix rotation = Matrix::CreateFromYawPitchRoll(world.camera.yaw, world.camera.pitch, 0);
             const Vector3 direction = Vector3::TransformNormal(Vector3::Forward, rotation);
             const auto hits = engine::RaycastAll(GetEngine().GetScene(), GetEngine().GetSceneAssets(),
                 world.camera.position, direction, 100.0f);
-            if (!hits.empty()) spdlog::info("Ray hit {} at {}", GetEngine().GetScene().GetName(hits[0].entity), hits[0].distance);
+            if (!hits.empty()) engine::log::Game().info("Ray hit {} at {}", GetEngine().GetScene().GetName(hits[0].entity), hits[0].distance);
         }
         const float time = static_cast<float>(frame.simulationTimeSeconds);
         auto& scene = GetEngine().GetScene();
@@ -282,10 +282,10 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
     std::string error;
     if (!engine.LoadScene(engine::AssetReference{"2a9a7998-f44d-44d8-8fc3-57e78da18796",
                                                  "game/scenes/demo.scene.json"}, error)) {
-        spdlog::error("ExampleGame: cannot load scene: {}", error);
+        engine::log::Game().error("Cannot load scene: {}", error);
         return 1;
     }
-    spdlog::info("ExampleGame: {} animated entities", engine.GetScene().FindWithTag("animated").size());
+    engine::log::Game().info("{} animated entities", engine.GetScene().FindWithTag("animated").size());
     const bool ran = engine.Run();
     engine.Shutdown();
     return ran ? 0 : 1;

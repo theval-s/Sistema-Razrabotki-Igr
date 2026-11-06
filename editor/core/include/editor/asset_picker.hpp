@@ -12,6 +12,7 @@
 class QDragEnterEvent;
 class QDropEvent;
 class QMimeData;
+class QWheelEvent;
 class QWidget;
 
 namespace editor {
@@ -19,7 +20,8 @@ namespace editor {
 /// Chooses an asset of one kind from the catalog, listed by path. Typing filters the list.
 /// The list is read again from the catalog each time it drops down, so assets imported meanwhile
 /// show up; `catalog` must outlive the picker. An asset of its kind dragged from the Content
-/// Browser can be dropped on it, which counts as the user's choice.
+/// Browser can be dropped on it, which counts as the user's choice. The mouse wheel scrolls
+/// whatever the picker sits in rather than changing the choice.
 class EDITOR_CORE_API AssetPicker : public QComboBox {
     Q_OBJECT
 
@@ -44,6 +46,7 @@ public:
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
 
 private:
     void populate();

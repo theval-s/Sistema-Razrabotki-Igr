@@ -2,13 +2,12 @@
 
 #include <QFileDialog>
 #include <QMessageBox>
-#include <QTimer>
 #include <QWidget>
 
 #include <system_error>
 #include <utility>
 
-#include <spdlog/spdlog.h>
+#include <editor/editor_log.hpp>
 
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
@@ -19,6 +18,7 @@
 #include <engine/scene/SceneDocument.hpp>
 
 #include <editor/paths.hpp>
+#include <editor/scene_events.hpp>
 #include <editor/selection.hpp>
 
 namespace editor {
@@ -75,7 +75,7 @@ engine::SceneDocument defaultScene(const engine::AssetCatalog& catalog) {
                                                              {material->metadata.id, material->path}};
         document.entities.push_back(std::move(ground));
     } else {
-        spdlog::warn("New scene: built-in plane or default material missing from the catalog, no ground");
+        editorLog().warn("New scene: built-in plane or default material missing from the catalog, no ground");
     }
     return document;
 }
@@ -83,13 +83,10 @@ engine::SceneDocument defaultScene(const engine::AssetCatalog& catalog) {
 }  // namespace
 
 SceneDocument::SceneDocument(engine::Engine& engine, const engine::Project& project, Selection& selection,
-                             QObject* parent)
-    : QObject(parent), engine_(engine), project_(project), selection_(selection),
-      clean_revision_(engine.GetScene().GetRevision()) {
-    // TODO: add delegates to scene
-    auto* timer = new QTimer(this);
-    connect(timer, &QTimer::timeout, this, &SceneDocument::checkState);
-    timer->start(200);
+                             SceneEvents& events, QObject* parent)
+    : QObject(parent), engine_(engine), project_(project), selection_(selection), events_(events),
+      clean_revision_(events.revision()) {
+    connect(&events_, &SceneEvents::changed, this, &SceneDocument::checkState);
 }
 
 const std::filesystem::path& SceneDocument::filePath() const noexcept {
@@ -109,7 +106,7 @@ QString SceneDocument::displayName() const {
 
 bool SceneDocument::isDirty() const noexcept {
     if (runtime_) return runtime_dirty_;
-    return marked_dirty_ || engine_.GetScene().GetRevision() != clean_revision_;
+    return marked_dirty_ || events_.revision() != clean_revision_;
 }
 
 void SceneDocument::markDirty() {
@@ -129,7 +126,7 @@ void SceneDocument::beginRuntime() {
 
 void SceneDocument::endRuntime() {
     runtime_ = false;
-    clean_revision_ = engine_.GetScene().GetRevision();
+    clean_revision_ = events_.revision();
     marked_dirty_ = runtime_dirty_;
     checkState();
 }
@@ -151,7 +148,7 @@ bool SceneDocument::open(const std::filesystem::path& file, std::string& error) 
         return false;
     }
     if (!diagnostics.empty()) {
-        spdlog::warn("Opened {} with problems:\n{}", engine::ToUtf8(file), diagnostics);
+        editorLog().warn("Opened {} with problems:\n{}", engine::ToUtf8(file), diagnostics);
     }
     selection_.clear();
     setClean(file);
@@ -177,7 +174,7 @@ bool SceneDocument::create(const std::filesystem::path& file, std::string& error
         return false;
     }
     if (std::string rescan; !engine_.RescanAssetCatalogs(rescan)) {
-        spdlog::warn("Asset catalog: {}", rescan);
+        editorLog().warn("Asset catalog: {}", rescan);
     }
     return open(target, error);
 }
@@ -202,14 +199,14 @@ bool SceneDocument::saveAs(const std::filesystem::path& file, std::string& error
     if (std::error_code ec; !std::filesystem::exists(engine::AssetMetadataPath(target), ec)) {
         // A new file: give it an identity so other assets can refer to it.
         if (engine::AssetPathResolver::ToName(target).empty()) {
-            spdlog::warn("{} is outside the project content: it is saved, but no asset can refer to it",
+            editorLog().warn("{} is outside the project content: it is saved, but no asset can refer to it",
                          engine::ToUtf8(target));
         } else {
             if (!engine::WriteAssetMetadata(target, {engine::NewUuid(), engine::CatalogAssetKind::Scene}, error)) {
                 return false;
             }
             if (std::string rescan; !engine_.RescanAssetCatalogs(rescan)) {
-                spdlog::warn("Asset catalog: {}", rescan);
+                editorLog().warn("Asset catalog: {}", rescan);
             }
         }
     }
@@ -295,7 +292,7 @@ bool SceneDocument::createInteractive(QWidget* parent, const std::filesystem::pa
 
 void SceneDocument::setClean(const std::filesystem::path& file) {
     file_ = file;
-    clean_revision_ = engine_.GetScene().GetRevision();
+    clean_revision_ = events_.revision();
     marked_dirty_ = false;
     checkState();
 }

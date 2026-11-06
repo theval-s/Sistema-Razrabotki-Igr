@@ -2,6 +2,7 @@
 #include <editor/main_window.hpp>
 
 #include <QAction>
+#include <QActionGroup>
 #include <QCoreApplication>
 #include <QDir>
 #include <QCloseEvent>
@@ -10,7 +11,6 @@
 #include <QMenuBar>
 #include <QMenu>
 #include <QMessageBox>
-#include <QPlainTextEdit>
 #include <QProcess>
 #include <QSettings>
 #include <QStatusBar>
@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-#include <spdlog/sinks/callback_sink.h>
+#include <spdlog/sinks/sink.h>
 #include <spdlog/spdlog.h>
 
 #include <DockManager.h>
@@ -41,59 +41,25 @@
 #include <engine/scene/SceneQueries.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
 
+#include <editor/edit_actions.hpp>
 #include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
-#include <editor/light_lines.hpp>
+#include <editor/log_model.hpp>
+#include <editor/log_panel.hpp>
 #include <editor/module_loader.hpp>
 #include <editor/paths.hpp>
 #include <editor/play_session.hpp>
 #include <editor/project_dialog.hpp>
 #include <editor/scene_document.hpp>
+#include <editor/transform_gizmo.hpp>
+#include <editor/viewport_overlay.hpp>
 #include <editor/viewport_widget.hpp>
 #include <editor/selection.hpp>
+#include <editor/editor_log.hpp>
 
 namespace editor {
 
 namespace {
-
-// Runs after scene extraction and the editor camera, before RenderingSubsystem::Render.
-class SelectionRenderSubsystem final : public engine::Subsystem {
-public:
-    explicit SelectionRenderSubsystem(const Selection& selection) : selection_(selection) {}
-    std::string_view GetName() const override { return "SelectionRenderSubsystem"; }
-    void LateUpdate(const engine::FrameContext&) override {
-        auto& world = GetEngine().GetSubsystem<engine::RenderingSubsystem>()->GetWorld();
-        world.selectedSceneItems.clear();
-        world.editorLines.clear();
-        auto& assets = GetEngine().GetSceneAssets();
-        const auto& scene = GetEngine().GetScene();
-        if (auto* physics = GetEngine().GetSubsystem<engine::PhysicsSubsystem>()) {
-            std::string ignored;
-            // The inspector edits the primary entity. Preview also works in Edit,
-            // without registering simulation bodies or advancing the fixed clock.
-            (void)physics->AppendColliderDebugLines(selection_.primary(), world.editorLines, ignored);
-        }
-        for (const auto entity : selection_.entities()) {
-            if (!scene.IsValid(entity)) continue;
-            lightLines(world.editorLines, scene, entity);
-            if (const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity)) {
-                const auto mesh = assets.Peek(renderer->mesh);
-                const auto material = assets.Peek(renderer->materialInstance);
-                if (mesh && material) {
-                    const auto override = GetEngine().GetEntityMaterialOverride(entity);
-                    world.selectedSceneItems.push_back({scene.GetWorldMatrix(entity), mesh->mesh,
-                                                        override ? override : material->instance});
-                }
-            }
-        }
-    }
-    void Shutdown() override {
-        GetEngine().GetSubsystem<engine::RenderingSubsystem>()->GetWorld().selectedSceneItems.clear();
-        GetEngine().GetSubsystem<engine::RenderingSubsystem>()->GetWorld().editorLines.clear();
-    }
-private:
-    const Selection& selection_;
-};
 
 QString toQString(const std::string_view text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -123,13 +89,17 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     // central widget: always there, never floated, so its HWND (and swap chain) stays put.
     dock_manager_ = new ads::CDockManager(this);
     viewport_ = new ViewportWidget;
-    connect(viewport_, &ViewportWidget::pickRequested, this, &MainWindow::pickViewport);
+    connect(viewport_, &ViewportWidget::mousePressed, this, &MainWindow::viewportPressed);
+    connect(viewport_, &ViewportWidget::mouseMoved, this, &MainWindow::viewportMoved);
+    connect(viewport_, &ViewportWidget::mouseReleased, this, &MainWindow::viewportReleased);
     auto* viewport_dock = new ads::CDockWidget(dock_manager_, tr("Viewport"));
     viewport_dock->setObjectName(QStringLiteral("Viewport"));
     viewport_dock->setWidget(viewport_, ads::CDockWidget::ForceNoScrollArea);
     dock_manager_->setCentralWidget(viewport_dock);
 
     context_ = std::make_unique<EditorContext>(engine_, project_, *this, *dock_manager_);
+    context_->editActions().attach(viewport_);
+    gizmo_ = std::make_unique<TransformGizmo>(engine_.GetScene(), context_->selection());
     SceneDocument& document = context_->sceneDocument();
     connect(&document, &SceneDocument::stateChanged, this, [this] {
         refreshTitle();
@@ -143,6 +113,8 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     });
     connect(&context_->playSession(), &PlaySession::playingChanged, this, [this](const bool playing) {
         viewport_->setPlaying(playing);
+        // The running copy isn't the scene being edited.
+        gizmo_->setEnabled(!playing);
         if (playing) viewport_->setFocus();
     });
     refreshTitle();
@@ -173,7 +145,7 @@ MainWindow::~MainWindow() {
     // The viewport outlives the engine (Qt deletes children after our members).
     viewport_->setInput(nullptr);
     // First, so nothing logs into the Log panel once it is gone.
-    std::erase(spdlog::default_logger()->sinks(), log_sink_);
+    engine::log::Sinks()->remove_sink(log_sink_);
     // Modules and panels go before the engine they use.
     modules_.reset();
     context_.reset();
@@ -236,11 +208,11 @@ void MainWindow::startEngine() {
     engine_.AddSubsystem<engine::PhysicsSubsystem>();
     engine_.AddSubsystem<engine::RenderExtractionSubsystem>();
     camera_ = engine_.AddSubsystem<EditorCameraSubsystem>();
-    engine_.AddSubsystem<SelectionRenderSubsystem>(context_->selection());
+    engine_.AddSubsystem<ViewportOverlaySubsystem>(context_->selection(), *gizmo_, *viewport_);
 
     // On failure keep the window up so the Log dock shows why, but don't tick.
     if (!engine_.Initialize()) {
-        spdlog::critical("Engine failed to initialize, see log above");
+        editorLog().critical("Engine failed to initialize, see log above");
         return;
     }
     viewport_->setCamera(camera_);
@@ -257,7 +229,7 @@ void MainWindow::openStartupScene() {
                                            error)) {
             return;
         }
-        spdlog::error("Startup scene '{}': {}", project_.startupScene, error);
+        editorLog().error("Startup scene '{}': {}", project_.startupScene, error);
     }
     setupDefaultScene();
 }
@@ -271,12 +243,16 @@ void MainWindow::setupDefaultScene() {
     const entt::entity sun = scene.CreateEntity("Sun");
     Vector3 sun_direction{-0.45f, -1.0f, -0.3f};
     sun_direction.Normalize();
-    scene.GetTransform(sun).rotation = Quaternion::FromToRotation(Vector3::Forward, sun_direction);
+    engine::Transform sun_transform = scene.GetTransform(sun);
+    sun_transform.rotation = Quaternion::FromToRotation(Vector3::Forward, sun_direction);
+    scene.SetTransform(sun, sun_transform);
     scene.AddComponent<engine::DirectionalLight>(sun, Vector3{1.0f, 0.95f, 0.85f}, 1.25f);
     scene.SetDirectionalLight(sun);
 
     const entt::entity ground = scene.CreateEntity("Ground");
-    scene.GetTransform(ground).scale = Vector3{20.0f, 1.0f, 20.0f};
+    engine::Transform ground_transform = scene.GetTransform(ground);
+    ground_transform.scale = Vector3{20.0f, 1.0f, 20.0f};
+    scene.SetTransform(ground, ground_transform);
     scene.AddComponent<engine::MeshRenderer>(ground,
         engine_.GetSceneAssets().RequestMesh(engine::BuiltinAssets::PlaneMesh),
         engine_.GetSceneAssets().RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance));
@@ -309,13 +285,51 @@ void MainWindow::adoptStartupScene() {
     engine::Project updated = project_;
     updated.startupScene = name;
     if (std::string error; !context_->updateProject(std::move(updated), error)) {
-        spdlog::warn("Could not remember {} as the startup scene: {}", name, error);
+        editorLog().warn("Could not remember {} as the startup scene: {}", name, error);
     }
 }
 
 void MainWindow::tickEngine() {
     engine_.Tick();
     refreshStatus();
+}
+
+std::optional<ViewportView> MainWindow::viewportView() const {
+    if (!engine_.IsInitialized() || camera_ == nullptr || viewport_->width() <= 0 || viewport_->height() <= 0) {
+        return std::nullopt;
+    }
+    return ViewportView::fromCamera(engine_.GetSubsystem<engine::RenderingSubsystem>()->GetWorld().camera,
+                                    {static_cast<float>(viewport_->width()), static_cast<float>(viewport_->height())});
+}
+
+void MainWindow::viewportPressed(const QPointF position, const Qt::MouseButton button,
+                                 const Qt::KeyboardModifiers modifiers) {
+    if (button == Qt::RightButton) {
+        gizmo_->cancel();
+        return;
+    }
+    if (button != Qt::LeftButton) return;
+    // The gizmo's handles are in front of everything.
+    if (const auto view = viewportView();
+        view && gizmo_->press(*view, {static_cast<float>(position.x()), static_cast<float>(position.y())})) {
+        return;
+    }
+    pickViewport(position, modifiers & Qt::ControlModifier);
+}
+
+void MainWindow::viewportMoved(const QPointF position) {
+    const auto view = viewportView();
+    if (!view) return;
+    const DirectX::SimpleMath::Vector2 cursor{static_cast<float>(position.x()), static_cast<float>(position.y())};
+    if (gizmo_->dragging()) {
+        gizmo_->drag(*view, cursor);
+    } else {
+        gizmo_->hover(*view, cursor);
+    }
+}
+
+void MainWindow::viewportReleased(QPointF, const Qt::MouseButton button) {
+    if (button == Qt::LeftButton) gizmo_->release();
 }
 
 void MainWindow::pickViewport(const QPointF position, const bool toggle) {
@@ -381,35 +395,66 @@ void MainWindow::buildMenus() {
     // Scenes and projects can't be opened or saved while the scene is a running copy.
     connect(&context_->playSession(), &PlaySession::playingChanged, file_menu, &QWidget::setDisabled);
 
+    const EditActions& edit = context_->editActions();
+    auto* edit_menu = context_->menu(tr("&Edit"));
+    edit_menu->addAction(edit.duplicateAction());
+    edit_menu->addAction(edit.deleteAction());
+    edit_menu->addSeparator();
+    edit_menu->addAction(edit.selectAllAction());
+    edit_menu->addAction(edit.deselectAction());
+    edit_menu->addSeparator();
+    edit_menu->addAction(edit.focusAction());
+    edit_menu->addSeparator();
+    buildGizmoActions(*edit_menu);
+
     // The menu bar's order. Modules fill Project and Engine, EditorContext::addPanel() fills View.
     for (const QString& title : {tr("&Project"), tr("&Engine"), tr("&View")}) {
         context_->menu(title);
     }
 }
 
-void MainWindow::buildLogDock() {
-    log_view_ = new QPlainTextEdit;
-    log_view_->setReadOnly(true);
-    log_view_->setMaximumBlockCount(5000);
-
-    context_->addPanel(QStringLiteral("LogDock"), tr("Log"), log_view_, Qt::BottomDockWidgetArea);
-
-    // Hook into spdlog's default logger, which the engine logs to as well.
-    // The sink runs on whatever thread logs: copy the text and hop to the GUI
-    // thread. Queued calls are dropped if `this` is gone.
-    log_sink_ = std::make_shared<spdlog::sinks::callback_sink_mt>([this](const spdlog::details::log_msg& msg) {
-        const auto level = spdlog::level::to_string_view(msg.level);
-        QMetaObject::invokeMethod(
-            this,
-            [this, level = toQString({level.data(), level.size()}),
-             text = toQString({msg.payload.data(), msg.payload.size()})] { appendLog(level, text); },
-            Qt::QueuedConnection);
+void MainWindow::buildGizmoActions(QMenu& menu) {
+    // Shortcuts only while the viewport has focus, so W/E/R/X still type in fields elsewhere.
+    // While the right button turns the view, the viewport keeps them for the camera.
+    const auto add = [this, &menu](const QString& text, const Qt::Key key) {
+        auto* action = menu.addAction(text);
+        action->setShortcut(QKeySequence(key));
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        action->setCheckable(true);
+        viewport_->addAction(action);
+        // During Play these keys are the game's.
+        connect(&context_->playSession(), &PlaySession::playingChanged, action, &QAction::setDisabled);
+        return action;
+    };
+    auto* modes = new QActionGroup(this);
+    const std::pair<QString, TransformGizmo::Mode> entries[] = {
+        {tr("&Move"), TransformGizmo::Mode::Translate},
+        {tr("&Rotate"), TransformGizmo::Mode::Rotate},
+        {tr("S&cale"), TransformGizmo::Mode::Scale},
+    };
+    const Qt::Key keys[] = {Qt::Key_W, Qt::Key_E, Qt::Key_R};
+    for (std::size_t i = 0; i < std::size(entries); ++i) {
+        const auto mode = entries[i].second;
+        auto* action = add(entries[i].first, keys[i]);
+        action->setActionGroup(modes);
+        action->setChecked(gizmo_->mode() == mode);
+        connect(action, &QAction::triggered, this, [this, mode] { gizmo_->setMode(mode); });
+    }
+    auto* local = add(tr("&Local Axes"), Qt::Key_X);
+    local->setChecked(gizmo_->space() == TransformGizmo::Space::Local);
+    connect(local, &QAction::toggled, this, [this](const bool checked) {
+        gizmo_->setSpace(checked ? TransformGizmo::Space::Local : TransformGizmo::Space::World);
     });
-    spdlog::default_logger()->sinks().push_back(log_sink_);
 }
 
-void MainWindow::appendLog(const QString& level, const QString& text) {
-    log_view_->appendPlainText(QStringLiteral("[%1] %2").arg(level, text));
+void MainWindow::buildLogDock() {
+    auto* panel = new LogPanel;
+    context_->addPanel(QStringLiteral("LogDock"), tr("Log"), panel, Qt::BottomDockWidgetArea);
+
+    // Every log channel writes to these sinks, the engine's and the editor's. The panel's
+    // only buffers, so logging from other threads never touches the panel.
+    log_sink_ = panel->sink();
+    engine::log::Sinks()->add_sink(log_sink_);
 }
 
 void MainWindow::refreshStatus() {
