@@ -109,7 +109,7 @@ void buildTransform(PropertyForm& form, editor::EditorContext& context, const en
     engine::Scene& scene = context.scene();
     form.addVec3(QObject::tr("Position"), transformField(scene, entity, &engine::Transform::position));
     form.addRotation(QObject::tr("Rotation"), transformField(scene, entity, &engine::Transform::rotation));
-    form.addVec3(QObject::tr("Scale"), transformField(scene, entity, &engine::Transform::scale));
+    form.addScale(QObject::tr("Scale"), transformField(scene, entity, &engine::Transform::scale));
 }
 
 /// Comma-separated. Tags go through Scene, which counts them as structural changes.
@@ -488,6 +488,8 @@ void addScriptProperty(QFormLayout& layout, editor::EditorContext& context, cons
         box->setDecimals(format.decimals);
         box->setSingleStep(format.step);
         box->setValue(value->Number());
+        box->setKeyboardTracking(false);
+        PropertyForm::ignoreWheelUnlessFocused(box);
         QObject::connect(box, &QDoubleSpinBox::valueChanged, box, [store](const double changed) { store(changed); });
         line->addWidget(box);
     }

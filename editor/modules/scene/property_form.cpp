@@ -5,7 +5,13 @@
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QComboBox>
+#include <QEvent>
+#include <QIcon>
 #include <QLabel>
+#include <QPainter>
+#include <QPixmap>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QToolButton>
 
@@ -22,6 +28,26 @@ using DirectX::SimpleMath::Quaternion;
 using DirectX::SimpleMath::Vector3;
 using Vec3Boxes = std::array<QDoubleSpinBox*, 3>;
 
+const QString LinkScaleKey = QStringLiteral("inspector/linkScale");
+/// Set on widgets that have a WheelGuard, so none gets two.
+constexpr const char* WheelGuardedProperty = "wheelGuarded";
+
+/// See PropertyForm::ignoreWheelUnlessFocused().
+class WheelGuard final : public QObject {
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() != QEvent::Wheel || static_cast<QWidget*>(watched)->hasFocus()) {
+            return false;
+        }
+        // Filtered but not accepted: Qt then offers the wheel to the parent.
+        event->ignore();
+        return true;
+    }
+};
+
 // we might need a separate file for all the types of field we might add
 //as this is A LOT of boilerplate
 QDoubleSpinBox* makeSpinBox(QWidget* parent, const PropertyForm::NumberFormat& format) {
@@ -31,6 +57,9 @@ QDoubleSpinBox* makeSpinBox(QWidget* parent, const PropertyForm::NumberFormat& f
     box->setSingleStep(format.step);
     box->setAccelerated(true);
     box->setMinimumWidth(60);
+    // Typing "0.5" would otherwise apply 0 first, which e.g. a physics body's scale refuses.
+    box->setKeyboardTracking(false);
+    PropertyForm::ignoreWheelUnlessFocused(box);
     return box;
 }
 
@@ -62,6 +91,30 @@ Vec3Boxes makeVec3Boxes(QWidget* parent, const PropertyForm::NumberFormat& forma
         row->addWidget(box);
     }
     return boxes;
+}
+
+float& component(Vector3& vector, const int axis) {
+    return (&vector.x)[axis];
+}
+
+/// Two links of a chain, joined (on) or pulled apart (off), drawn in `color`.
+QIcon chainIcon(const QColor& color) {
+    const auto draw = [&color](const bool linked) {
+        QPixmap pixmap(32, 32);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(color, 3.0));
+        const qreal gap = linked ? -6.0 : 4.0;
+        const qreal height = (28.0 - gap) / 2.0;
+        painter.drawRoundedRect(QRectF(10.0, 2.0, 12.0, height), 6.0, 6.0);
+        painter.drawRoundedRect(QRectF(10.0, 2.0 + height + gap, 12.0, height), 6.0, 6.0);
+        return pixmap;
+    };
+    QIcon icon;
+    icon.addPixmap(draw(false), QIcon::Normal, QIcon::Off);
+    icon.addPixmap(draw(true), QIcon::Normal, QIcon::On);
+    return icon;
 }
 
 QColor toColor(const Vector3& rgb) {
@@ -101,6 +154,42 @@ void PropertyForm::addVec3(const QString& label, Binding<Vector3> value, const N
     layout_->addRow(label, row);
     for (QDoubleSpinBox* box : boxes) {
         connect(box, &QDoubleSpinBox::valueChanged, this, [set = value.set, boxes] { set(read(boxes)); });
+    }
+    refreshers_.push_back([boxes, get = value.get] {
+        if (const Vector3* current = get()) {
+            showVec3(boxes, *current);
+        }
+    });
+}
+
+void PropertyForm::addScale(const QString& label, Binding<Vector3> value, const NumberFormat format) {
+    QHBoxLayout* row = nullptr;
+    const Vec3Boxes boxes = makeVec3Boxes(this, format, row);
+    auto* link = new QToolButton(this);
+    link->setCheckable(true);
+    link->setAutoRaise(true);
+    link->setIcon(chainIcon(palette().color(QPalette::ButtonText)));
+    link->setToolTip(tr("Keep proportions: editing one axis scales the others by the same factor"));
+    link->setChecked(QSettings().value(LinkScaleKey, false).toBool());
+    connect(link, &QToolButton::toggled, this, [](const bool checked) { QSettings().setValue(LinkScaleKey, checked); });
+    row->addWidget(link);
+    layout_->addRow(label, row);
+
+    for (int axis = 0; axis < 3; ++axis) {
+        connect(boxes[axis], &QDoubleSpinBox::valueChanged, this, [value, boxes, link, axis](const double changed) {
+            Vector3 scale = read(boxes);
+            const Vector3* current = value.get();
+            if (link->isChecked() && current != nullptr) {
+                Vector3 before = *current;
+                // From 0 there's no factor to scale the others by: they stay.
+                if (const float from = component(before, axis); from != 0.0f) {
+                    scale = before * (static_cast<float>(changed) / from);
+                    component(scale, axis) = static_cast<float>(changed);
+                    showVec3(boxes, scale);
+                }
+            }
+            value.set(scale);
+        });
     }
     refreshers_.push_back([boxes, get = value.get] {
         if (const Vector3* current = get()) {
@@ -203,12 +292,14 @@ void PropertyForm::addText(const QString& label, std::function<QString()> text) 
 
 void PropertyForm::addRow(const QString& label, QWidget* widget, std::function<void()> refresh) {
     widget->setParent(this);
+    guardWheels(widget);
     layout_->addRow(label, widget);
     refreshers_.push_back(std::move(refresh));
 }
 
 void PropertyForm::addRow(QWidget* widget, std::function<void()> refresh) {
     widget->setParent(this);
+    guardWheels(widget);
     layout_->addRow(widget);
     refreshers_.push_back(std::move(refresh));
 }
@@ -216,5 +307,27 @@ void PropertyForm::addRow(QWidget* widget, std::function<void()> refresh) {
 void PropertyForm::refresh() {
     for (const auto& refresher : refreshers_) {
         refresher();
+    }
+}
+
+void PropertyForm::ignoreWheelUnlessFocused(QWidget* widget) {
+    if (widget->property(WheelGuardedProperty).toBool()) {
+        return;
+    }
+    widget->setProperty(WheelGuardedProperty, true);
+    // Clicking or tabbing in gives focus; the wheel alone doesn't.
+    widget->setFocusPolicy(Qt::StrongFocus);
+    widget->installEventFilter(new WheelGuard(widget));
+}
+
+void PropertyForm::guardWheels(QWidget* widget) {
+    const auto guard = [](QWidget* candidate) {
+        if (qobject_cast<QAbstractSpinBox*>(candidate) != nullptr || qobject_cast<QComboBox*>(candidate) != nullptr) {
+            ignoreWheelUnlessFocused(candidate);
+        }
+    };
+    guard(widget);
+    for (QWidget* child : widget->findChildren<QWidget*>()) {
+        guard(child);
     }
 }
