@@ -4,6 +4,7 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/TransformedShape.h>
@@ -18,6 +19,7 @@
 #include <Jolt/Physics/Collision/ObjectLayerPairFilterTable.h>
 
 #include <engine/physics/PhysicsSubsystem.hpp>
+#include <engine/physics/PhysicsEvents.hpp>
 #include <engine/engine.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
@@ -33,6 +35,7 @@
 #include <array>
 #include <stdexcept>
 #include <unordered_map>
+#include <tuple>
 
 namespace engine {
 namespace {
@@ -80,7 +83,7 @@ struct RuntimeLease {
         }
     }
 };
-constexpr JPH::ObjectLayer StaticLayer = 0, MovingLayer = 1;
+constexpr JPH::ObjectLayer StaticLayer = 0, MovingLayer = 1, TriggerLayer = 2;
 constexpr std::string_view WaitingForMesh = "waiting for mesh collision geometry";
 JPH::EMotionType Motion(MotionType type) {
     switch (type) {
@@ -151,6 +154,88 @@ JPH::ShapeSettings::ShapeResult CreateShape(const Collider& collider, Vector3 sc
     if (base.HasError()) return base;
     return JPH::RotatedTranslatedShapeSettings(Vec(offset), JPH::Quat::sIdentity(), base.Get()).Create();
 }
+struct ContactListener final : JPH::ContactListener {
+    struct Contact {
+        PhysicsContactEvent event;
+        bool removed = false;
+    };
+    std::mutex mutex;
+    std::unordered_map<JPH::SubShapeIDPair, Contact> contacts;
+    std::vector<PhysicsContactEvent> previous, current;
+
+    void OnContactAdded(const JPH::Body& first, const JPH::Body& second,
+                        const JPH::ContactManifold& manifold, JPH::ContactSettings&) override {
+        const auto p = manifold.GetWorldSpaceContactPointOn1(0);
+        const auto n = manifold.mWorldSpaceNormal;
+        const auto a = static_cast<entt::entity>(first.GetUserData());
+        const auto b = static_cast<entt::entity>(second.GetUserData());
+        const auto kind = first.IsSensor() || second.IsSensor()
+            ? PhysicsContactKind::TriggerEnter : PhysicsContactKind::CollisionEnter;
+        PhysicsContactEvent event{kind, a, b,
+            {static_cast<float>(p.GetX()), static_cast<float>(p.GetY()), static_cast<float>(p.GetZ())},
+            {n.GetX(), n.GetY(), n.GetZ()}, 0};
+        if (event.second < event.first) {
+            std::swap(event.first, event.second);
+            event.normal = -event.normal;
+        }
+        const JPH::SubShapeIDPair key(first.GetID(), manifold.mSubShapeID1, second.GetID(), manifold.mSubShapeID2);
+        std::lock_guard lock(mutex);
+        contacts.insert_or_assign(key, Contact{event});
+    }
+
+    void OnContactPersisted(const JPH::Body& first, const JPH::Body& second,
+                            const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) override {
+        OnContactAdded(first, second, manifold, settings);
+    }
+
+    void OnContactRemoved(const JPH::SubShapeIDPair& key) override {
+        std::lock_guard lock(mutex);
+        if (const auto it = contacts.find(key); it != contacts.end()) it->second.removed = true;
+    }
+
+    // Called on the main thread outside PhysicsSystem::Update.
+    void Invalidate(JPH::BodyID id) {
+        std::erase_if(contacts, [id](const auto& item) {
+            return item.first.GetBody1ID() == id || item.first.GetBody2ID() == id;
+        });
+    }
+
+    void Publish(const JPH::BodyInterface& bodies, entt::dispatcher& events, std::uint64_t step) {
+        std::erase_if(contacts, [&](const auto& item) {
+            if (!item.second.removed) return false;
+            const auto a = item.first.GetBody1ID(), b = item.first.GetBody2ID();
+            // Jolt discards contacts when bodies sleep. Keep the logical pair until
+            // either body moves, wakes without a renewed contact, or is removed.
+            return !bodies.IsAdded(a) || !bodies.IsAdded(b) || bodies.IsActive(a) || bodies.IsActive(b);
+        });
+        const auto less = [](const auto& a, const auto& b) {
+            return std::tie(a.first, a.second, a.kind) < std::tie(b.first, b.second, b.kind);
+        };
+        current.clear();
+        for (const auto& [key, contact] : contacts) current.push_back(contact.event);
+        std::sort(current.begin(), current.end(), less);
+        current.erase(std::unique(current.begin(), current.end(), [&](const auto& a, const auto& b) {
+            return !less(a, b) && !less(b, a);
+        }), current.end());
+        for (auto event : previous) {
+            if (std::binary_search(current.begin(), current.end(), event, less)) continue;
+            event.kind = event.kind == PhysicsContactKind::TriggerEnter
+                ? PhysicsContactKind::TriggerExit : PhysicsContactKind::CollisionExit;
+            event.stepIndex = step;
+            events.enqueue(event);
+        }
+        for (auto event : current) {
+            if (std::binary_search(previous.begin(), previous.end(), event, less)) {
+                event.kind = event.kind == PhysicsContactKind::TriggerEnter
+                    ? PhysicsContactKind::TriggerStay : PhysicsContactKind::CollisionStay;
+            }
+            event.stepIndex = step;
+            events.enqueue(event);
+        }
+        previous.swap(current);
+    }
+};
+
 bool ValidPose(Vector3 position, Quaternion rotation, std::string& error) {
     if (!detail::Finite(position) || !std::isfinite(rotation.LengthSquared()) || rotation.LengthSquared() < 1e-8f) {
         error = "position/rotation must be finite and rotation must be nonzero";
@@ -162,11 +247,12 @@ bool ValidPose(Vector3 position, Quaternion rotation, std::string& error) {
 
 struct PhysicsSubsystem::Impl {
     RuntimeLease runtime; // first constructed / last destroyed, before Jolt allocations
-    JPH::BroadPhaseLayerInterfaceTable broadPhase{2, 2};
-    JPH::ObjectLayerPairFilterTable pairs{2};
+    JPH::BroadPhaseLayerInterfaceTable broadPhase{3, 3};
+    JPH::ObjectLayerPairFilterTable pairs{3};
     std::unique_ptr<JPH::ObjectVsBroadPhaseLayerFilterTable> broadPhaseFilter;
     JPH::TempAllocatorImpl allocator;
     JPH::JobSystemThreadPool jobs;
+    ContactListener listener;
     JPH::PhysicsSystem world;
     struct Body {
         JPH::BodyID id;
@@ -176,6 +262,7 @@ struct PhysicsSubsystem::Impl {
         Vector3 position;
         Quaternion rotation;
         std::shared_ptr<const MeshGeometry> geometry;
+        bool awake = true;
     };
     struct ShapeInput {
         Collider collider;
@@ -200,15 +287,19 @@ struct PhysicsSubsystem::Impl {
                                                      static_cast<int>(config.workerThreads)) {
         broadPhase.MapObjectToBroadPhaseLayer(StaticLayer, JPH::BroadPhaseLayer(0));
         broadPhase.MapObjectToBroadPhaseLayer(MovingLayer, JPH::BroadPhaseLayer(1));
+        broadPhase.MapObjectToBroadPhaseLayer(TriggerLayer, JPH::BroadPhaseLayer(2));
+        pairs.EnableCollision(TriggerLayer, MovingLayer);
         pairs.EnableCollision(StaticLayer, MovingLayer);
         pairs.EnableCollision(MovingLayer, MovingLayer);
-        broadPhaseFilter = std::make_unique<JPH::ObjectVsBroadPhaseLayerFilterTable>(broadPhase, 2, pairs, 2);
+        broadPhaseFilter = std::make_unique<JPH::ObjectVsBroadPhaseLayerFilterTable>(broadPhase, 3, pairs, 3);
         world.Init(config.maxBodies, 0, config.maxBodyPairs, config.maxContactConstraints,
                    broadPhase, *broadPhaseFilter, pairs);
         world.SetGravity(Vec(config.gravity));
+        world.SetContactListener(&listener);
     }
     void Remove(entt::entity entity) {
         if (const auto it = bodies.find(entity); it != bodies.end()) {
+            listener.Invalidate(it->second.id);
             world.GetBodyInterface().RemoveBody(it->second.id);
             world.GetBodyInterface().DestroyBody(it->second.id);
             bodies.erase(it);
@@ -220,6 +311,9 @@ struct PhysicsSubsystem::Impl {
         while (!bodies.empty()) Remove(bodies.begin()->first);
         failures.clear();
         failedShapes.clear();
+        listener.contacts.clear();
+        listener.previous.clear();
+        listener.current.clear();
         ClearPreview();
     }
     void Reject(entt::entity entity, const std::string& error) {
@@ -288,8 +382,11 @@ struct PhysicsSubsystem::Impl {
                     return;
                 }
                 failedShapes.erase(entity);
+                const auto layer = collider->isTrigger ? TriggerLayer
+                    : settings.motionType == MotionType::Static ? StaticLayer : MovingLayer;
                 JPH::BodyCreationSettings creation(shape.Get(), Position(pose.position), Quat(pose.rotation),
-                    Motion(settings.motionType), settings.motionType == MotionType::Static ? StaticLayer : MovingLayer);
+                    Motion(settings.motionType), layer);
+                creation.mIsSensor = collider->isTrigger;
                 creation.mFriction = settings.friction;
                 creation.mRestitution = settings.restitution;
                 creation.mUserData = static_cast<JPH::uint64>(entt::to_integral(entity));
@@ -306,8 +403,10 @@ struct PhysicsSubsystem::Impl {
             } else if (dt > 0 && settings.motionType != MotionType::Dynamic) {
                 if (settings.motionType == MotionType::Kinematic && dt > 0)
                     api.MoveKinematic(it->second.id, Position(pose.position), Quat(pose.rotation), dt);
-                else if (it->second.position != pose.position || it->second.rotation != pose.rotation)
+                else if (it->second.position != pose.position || it->second.rotation != pose.rotation) {
+                    listener.Invalidate(it->second.id);
                     api.SetPositionAndRotation(it->second.id, Position(pose.position), Quat(pose.rotation), JPH::EActivation::Activate);
+                }
                 it->second.position = pose.position;
                 it->second.rotation = pose.rotation;
             }
@@ -360,7 +459,11 @@ void PhysicsSubsystem::Shutdown() {
     impl_->Clear();
     impl_.reset();
 }
-void PhysicsSubsystem::ResetSimulation() { if (impl_) impl_->Clear(); }
+void PhysicsSubsystem::ResetSimulation() {
+    if (impl_) impl_->Clear();
+    GetEngine().GetEvents().clear<PhysicsContactEvent>();
+    GetEngine().GetEvents().clear<PhysicsActivityEvent>();
+}
 void PhysicsSubsystem::FixedUpdate(const FixedUpdateContext& step) {
     if (!impl_) return;
     const float dt = static_cast<float>(step.deltaSeconds);
@@ -368,15 +471,23 @@ void PhysicsSubsystem::FixedUpdate(const FixedUpdateContext& step) {
     impl_->Synchronize(dt);
     const auto result = impl_->world.Update(dt, 1, &impl_->allocator, &impl_->jobs);
     if (result != JPH::EPhysicsUpdateError::None) spdlog::error("Jolt capacity error: {}", static_cast<unsigned>(result));
-    for (const auto& [entity, body] : impl_->bodies) {
+    auto& events = GetEngine().GetEvents();
+    for (auto& [entity, body] : impl_->bodies) {
         if (body.settings.motionType != MotionType::Dynamic) continue;
-        JPH::RVec3 position;
-        JPH::Quat rotation;
-        impl_->world.GetBodyInterface().GetPositionAndRotation(body.id, position, rotation);
+        const JPH::BodyLockRead lock(impl_->world.GetBodyLockInterface(), body.id);
+        if (!lock.Succeeded()) continue;
+        const auto& simulated = lock.GetBody();
+        const auto position = simulated.GetPosition();
+        const auto rotation = simulated.GetRotation();
         auto& transform = impl_->scene->GetTransform(entity);
         transform.position = {static_cast<float>(position.GetX()), static_cast<float>(position.GetY()), static_cast<float>(position.GetZ())};
         transform.rotation = {rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW()};
+        if (!body.collider.isTrigger && simulated.IsActive() != body.awake) {
+            body.awake = simulated.IsActive();
+            events.enqueue(PhysicsActivityEvent{entity, body.awake, step.stepIndex});
+        }
     }
+    impl_->listener.Publish(impl_->world.GetBodyInterface(), events, step.stepIndex);
 }
 bool PhysicsSubsystem::SetLinearVelocity(entt::entity entity, Vector3 velocity, std::string& error) {
     if (!impl_ || !detail::Finite(velocity)) { error = "physics is not initialized or velocity is not finite"; return false; }
@@ -424,6 +535,7 @@ bool PhysicsSubsystem::Teleport(entt::entity entity, Vector3 position, Quaternio
     detail::PhysicsPose pose;
     if (!detail::GetPhysicsPose(matrix, pose, error)) return false;
     impl_->scene->GetTransform(entity) = transform;
+    impl_->listener.Invalidate(body->id);
     impl_->world.GetBodyInterface().SetPositionAndRotation(body->id, Position(pose.position), Quat(pose.rotation), JPH::EActivation::Activate);
     body->position = pose.position;
     body->rotation = pose.rotation;

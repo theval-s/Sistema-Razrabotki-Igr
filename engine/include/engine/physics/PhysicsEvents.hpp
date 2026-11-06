@@ -1,0 +1,27 @@
+#pragma once
+
+#include <SimpleMath.h>
+#include <entt/entity/entity.hpp>
+#include <cstdint>
+
+namespace engine {
+enum class PhysicsContactKind {
+    CollisionEnter, CollisionExit,
+    TriggerEnter, TriggerExit,
+    CollisionStay, TriggerStay,
+};
+
+/// One notification per kind, entity pair and fixed step. The normal points from first to second.
+struct PhysicsContactEvent {
+    PhysicsContactKind kind;
+    entt::entity first, second;
+    DirectX::SimpleMath::Vector3 point, normal;
+    std::uint64_t stepIndex;
+};
+/// A dynamic solid body changed activity between fixed steps.
+struct PhysicsActivityEvent {
+    entt::entity entity;
+    bool awake;
+    std::uint64_t stepIndex;
+};
+} // namespace engine

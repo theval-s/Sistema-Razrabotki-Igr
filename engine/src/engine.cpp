@@ -246,7 +246,9 @@ void Engine::Tick() {
     frame.simulationTimeSeconds += frame.deltaSeconds;
 
     // Deliver events queued during the previous frame (or from outside Tick).
+    impl_->inCallbacks = true;
     impl_->events.update();
+    impl_->inCallbacks = false;
 
     // Copy: a subsystem reacting to the frame must not see it change under it.
     const FrameContext current = frame;

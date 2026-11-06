@@ -58,7 +58,7 @@ Collider shapes and their JSON fields:
 
 RigidBody JSON requires motionType, mass, friction and restitution. Collider JSON
 requires shape, center, showDebug and the dimension fields listed for that shape;
-mesh shapes have no dimension fields. Unknown or missing fields are rejected.
+mesh shapes have no dimension fields. Unknown fields and missing required fields are rejected.
 Scenes may contain no physics components; their existing scene/asset formats
 remain supported. The physics interface consists of RigidBody and Collider.
 Box/Cube dimensions and mesh vertices follow world scale per axis (a Cube under
@@ -151,7 +151,76 @@ Only one preview geometry is cached; unchanged shapes are not cooked each frame.
 Bodies are batch-added using Jolt's broadphase interface. Removal of either
 component, destruction of an entity, scene replacement and Shutdown release bodies.
 Queries in SceneQueries remain the existing scene/AABB queries; they also cover
-nonphysical objects. This PR does not add physics-specific queries or contact events.
+nonphysical objects.
+
+## Contact callbacks in Lua
+
+Attach an enabled Script component to either participant to receive
+`OnCollisionEnter(other, contact)` and `OnCollisionExit(other, contact)`.
+Scripts that return a table receive `self` before these arguments.
+Create a separate zone entity with RigidBody and Collider, then enable
+**Is trigger** in its inspector. The zone uses the same shape selector and
+wireframe as a solid collider. For a mesh volume, use a convex hull.
+A triangle mesh represents surfaces. The optional JSON boolean
+`isTrigger` defaults to false and is included when saving. Triggers overlap
+Dynamic and Kinematic solid bodies without pushing them. Both participants
+can receive `OnTriggerEnter(other, contact)` and `OnTriggerExit(other, contact)`.
+Static triggers detect active bodies. Use a Kinematic trigger when the zone
+needs to detect bodies that are already sleeping.
+
+Events describe pairs of entities. Enter is emitted on the first contact and
+Exit after the last contact ends. Sleeping contacts stay active. When an
+entity is destroyed, the surviving script can receive Exit with `other == nil`.
+
+`contact.point` is a representative world-space contact point.
+`contact.normal` points away from the other body toward the recipient.
+Exit carries the last reported contact sample. `contact.otherId` is an opaque
+scene-local integer that stays the same for the pair, including on Exit.
+`contact.stepIndex` identifies the fixed step that produced the event.
+Events are delivered on the main thread before the next frame's OnUpdate.
+Scene changes and Stop discard queued events.
+
+`OnCollisionStay` and `OnTriggerStay` run once per fixed step for a pair
+that was active in the previous step, including sleeping contacts. Enter
+covers the first step and Exit covers the step in which the pair ends.
+Several fixed steps can be delivered before one OnUpdate.
+
+A script can use the contact normal to track floor support and gate a jump.
+
+~~~lua
+local supports = {}
+
+local function updateSupport(_, contact)
+    supports[contact.otherId] = contact.normal.y >= 0.65 and true or nil
+end
+
+function OnCollisionEnter(other, contact)
+    updateSupport(other, contact)
+end
+
+function OnCollisionStay(other, contact)
+    updateSupport(other, contact)
+end
+
+function OnCollisionExit(_, contact)
+    supports[contact.otherId] = nil
+end
+
+function isOnFloor()
+    return next(supports) ~= nil
+end
+~~~
+
+The normal is a representative sample for the pair. A single mesh with
+both floor and wall faces can report either surface at their seam.
+
+## Sleep and wake callbacks in Lua
+
+An enabled script on a Dynamic solid body can define `OnSleep()` and
+`OnWake()`. The callbacks run when the body's activity changes between
+fixed steps. Each new body starts awake. Like contacts, activity events
+are delivered before the next frame's OnUpdate and cleared on Stop or scene
+change. A script that returns a table receives `self`.
 
 ## Demonstration and checks
 
@@ -168,4 +237,4 @@ No CTest integration or new test suites are required. Check fixed stepping, floo
 contacts, removal, repeated initialization, paused frames and scene replacement.
 
 Not included: interpolated rendering, character controllers, asynchronous shape cooking,
-constraints, ragdolls, Lua physics bindings, contact events.
+constraints, ragdolls, Lua physics commands.

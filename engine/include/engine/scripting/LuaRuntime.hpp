@@ -4,6 +4,7 @@
 #include <engine/engine_export.hpp>
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/scripting/ScriptProperties.hpp>
+#include <engine/physics/PhysicsEvents.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -82,6 +83,9 @@ namespace engine {
         bool CreateInstance(const ScriptInstanceDesc& desc, InstanceId& instance, std::string& error);
         /// Starts once; a repeated successful start does not invoke OnStart again.
         bool StartInstance(InstanceId instance, std::string& error);
+        bool NotifyPhysicsActivity(InstanceId instance, bool awake, std::string& error);
+        bool NotifyPhysicsContact(InstanceId instance, const PhysicsContactEvent& event,
+                                  entt::entity other, std::string& error);
         bool UpdateInstance(InstanceId instance, double deltaSeconds, std::string& error);
         /// Calls OnDestroy only for successfully started, non-faulted instances, then releases references.
         /// Repeated destruction in the same session succeeds. Invalid/stale session IDs fail.

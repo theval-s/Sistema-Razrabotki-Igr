@@ -348,6 +348,7 @@ void buildCollider(PropertyForm& form, editor::EditorContext& context, const ent
         const QSignalBlocker blocker(convex);
         convex->setChecked(collider && collider->shape == Shape::ConvexMesh);
     });
+    form.addBool(QObject::tr("Is trigger"), field(scene, entity, &engine::Collider::isTrigger));
     form.addBool(QObject::tr("Show collider"), field(scene, entity, &engine::Collider::showDebug));
     form.addVec3(QObject::tr("Center"), field(scene, entity, &engine::Collider::center));
     // Separate forms show only the dimensions that the selected shape uses.
