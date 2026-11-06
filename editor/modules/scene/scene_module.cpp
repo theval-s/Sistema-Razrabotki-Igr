@@ -1,6 +1,5 @@
 #include <QAction>
 #include <QEvent>
-#include <QKeySequence>
 #include <QMenu>
 #include <QSignalBlocker>
 #include <QTimer>
@@ -17,6 +16,7 @@
 
 #include <engine/scene/Scene.hpp>
 
+#include <editor/edit_actions.hpp>
 #include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
 #include <editor/editor_module.hpp>
@@ -135,7 +135,7 @@ private:
 };
 
 /// The hierarchy tree, with an Add button floating in its bottom-right corner. Right-clicking the
-/// tree opens the same menu, plus Delete when it was on an entity. New entities go in front of the
+/// tree opens the same menu, plus Focus, Duplicate and Delete when it was on an entity. New entities go in front of the
 /// viewport camera, at the root, and become the selection.
 class HierarchyPanel : public QWidget {
 public:
@@ -149,18 +149,17 @@ public:
         menu->addAction(QObject::tr("Empty Entity"), this, [this] { addEmpty(); });
         menu->addAction(QObject::tr("Cube"), this, [this] { addCube(); });
 
-        delete_ = new QAction(QObject::tr("Delete"), this);
-        delete_->setShortcut(QKeySequence::Delete);
-        delete_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-        addAction(delete_);
-        connect(delete_, &QAction::triggered, this, [this] { deleteSelected(); });
+        const editor::EditActions& edit = context.editActions();
+        edit.attach(this);
 
         // Pressing the right button on an entity has already selected it, as with the left one.
         tree_->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(tree_, &QWidget::customContextMenuRequested, this, [this, menu](const QPoint& position) {
+        connect(tree_, &QWidget::customContextMenuRequested, this, [this, menu, &edit](const QPoint& position) {
             QMenu context_menu;
             if (tree_->itemAt(position) != nullptr) {
-                context_menu.addAction(delete_);
+                context_menu.addAction(edit.focusAction());
+                context_menu.addAction(edit.duplicateAction());
+                context_menu.addAction(edit.deleteAction());
                 context_menu.addSeparator();
             }
             context_menu.addActions(menu->actions());
@@ -207,20 +206,6 @@ private:
         context_.selection().select(cube);
     }
 
-    /// Deletes the selected entities, and with them their children.
-    void deleteSelected() {
-        engine::Scene& scene = context_.scene();
-        // A copy: the selection can change under a span while entities go.
-        const std::vector<entt::entity> entities(context_.selection().entities().begin(),
-                                                 context_.selection().entities().end());
-        for (const entt::entity entity : entities) {
-            if (scene.IsValid(entity)) {  // not already gone with its parent
-                scene.DestroyEntity(entity);
-            }
-        }
-        context_.selection().clear();
-    }
-
     void placeAddButton() {
         constexpr int Margin = 6;
         const QRect area = tree_->viewport()->geometry();
@@ -230,7 +215,6 @@ private:
     editor::EditorContext& context_;
     HierarchyTree* tree_ = nullptr;
     QToolButton* add_ = nullptr;
-    QAction* delete_ = nullptr;
 };
 
 class SceneModule final : public editor::IEditorModule {

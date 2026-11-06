@@ -19,7 +19,8 @@ class EditorCameraSubsystem;
 /// handed to the engine as its NativeSurface; Qt never paints it.
 /// Also forwards its keyboard and mouse input to the engine's InputSubsystem.
 /// While the right button is held the cursor is hidden and pinned, so mouse-look
-/// can turn without hitting the screen edge.
+/// can turn without hitting the screen edge, and every key goes to the camera rather than
+/// to shortcuts, so W/E/Q... keep flying.
 class ViewportWidget : public QWidget {
     Q_OBJECT
 
@@ -42,6 +43,7 @@ signals:
     void pickRequested(QPointF position, bool toggle);
 
 protected:
+    bool event(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;

@@ -98,6 +98,16 @@ QPaintEngine* ViewportWidget::paintEngine() const {
     return nullptr;
 }
 
+bool ViewportWidget::event(QEvent* event) {
+    // Accepting the override keeps a shortcut (F, Ctrl+A...) from taking the key: it arrives
+    // in keyPressEvent instead, and from there at the camera.
+    if (event->type() == QEvent::ShortcutOverride && cursor_pinned_) {
+        event->accept();
+        return true;
+    }
+    return QWidget::event(event);
+}
+
 void ViewportWidget::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     const QSize size = pixelSize();

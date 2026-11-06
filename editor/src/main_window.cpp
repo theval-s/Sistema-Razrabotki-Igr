@@ -41,6 +41,7 @@
 #include <engine/scene/SceneQueries.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
 
+#include <editor/edit_actions.hpp>
 #include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
 #include <editor/light_lines.hpp>
@@ -130,6 +131,7 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     dock_manager_->setCentralWidget(viewport_dock);
 
     context_ = std::make_unique<EditorContext>(engine_, project_, *this, *dock_manager_);
+    context_->editActions().attach(viewport_);
     SceneDocument& document = context_->sceneDocument();
     connect(&document, &SceneDocument::stateChanged, this, [this] {
         refreshTitle();
@@ -380,6 +382,16 @@ void MainWindow::buildMenus() {
     file_menu->addAction(tr("E&xit"), this, &QWidget::close);
     // Scenes and projects can't be opened or saved while the scene is a running copy.
     connect(&context_->playSession(), &PlaySession::playingChanged, file_menu, &QWidget::setDisabled);
+
+    const EditActions& edit = context_->editActions();
+    auto* edit_menu = context_->menu(tr("&Edit"));
+    edit_menu->addAction(edit.duplicateAction());
+    edit_menu->addAction(edit.deleteAction());
+    edit_menu->addSeparator();
+    edit_menu->addAction(edit.selectAllAction());
+    edit_menu->addAction(edit.deselectAction());
+    edit_menu->addSeparator();
+    edit_menu->addAction(edit.focusAction());
 
     // The menu bar's order. Modules fill Project and Engine, EditorContext::addPanel() fills View.
     for (const QString& title : {tr("&Project"), tr("&Engine"), tr("&View")}) {

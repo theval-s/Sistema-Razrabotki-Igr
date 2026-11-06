@@ -16,6 +16,7 @@
 #include <engine/engine.hpp>
 #include <engine/project/Project.hpp>
 
+#include <editor/edit_actions.hpp>
 #include <editor/editor_camera.hpp>
 #include <editor/play_session.hpp>
 #include <editor/scene_document.hpp>
@@ -45,7 +46,8 @@ EditorContext::EditorContext(engine::Engine& engine, engine::Project& project, Q
                              ads::CDockManager& dock_manager)
     : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager), selection_(engine.GetScene()),
       scene_document_(std::make_unique<SceneDocument>(engine, project, selection_)),
-      play_session_(std::make_unique<PlaySession>(engine, project, selection_, *scene_document_)) {}
+      play_session_(std::make_unique<PlaySession>(engine, project, selection_, *scene_document_)),
+      edit_actions_(std::make_unique<EditActions>(engine, selection_, *play_session_)) {}
 
 EditorContext::~EditorContext() {
     // Panels would otherwise die with the dock manager, after the engine they show.
@@ -86,6 +88,10 @@ SceneDocument& EditorContext::sceneDocument() noexcept {
 
 PlaySession& EditorContext::playSession() noexcept {
     return *play_session_;
+}
+
+EditActions& EditorContext::editActions() noexcept {
+    return *edit_actions_;
 }
 
 EditorCameraSubsystem* EditorContext::camera() noexcept {

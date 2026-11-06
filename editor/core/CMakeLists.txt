@@ -10,6 +10,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 add_library(editor_core SHARED
     src/asset_icons.cpp
     src/asset_picker.cpp
+    src/edit_actions.cpp
     src/editor_camera.cpp
     src/editor_context.cpp
     src/menu_button.cpp
@@ -18,6 +19,7 @@ add_library(editor_core SHARED
     src/selection.cpp
     include/editor/asset_icons.hpp
     include/editor/asset_picker.hpp
+    include/editor/edit_actions.hpp
     include/editor/editor_camera.hpp
     src/lua_definitions.cpp
     include/editor/lua_definitions.hpp

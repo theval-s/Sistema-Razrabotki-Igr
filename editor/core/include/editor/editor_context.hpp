@@ -29,6 +29,7 @@ struct Project;
 
 namespace editor {
 
+class EditActions;
 class EditorCameraSubsystem;
 class PlaySession;
 class SceneDocument;
@@ -59,6 +60,9 @@ public:
     [[nodiscard]] SceneDocument& sceneDocument() noexcept;
     /// Play mode: start and stop it, or follow it, through here.
     [[nodiscard]] PlaySession& playSession() noexcept;
+    /// Delete, Select All, Focus... for the panels that show the scene: attach() them to a panel
+    /// to make their shortcuts work there.
+    [[nodiscard]] EditActions& editActions() noexcept;
     /// The viewport's POV
     [[nodiscard]] EditorCameraSubsystem* camera() noexcept;
 
@@ -96,6 +100,7 @@ private:
     Selection selection_;
     std::unique_ptr<SceneDocument> scene_document_;
     std::unique_ptr<PlaySession> play_session_;
+    std::unique_ptr<EditActions> edit_actions_;
 };
 
 }  // namespace editor
