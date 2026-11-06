@@ -1,4 +1,5 @@
 #include <QAction>
+#include <QDropEvent>
 #include <QEvent>
 #include <QMenu>
 #include <QSignalBlocker>
@@ -7,9 +8,12 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <SimpleMath.h>
@@ -31,11 +35,18 @@ namespace {
 
 /// Lists the scene's entities as a tree, rebuilt whenever the scene's revision changes.
 /// Its selection mirrors the editor's Selection both ways; the current item is the primary.
+/// Dragging the selection onto an item asks for it to become that item's children; between
+/// items, their siblings; onto empty space, roots. The tree never moves items itself.
 class HierarchyTree : public QTreeWidget {
 public:
-    HierarchyTree(engine::Scene& scene, editor::Selection& selection) : scene_(scene), selection_(selection) {
+    /// Called with the new parent (entt::null for the root) when the selection is dropped.
+    using ReparentHandler = std::function<void(entt::entity parent)>;
+
+    HierarchyTree(engine::Scene& scene, editor::Selection& selection, ReparentHandler reparent)
+        : scene_(scene), selection_(selection), reparent_(std::move(reparent)) {
         setHeaderHidden(true);
         setSelectionMode(QAbstractItemView::ExtendedSelection);
+        setDragDropMode(QAbstractItemView::InternalMove);
         // A click changes the selection before the current item, so both push.
         connect(this, &QTreeWidget::itemSelectionChanged, this, &HierarchyTree::pushSelection);
         connect(this, &QTreeWidget::currentItemChanged, this, &HierarchyTree::pushSelection);
@@ -45,6 +56,29 @@ public:
         connect(timer, &QTimer::timeout, this, &HierarchyTree::refresh);
         timer->start(200);
         rebuild();
+    }
+
+protected:
+    void dropEvent(QDropEvent* event) override {
+        if (event->source() != this) {
+            event->ignore();
+            return;
+        }
+        entt::entity parent = entt::null;
+        if (const QTreeWidgetItem* target = itemAt(event->position().toPoint())) {
+            switch (dropIndicatorPosition()) {
+            case OnItem: parent = entityOf(target); break;
+            case AboveItem:
+            case BelowItem: parent = entityOf(target->parent()); break;
+            case OnViewport: break;
+            }
+        }
+        // Not a move: after a MoveAction Qt would remove the dragged rows itself. The scene
+        // changes instead, and the tree follows it.
+        event->setDropAction(Qt::CopyAction);
+        event->accept();
+        reparent_(parent);
+        QTimer::singleShot(0, this, &HierarchyTree::refresh);
     }
 
 private:
@@ -127,6 +161,7 @@ private:
 
     engine::Scene& scene_;
     editor::Selection& selection_;
+    ReparentHandler reparent_;
     /// Every item of the tree, by entity. Owned by the tree.
     std::unordered_map<entt::entity, QTreeWidgetItem*> items_;
     std::uint64_t shown_revision_ = ~std::uint64_t{0};
@@ -135,12 +170,14 @@ private:
 };
 
 /// The hierarchy tree, with an Add button floating in its bottom-right corner. Right-clicking the
-/// tree opens the same menu, plus Focus, Duplicate and Delete when it was on an entity. New entities go in front of the
-/// viewport camera, at the root, and become the selection.
+/// tree opens the same menu, plus Focus, Duplicate, Unparent and Delete when it was on an entity. New entities go in
+/// front of the viewport camera, at the root, and become the selection. Reparenting keeps entities where they are in
+/// the world.
 class HierarchyPanel : public QWidget {
 public:
     explicit HierarchyPanel(editor::EditorContext& context) : context_(context) {
-        tree_ = new HierarchyTree(context.scene(), context.selection());
+        tree_ = new HierarchyTree(context.scene(), context.selection(),
+                                  [this](const entt::entity parent) { reparentSelected(parent); });
         auto* layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->addWidget(tree_);
@@ -159,6 +196,11 @@ public:
             if (tree_->itemAt(position) != nullptr) {
                 context_menu.addAction(edit.focusAction());
                 context_menu.addAction(edit.duplicateAction());
+                if (std::ranges::any_of(movableSelection(), [this](const entt::entity entity) {
+                        return context_.scene().GetParent(entity) != entt::null;
+                    })) {
+                    context_menu.addAction(QObject::tr("Unparent"), this, [this] { reparentSelected(entt::null); });
+                }
                 context_menu.addAction(edit.deleteAction());
                 context_menu.addSeparator();
             }
@@ -204,6 +246,32 @@ private:
         // Asynchronous: the cube shows up once the mesh is loaded (immediately after the first one).
         addMeshRenderer(context_, cube);
         context_.selection().select(cube);
+    }
+
+    /// The selected entities that aren't under another selected one: those move, the rest come along.
+    std::vector<entt::entity> movableSelection() {
+        const engine::Scene& scene = context_.scene();
+        const editor::Selection& selection = context_.selection();
+        std::vector<entt::entity> movable;
+        for (const entt::entity entity : selection.entities()) {
+            if (!scene.IsValid(entity)) continue;
+            bool under_selected = false;
+            for (entt::entity ancestor = scene.GetParent(entity); ancestor != entt::null && !under_selected;
+                 ancestor = scene.GetParent(ancestor)) {
+                under_selected = selection.contains(ancestor);
+            }
+            if (!under_selected) movable.push_back(entity);
+        }
+        return movable;
+    }
+
+    /// Moves the selection under `parent` (entt::null: to the root), keeping it in place in the world.
+    void reparentSelected(const entt::entity parent) {
+        engine::Scene& scene = context_.scene();
+        for (const entt::entity entity : movableSelection()) {
+            // Refused when `parent` is the entity itself or one of its children: nothing to do.
+            scene.SetParentKeepingWorld(entity, parent);
+        }
     }
 
     void placeAddButton() {
