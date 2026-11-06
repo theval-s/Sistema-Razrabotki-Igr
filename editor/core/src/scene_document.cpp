@@ -2,7 +2,6 @@
 
 #include <QFileDialog>
 #include <QMessageBox>
-#include <QTimer>
 #include <QWidget>
 
 #include <system_error>
@@ -19,6 +18,7 @@
 #include <engine/scene/SceneDocument.hpp>
 
 #include <editor/paths.hpp>
+#include <editor/scene_events.hpp>
 #include <editor/selection.hpp>
 
 namespace editor {
@@ -83,13 +83,10 @@ engine::SceneDocument defaultScene(const engine::AssetCatalog& catalog) {
 }  // namespace
 
 SceneDocument::SceneDocument(engine::Engine& engine, const engine::Project& project, Selection& selection,
-                             QObject* parent)
-    : QObject(parent), engine_(engine), project_(project), selection_(selection),
-      clean_revision_(engine.GetScene().GetRevision()) {
-    // TODO: add delegates to scene
-    auto* timer = new QTimer(this);
-    connect(timer, &QTimer::timeout, this, &SceneDocument::checkState);
-    timer->start(200);
+                             SceneEvents& events, QObject* parent)
+    : QObject(parent), engine_(engine), project_(project), selection_(selection), events_(events),
+      clean_revision_(events.revision()) {
+    connect(&events_, &SceneEvents::changed, this, &SceneDocument::checkState);
 }
 
 const std::filesystem::path& SceneDocument::filePath() const noexcept {
@@ -109,7 +106,7 @@ QString SceneDocument::displayName() const {
 
 bool SceneDocument::isDirty() const noexcept {
     if (runtime_) return runtime_dirty_;
-    return marked_dirty_ || engine_.GetScene().GetRevision() != clean_revision_;
+    return marked_dirty_ || events_.revision() != clean_revision_;
 }
 
 void SceneDocument::markDirty() {
@@ -129,7 +126,7 @@ void SceneDocument::beginRuntime() {
 
 void SceneDocument::endRuntime() {
     runtime_ = false;
-    clean_revision_ = engine_.GetScene().GetRevision();
+    clean_revision_ = events_.revision();
     marked_dirty_ = runtime_dirty_;
     checkState();
 }
@@ -295,7 +292,7 @@ bool SceneDocument::createInteractive(QWidget* parent, const std::filesystem::pa
 
 void SceneDocument::setClean(const std::filesystem::path& file) {
     file_ = file;
-    clean_revision_ = engine_.GetScene().GetRevision();
+    clean_revision_ = events_.revision();
     marked_dirty_ = false;
     checkState();
 }

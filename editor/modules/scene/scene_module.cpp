@@ -2,12 +2,14 @@
 #include <QDropEvent>
 #include <QEvent>
 #include <QMenu>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QStringList>
 #include <QStyle>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -29,6 +31,7 @@
 #include <editor/editor_module.hpp>
 #include <editor/menu_button.hpp>
 #include <editor/play_session.hpp>
+#include <editor/scene_events.hpp>
 #include <editor/selection.hpp>
 
 #include "component_inspectors.hpp"
@@ -75,7 +78,8 @@ QStringList collectFolders(const engine::Scene& scene) {
     return folders;
 }
 
-/// Lists the scene's folders and entities as a tree, rebuilt whenever the scene's revision changes.
+/// Lists the scene's folders and entities as a tree, rebuilt when its structure changes. What the
+/// user collapsed stays collapsed across rebuilds; everything else is expanded.
 /// Its entity selection mirrors the editor's Selection both ways; the current item is the primary.
 /// Folders can be selected too, but only in the tree: they aren't entities.
 /// Dropping the selection reports the item that should receive it: the item dropped on, the parent
@@ -85,7 +89,8 @@ public:
     using DropHandler = std::function<void(const QTreeWidgetItem* receiver)>;
     using RenameHandler = std::function<void(const QString& folder, const QString& name)>;
 
-    HierarchyTree(engine::Scene& scene, editor::Selection& selection, DropHandler drop, RenameHandler rename)
+    HierarchyTree(engine::Scene& scene, editor::Selection& selection, editor::SceneEvents& events, DropHandler drop,
+                  RenameHandler rename)
         : scene_(scene), selection_(selection), drop_(std::move(drop)), rename_(std::move(rename)) {
         setHeaderHidden(true);
         setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -103,10 +108,14 @@ public:
                 QTimer::singleShot(0, this, &HierarchyTree::rebuild);  // also undoes a refused name
             }
         });
-        // Scene has no change signal, only a revision counter: poll it.
-        auto* timer = new QTimer(this);
-        connect(timer, &QTimer::timeout, this, &HierarchyTree::refresh);
-        timer->start(200);
+        connect(&events, &editor::SceneEvents::changed, this, &HierarchyTree::follow);
+        // Rebuilds block signals too, so these are only the user's.
+        connect(this, &QTreeWidget::itemCollapsed, this, [this](const QTreeWidgetItem* item) {
+            collapsed_.insert(keyOf(item));
+        });
+        connect(this, &QTreeWidget::itemExpanded, this, [this](const QTreeWidgetItem* item) {
+            collapsed_.remove(keyOf(item));
+        });
         rebuild();
     }
 
@@ -167,21 +176,36 @@ protected:
         event->setDropAction(Qt::CopyAction);
         event->accept();
         drop_(receiver);
-        QTimer::singleShot(0, this, &HierarchyTree::refresh);
     }
 
 private:
     /// Set on folder items only: their full path.
     static constexpr int FolderRole = Qt::UserRole + 1;
 
-    void refresh() {
-        if (scene_.GetRevision() != shown_revision_) {
+    /// Rebuilds when the structure changed; otherwise only the names can have.
+    void follow(const editor::SceneChanges& changes) {
+        if (changes.structure) {
             rebuild();
+            return;
+        }
+        const QSignalBlocker blocker(this);  // not a folder rename
+        for (const entt::entity entity : changes.entities) {
+            if (QTreeWidgetItem* item = findItem(entity)) {
+                item->setText(0, toQString(scene_.GetName(entity)));
+            }
         }
     }
 
+    /// What identifies an item across rebuilds, for its collapsed state.
+    QString keyOf(const QTreeWidgetItem* item) const {
+        if (const QString folder = folderOf(item); !folder.isEmpty()) {
+            return QStringLiteral("folder:") + folder;
+        }
+        const entt::entity entity = entityOf(item);
+        return scene_.IsValid(entity) ? QString::fromStdString(scene_.GetId(entity).ToString()) : QString();
+    }
+
     void rebuild() {
-        shown_revision_ = scene_.GetRevision();
         // Rebuilding isn't a selection change: the selection is restored, quietly.
         const QSignalBlocker blocker(this);
         clear();
@@ -199,7 +223,9 @@ private:
                 folderItem(toQString(folder))->addChild(makeItem(root));
             }
         }
-        expandAll();
+        for (QTreeWidgetItemIterator it(this); *it != nullptr; ++it) {
+            (*it)->setExpanded(!collapsed_.contains(keyOf(*it)));
+        }
         showSelection();
     }
 
@@ -225,8 +251,11 @@ private:
         if (pushing_) {
             return;  // came from the tree, which already shows it
         }
-        if (scene_.GetRevision() != shown_revision_) {
-            rebuild();  // the selection may hold entities the tree doesn't have yet
+        // E.g. an entity selected right after it was created, before the scene's changes arrive.
+        if (std::ranges::any_of(selection_.entities(), [this](const entt::entity entity) {
+                return scene_.IsValid(entity) && findItem(entity) == nullptr;
+            })) {
+            rebuild();
             return;
         }
         const QSignalBlocker blocker(this);
@@ -282,7 +311,8 @@ private:
     /// Every item of the tree, by entity or folder path. Owned by the tree.
     std::unordered_map<entt::entity, QTreeWidgetItem*> items_;
     std::unordered_map<QString, QTreeWidgetItem*> folders_;
-    std::uint64_t shown_revision_ = ~std::uint64_t{0};
+    /// keyOf() the items the user collapsed.
+    QSet<QString> collapsed_;
     /// Set while the tree's own selection is being pushed, so it isn't shown back.
     bool pushing_ = false;
 };
@@ -297,7 +327,8 @@ class HierarchyPanel : public QWidget {
 public:
     explicit HierarchyPanel(editor::EditorContext& context) : context_(context) {
         tree_ = new HierarchyTree(
-            context.scene(), context.selection(), [this](const QTreeWidgetItem* receiver) { drop(receiver); },
+            context.scene(), context.selection(), context.sceneEvents(),
+            [this](const QTreeWidgetItem* receiver) { drop(receiver); },
             [this](const QString& folder, const QString& name) { renameFolder(folder, name); });
         auto* layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
@@ -358,7 +389,9 @@ private:
         engine::Scene& scene = context_.scene();
         const entt::entity entity = scene.CreateEntity(name);
         if (const editor::EditorCameraSubsystem* camera = context_.camera()) {
-            scene.GetTransform(entity).position = camera->GetSpawnPoint();
+            engine::Transform transform = scene.GetTransform(entity);
+            transform.position = camera->GetSpawnPoint();
+            scene.SetTransform(entity, transform);
         }
         return entity;
     }
@@ -368,9 +401,12 @@ private:
     }
 
     void addCube() {
+        engine::Scene& scene = context_.scene();
         const entt::entity cube = createAtSpawnPoint("Cube");
         // The built-in cube is one unit wide around its origin: lift it onto the ground.
-        context_.scene().GetTransform(cube).position += DirectX::SimpleMath::Vector3{0.0f, 0.5f, 0.0f};
+        engine::Transform transform = scene.GetTransform(cube);
+        transform.position += DirectX::SimpleMath::Vector3{0.0f, 0.5f, 0.0f};
+        scene.SetTransform(cube, transform);
         // Asynchronous: the cube shows up once the mesh is loaded (immediately after the first one).
         addMeshRenderer(context_, cube);
         context_.selection().select(cube);

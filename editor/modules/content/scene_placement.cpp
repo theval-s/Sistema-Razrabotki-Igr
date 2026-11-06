@@ -98,7 +98,9 @@ int addToScene(editor::EditorContext& context, const QStringList& paths) {
 
         const entt::entity entity = scene.CreateEntity(entityName(mesh).toStdString());
         const float offset = (static_cast<float>(i) - static_cast<float>(meshes.size() - 1) / 2.0f) * Spacing;
-        scene.GetTransform(entity).position = center + right * offset;
+        engine::Transform transform = scene.GetTransform(entity);
+        transform.position = center + right * offset;
+        scene.SetTransform(entity, transform);
         // Asynchronous: the entity shows up once the mesh is loaded. The references are what gets saved.
         scene.AddComponent<engine::MeshRenderer>(entity, assets.RequestMesh(mesh_reference),
                                                  assets.RequestMaterialInstance(material_reference), mesh_reference,

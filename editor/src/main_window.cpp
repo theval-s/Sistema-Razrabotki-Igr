@@ -273,12 +273,16 @@ void MainWindow::setupDefaultScene() {
     const entt::entity sun = scene.CreateEntity("Sun");
     Vector3 sun_direction{-0.45f, -1.0f, -0.3f};
     sun_direction.Normalize();
-    scene.GetTransform(sun).rotation = Quaternion::FromToRotation(Vector3::Forward, sun_direction);
+    engine::Transform sun_transform = scene.GetTransform(sun);
+    sun_transform.rotation = Quaternion::FromToRotation(Vector3::Forward, sun_direction);
+    scene.SetTransform(sun, sun_transform);
     scene.AddComponent<engine::DirectionalLight>(sun, Vector3{1.0f, 0.95f, 0.85f}, 1.25f);
     scene.SetDirectionalLight(sun);
 
     const entt::entity ground = scene.CreateEntity("Ground");
-    scene.GetTransform(ground).scale = Vector3{20.0f, 1.0f, 20.0f};
+    engine::Transform ground_transform = scene.GetTransform(ground);
+    ground_transform.scale = Vector3{20.0f, 1.0f, 20.0f};
+    scene.SetTransform(ground, ground_transform);
     scene.AddComponent<engine::MeshRenderer>(ground,
         engine_.GetSceneAssets().RequestMesh(engine::BuiltinAssets::PlaneMesh),
         engine_.GetSceneAssets().RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance));

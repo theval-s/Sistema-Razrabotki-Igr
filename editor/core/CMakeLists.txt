@@ -16,6 +16,7 @@ add_library(editor_core SHARED
     src/menu_button.cpp
     src/play_session.cpp
     src/scene_document.cpp
+    src/scene_events.cpp
     src/selection.cpp
     include/editor/asset_icons.hpp
     include/editor/asset_picker.hpp
@@ -29,6 +30,7 @@ add_library(editor_core SHARED
     include/editor/paths.hpp
     include/editor/play_session.hpp
     include/editor/scene_document.hpp
+    include/editor/scene_events.hpp
     include/editor/selection.hpp
 )
 

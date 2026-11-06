@@ -20,6 +20,7 @@
 #include <editor/editor_camera.hpp>
 #include <editor/play_session.hpp>
 #include <editor/scene_document.hpp>
+#include <editor/scene_events.hpp>
 
 namespace editor {
 
@@ -44,8 +45,9 @@ ads::DockWidgetArea toAdsArea(const Qt::DockWidgetArea area) {
 /// Context to pass to Modules instead of passing the whole editor to them
 EditorContext::EditorContext(engine::Engine& engine, engine::Project& project, QMainWindow& window,
                              ads::CDockManager& dock_manager)
-    : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager), selection_(engine.GetScene()),
-      scene_document_(std::make_unique<SceneDocument>(engine, project, selection_)),
+    : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager),
+      scene_events_(std::make_unique<SceneEvents>(engine.GetScene())), selection_(engine.GetScene(), *scene_events_),
+      scene_document_(std::make_unique<SceneDocument>(engine, project, selection_, *scene_events_)),
       play_session_(std::make_unique<PlaySession>(engine, project, selection_, *scene_document_)),
       edit_actions_(std::make_unique<EditActions>(engine, selection_, *play_session_)) {}
 
@@ -76,6 +78,10 @@ bool EditorContext::updateProject(engine::Project project, std::string& error) {
 
 engine::Scene& EditorContext::scene() noexcept {
     return engine_.GetScene();
+}
+
+SceneEvents& EditorContext::sceneEvents() noexcept {
+    return *scene_events_;
 }
 
 Selection& EditorContext::selection() noexcept {

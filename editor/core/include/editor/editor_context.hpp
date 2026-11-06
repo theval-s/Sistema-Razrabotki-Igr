@@ -33,6 +33,7 @@ class EditActions;
 class EditorCameraSubsystem;
 class PlaySession;
 class SceneDocument;
+class SceneEvents;
 
 /// What the editor hands to its modules: the engine, the project, the scene being edited, the
 /// selection and the places a module may add UI to. Owned by MainWindow; outlives every module and is
@@ -54,6 +55,8 @@ public:
     /// couldn't be saved; the open project is then unchanged.
     bool updateProject(engine::Project project, std::string& error);
     [[nodiscard]] engine::Scene& scene() noexcept;
+    /// The scene's changes as a Qt signal: follow the scene through here instead of polling it.
+    [[nodiscard]] SceneEvents& sceneEvents() noexcept;
     /// What the user has selected in the scene. Panels follow and change it through here.
     [[nodiscard]] Selection& selection() noexcept;
     /// The scene file being edited: open, create and save scenes through it.
@@ -97,6 +100,7 @@ private:
     ads::CDockManager& dock_manager_;
     QToolBar* tool_bar_ = nullptr;
     std::vector<Panel> panels_;
+    std::unique_ptr<SceneEvents> scene_events_;  // before everything that follows the scene
     Selection selection_;
     std::unique_ptr<SceneDocument> scene_document_;
     std::unique_ptr<PlaySession> play_session_;
