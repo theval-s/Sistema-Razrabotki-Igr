@@ -38,8 +38,11 @@ void PresentPass::Initialize(RenderingResourceManager& resourceManager, Renderin
     pixelShader_ = resourceManager.CompileShader(L"engine/PresentPass.hlsl", ShaderType::Pixel);
     outlinedPixelShader_ = resourceManager.CompileShader(L"engine/PresentPass.hlsl", ShaderType::Pixel,
                                                           {.defines = {{"SELECTION_OUTLINE"}}});
-    linesVertexShader_ = resourceManager.CompileShader(L"engine/EditorLines.hlsl", ShaderType::Vertex);
-    linesPixelShader_ = resourceManager.CompileShader(L"engine/EditorLines.hlsl", ShaderType::Pixel);
+    linesVertexShader_ = resourceManager.CompileShader(L"engine/DebugDraw.hlsl", ShaderType::Vertex);
+    screenLinesVertexShader_ = resourceManager.CompileShader(L"engine/DebugDraw.hlsl", ShaderType::Vertex,
+                                                             {.defines = {{"SCREEN_SPACE"}}});
+    linesGeometryShader_ = resourceManager.CompileShader(L"engine/DebugDraw.hlsl", ShaderType::Geometry);
+    linesPixelShader_ = resourceManager.CompileShader(L"engine/DebugDraw.hlsl", ShaderType::Pixel);
 
     backBufferView_ = CreateBackbufferTexture(resourceManager, context);
     if (!backBufferView_) {
@@ -53,6 +56,8 @@ void PresentPass::Destroy(RenderingResourceManager& resourceManager, RenderingCo
     resourceManager.DestroyShader(pixelShader_);
     resourceManager.DestroyShader(outlinedPixelShader_);
     resourceManager.DestroyShader(linesVertexShader_);
+    resourceManager.DestroyShader(screenLinesVertexShader_);
+    resourceManager.DestroyShader(linesGeometryShader_);
     resourceManager.DestroyShader(linesPixelShader_);
     if (backBufferView_) {
         resourceManager.DestroyTexture(backBufferView_);
@@ -72,11 +77,15 @@ void PresentPass::Render(RenderWorld& world, RenderingContext& context, Renderin
     context.SetShaderResources(BindSlots::Texture::SceneResult, resources.gBuffer.resultTexture);
     if (outlined) context.SetShaderResources(BindSlots::Texture::Pass0, resources.selectionMask);
     context.RawDraw(6, 0);
-    if (!world.editorLines.empty()) {
+    if (!world.debugDraw.GetLines().empty() || !world.debugDraw.GetScreenLines().empty()) {
         world.BindCameraView(context, resources);
-        context.SetShader(linesVertexShader_);
+        context.SetShader(linesGeometryShader_);
         context.SetShader(linesPixelShader_);
-        context.DrawLines(world.editorLines);
+        context.SetShader(linesVertexShader_);
+        context.DrawLines(world.debugDraw.GetLines());
+        context.SetShader(screenLinesVertexShader_);
+        context.DrawLines(world.debugDraw.GetScreenLines());
+        context.GetDeviceContext()->GSSetShader(nullptr, nullptr, 0);
     }
     context.Present();
 }

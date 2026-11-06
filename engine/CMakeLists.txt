@@ -27,6 +27,7 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/core/ResourceID.hpp
     include/engine/core/Uuid.hpp
     include/engine/engine.hpp
+    include/engine/rendering/DebugDraw.hpp
     include/engine/rendering/FPSCamera.hpp
     include/engine/rendering/GraphicalState.hpp
     include/engine/rendering/MaterialDrawList.hpp
@@ -64,6 +65,7 @@ set(ENGINE_SOURCES
     src/core/ResourceID.cpp
     src/core/Uuid.cpp
     src/engine.cpp
+    src/rendering/DebugDraw.cpp
     src/rendering/FPSCamera.cpp
     src/rendering/GraphicalState.cpp
     src/rendering/passes/GBufferPass.cpp
@@ -93,7 +95,7 @@ set(ENGINE_SOURCES
 
 set(ENGINE_SHADERS
     shaders/Common.hlsl
-    shaders/EditorLines.hlsl
+    shaders/DebugDraw.hlsl
     shaders/DirectionalLightVS.hlsl
     shaders/GBufferPass.hlsl
     shaders/GBufferVS.hlsl

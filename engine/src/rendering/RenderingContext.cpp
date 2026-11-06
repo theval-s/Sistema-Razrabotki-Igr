@@ -153,7 +153,7 @@ void RenderingContext::RawDraw(const uint32_t vertexCount, const uint32_t baseVe
     deviceContext_->Draw(vertexCount, baseVertex);
 }
 
-void RenderingContext::DrawLines(const std::span<const DirectX::SimpleMath::Vector3> endpoints) {
+void RenderingContext::DrawLines(const std::span<const LineVertex> endpoints) {
     if (endpoints.empty() || endpoints.size() % 2 != 0 ||
         endpoints.size_bytes() > std::numeric_limits<uint32_t>::max()) return;
     const auto bytes = static_cast<uint32_t>(endpoints.size_bytes());
@@ -175,13 +175,14 @@ void RenderingContext::DrawLines(const std::span<const DirectX::SimpleMath::Vect
 
     if (!lineLayout_) {
         VertexLayout layout;
-        layout.Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0);
+        layout.Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, offsetof(LineVertex, position));
+        layout.Add("COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, offsetof(LineVertex, color));
         lineLayout_ = resourceManager_.inputLayoutCache_.RegisterMeshLayout(std::move(layout));
     }
     const auto inputLayout = resourceManager_.inputLayoutCache_.GetInputLayout(device_.Get(), lineLayout_, vsInputLayout_);
     if (!inputLayout) return;
     deviceContext_->IASetInputLayout(inputLayout);
-    const UINT stride = sizeof(DirectX::SimpleMath::Vector3), offset = 0;
+    const UINT stride = sizeof(LineVertex), offset = 0;
     ID3D11Buffer* buffer = lineBuffer_.Get();
     deviceContext_->IASetVertexBuffers(0, 1, &buffer, &stride, &offset);
     deviceContext_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);

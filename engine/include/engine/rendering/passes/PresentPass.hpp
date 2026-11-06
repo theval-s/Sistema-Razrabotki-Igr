@@ -24,6 +24,8 @@ private:
     ShaderHandle pixelShader_;
     ShaderHandle outlinedPixelShader_;
     ShaderHandle linesVertexShader_;
+    ShaderHandle screenLinesVertexShader_;
+    ShaderHandle linesGeometryShader_;
     ShaderHandle linesPixelShader_;
     TextureHandle backBufferView_;
 };
