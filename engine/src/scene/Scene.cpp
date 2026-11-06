@@ -59,6 +59,7 @@ entt::entity Scene::CreateEntityWithUuid(EntityUuid id, const std::string_view n
     Attach(entity, parent);
     ids_.emplace(id, entity);
     ++revision_;
+    NotifyChange(ChangeKind::Created, entity);
     return entity;
 }
 
@@ -90,6 +91,7 @@ void Scene::DestroyEntity(const entt::entity entity) {
     unsupported_.erase(entity);
     registry_.destroy(entity);
     ++revision_;
+    NotifyChange(ChangeKind::Destroyed, entity);
     if (--destructionDepth_ == 0) FlushCommands();
 }
 
@@ -108,10 +110,12 @@ void Scene::Clear() {
     unsupported_.clear();
     controllers_.clear();
     pendingGameStates_.clear();
+    const bool had_folders = !editorFolders_.empty();
     activeCameraId_.reset();
     directionalLightId_.reset();
     editorFolders_.clear();
     ++revision_;
+    if (had_folders) NotifyChange(ChangeKind::Settings);
     if (--destructionDepth_ == 0) FlushCommands();
 }
 
@@ -169,15 +173,19 @@ std::span<const std::string> Scene::GetTags(entt::entity entity) const {
 void Scene::AddTag(entt::entity entity, std::string_view tag) {
     if (!IsValid(entity) || tag.empty()) return;
     auto& values = registry_.get<Tags>(entity).values;
-    if (std::find(values.begin(), values.end(), tag) == values.end()) { values.emplace_back(tag); ++revision_; }
+    if (std::find(values.begin(), values.end(), tag) != values.end()) return;
+    values.emplace_back(tag);
+    ++revision_;
+    NotifyChange(ChangeKind::Modified, entity);
 }
 
 void Scene::RemoveTag(entt::entity entity, std::string_view tag) {
     if (!IsValid(entity)) return;
     auto& values = registry_.get<Tags>(entity).values;
-    const auto size = values.size();
+    if (std::find(values.begin(), values.end(), tag) == values.end()) return;
     std::erase(values, tag);
-    if (values.size() != size) ++revision_;
+    ++revision_;
+    NotifyChange(ChangeKind::Modified, entity);
 }
 
 bool Scene::RegisterController(std::string_view type, ControllerRegistration registration) {
@@ -252,6 +260,7 @@ void Scene::AttachController(entt::entity entity, ControllerDefinition definitio
     }
     if (!error.empty()) spdlog::error("Scene controller on {}: {}", GetId(entity).ToString(), error);
     ++revision_;
+    NotifyChange(ChangeKind::Modified, entity);
     FlushCommands();
 }
 
@@ -277,7 +286,9 @@ void Scene::RemoveController(entt::entity entity) {
         commands_.push_back({Command::Kind::RemoveController, entity});
         return;
     }
+    const bool reported = IsValid(entity) && controllers_.contains(entity);
     DestroyController(entity);
+    if (reported) NotifyChange(ChangeKind::Modified, entity);
     FlushCommands();
 }
 
@@ -299,6 +310,7 @@ void Scene::SetControllerEnabled(entt::entity entity, bool enabled) {
         inControllerCallback_ = false;
     }
     ++revision_;
+    NotifyChange(ChangeKind::Modified, entity);
     FlushCommands();
 }
 
@@ -311,6 +323,7 @@ void Scene::SetControllerAuthoredData(entt::entity entity, StateValue data) {
     if (auto it = controllers_.find(entity); it != controllers_.end()) {
         it->second.definition.data = std::move(data);
         ++revision_;
+        NotifyChange(ChangeKind::Modified, entity);
     }
 }
 
@@ -324,6 +337,7 @@ bool Scene::CommitControllerAuthored(entt::entity entity, std::string& error) {
             it->second.definition.version, it->second.definition.enabled, authored}, error)) return false;
         it->second.definition.data = std::move(authored);
         ++revision_;
+        NotifyChange(ChangeKind::Modified, entity);
         error.clear();
         return true;
     } catch (const std::exception& e) { error = e.what(); return false; }
@@ -432,6 +446,27 @@ void Scene::RemoveLifecycleObserver(std::size_t token) {
     lifecycleObservers_.erase(token);
 }
 
+std::size_t Scene::AddChangeObserver(ChangeHandler handler) {
+    const auto token = ++nextChangeObserver_;
+    changeObservers_.emplace(token, std::move(handler));
+    return token;
+}
+
+void Scene::RemoveChangeObserver(std::size_t token) {
+    changeObservers_.erase(token);
+}
+
+void Scene::NotifyChange(const ChangeKind kind, const entt::entity entity) {
+    if (changeObservers_.empty()) return;
+    // Tokens, not iterators: a handler may remove observers.
+    std::vector<std::size_t> tokens;
+    tokens.reserve(changeObservers_.size());
+    for (const auto& [token, handler] : changeObservers_) tokens.push_back(token);
+    for (const auto token : tokens) {
+        if (const auto it = changeObservers_.find(token); it != changeObservers_.end()) it->second(kind, entity);
+    }
+}
+
 void Scene::NotifyLifecycle(LifecycleEvent event, entt::entity entity, entt::id_type component) {
     std::vector<std::size_t> tokens;
     tokens.reserve(lifecycleObservers_.size());
@@ -446,6 +481,7 @@ void Scene::SetActiveCamera(entt::entity entity) {
     if (entity != entt::null && !HasComponent<Camera>(entity)) return;
     activeCameraId_ = entity == entt::null ? std::nullopt : std::optional{GetId(entity)};
     ++revision_;
+    NotifyChange(ChangeKind::Settings);
 }
 
 entt::entity Scene::GetActiveCamera() const {
@@ -457,6 +493,7 @@ void Scene::SetDirectionalLight(entt::entity entity) {
     if (entity != entt::null && !HasComponent<DirectionalLight>(entity)) return;
     directionalLightId_ = entity == entt::null ? std::nullopt : std::optional{GetId(entity)};
     ++revision_;
+    NotifyChange(ChangeKind::Settings);
 }
 
 entt::entity Scene::GetDirectionalLight() const {
@@ -487,8 +524,13 @@ void Scene::SetName(const entt::entity entity, const std::string_view name) {
     if (!CheckEntity(entity, "SetName")) {
         return;
     }
-    registry_.get<Name>(entity).value = name;
+    std::string& value = registry_.get<Name>(entity).value;
+    if (value == name) {
+        return;
+    }
+    value = name;
     ++revision_;
+    NotifyChange(ChangeKind::Modified, entity);
 }
 
 // --- Transform & hierarchy -----------------------------------------------------
@@ -504,6 +546,14 @@ const Transform& Scene::GetTransform(const entt::entity entity) const {
         std::exit(EXIT_FAILURE);
     }
     return registry_.get<Transform>(entity);
+}
+
+void Scene::SetTransform(const entt::entity entity, const Transform& transform) {
+    if (!CheckEntity(entity, "SetTransform")) {
+        return;
+    }
+    registry_.get<Transform>(entity) = transform;
+    NotifyChange(ChangeKind::Modified, entity);
 }
 
 DirectX::SimpleMath::Matrix Scene::GetWorldMatrix(const entt::entity entity) const {
@@ -544,8 +594,9 @@ bool Scene::SetParent(const entt::entity entity, const entt::entity parent) {
     }
 
     Detach(entity);
-    Attach(entity, parent);
+    Attach(entity, parent);  // which takes it out of its folder under a parent
     ++revision_;
+    NotifyChange(ChangeKind::Hierarchy, entity);
     return true;
 }
 
@@ -581,6 +632,7 @@ bool Scene::SetEditorFolder(const entt::entity entity, const std::string_view pa
         registry_.emplace_or_replace<EditorFolder>(entity, std::string(path));
     }
     ++revision_;
+    NotifyChange(ChangeKind::Hierarchy, entity);
     return true;
 }
 
@@ -603,6 +655,7 @@ void Scene::SetEditorFolders(std::vector<std::string> folders) {
     if (kept != editorFolders_) {
         editorFolders_ = std::move(kept);
         ++revision_;
+        NotifyChange(ChangeKind::Settings);
     }
 }
 
@@ -631,6 +684,7 @@ bool Scene::SetParentKeepingWorld(const entt::entity entity, const entt::entity 
     } else {
         transform.position = local.Translation();  // a zero scale somewhere: keep at least the place
     }
+    NotifyChange(ChangeKind::Modified, entity);
     return true;
 }
 
