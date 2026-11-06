@@ -29,6 +29,8 @@ public:
                 const Color& color);
     /// A circle around each world axis.
     void Sphere(const Vector3& center, float radius, const Color& color);
+    /// The edges of a cube from -0.5 to 0.5, placed by `transform`.
+    void Box(const DirectX::SimpleMath::Matrix& transform, const Color& color);
 
     // --- On screen, in pixels from the top-left corner ---
     void ScreenLine(const Vector2& from, const Vector2& to, const Color& color);

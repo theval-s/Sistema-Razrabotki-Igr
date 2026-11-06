@@ -70,6 +70,20 @@ void DebugDraw::Sphere(const Vector3& center, const float radius, const Color& c
     Circle(center, Vector3::UnitY, Vector3::UnitZ, radius, color);
 }
 
+void DebugDraw::Box(const DirectX::SimpleMath::Matrix& transform, const Color& color) {
+    // Corner i has x, y and z from its bits 0, 1 and 2.
+    std::array<Vector3, 8> corners;
+    for (int i = 0; i < 8; ++i) {
+        corners[i] = Vector3::Transform({(i & 1) ? 0.5f : -0.5f, (i & 2) ? 0.5f : -0.5f, (i & 4) ? 0.5f : -0.5f},
+                                        transform);
+    }
+    for (int i = 0; i < 8; ++i) {
+        for (const int bit : {1, 2, 4}) {
+            if ((i & bit) == 0) Line(corners[i], corners[i | bit], color);
+        }
+    }
+}
+
 void DebugDraw::ScreenLine(const Vector2& from, const Vector2& to, const Color& color) {
     screenLines_.push_back({Vector3{from.x, from.y, 0.0f}, color});
     screenLines_.push_back({Vector3{to.x, to.y, 0.0f}, color});
