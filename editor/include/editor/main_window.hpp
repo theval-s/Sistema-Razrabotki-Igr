@@ -19,7 +19,6 @@ class CDockManager;
 
 class QLabel;
 class QMenu;
-class QPlainTextEdit;
 class QTimer;
 
 namespace spdlog::sinks {
@@ -72,7 +71,6 @@ private:
     void viewportMoved(QPointF position);
     void viewportReleased(QPointF position, Qt::MouseButton button);
     void pickViewport(QPointF position, bool toggle);
-    void appendLog(const QString& level, const QString& text);
     /// Closes the editor and starts a new one on `project_file`: assets are cached by
     /// name, so another project's game/... names can't be loaded into this engine.
     void switchProject(const QString& project_file);
@@ -89,7 +87,6 @@ private:
     ads::CDockManager* dock_manager_ = nullptr;
     ViewportWidget* viewport_ = nullptr;
     EditorCameraSubsystem* camera_ = nullptr;
-    QPlainTextEdit* log_view_ = nullptr;
     QLabel* status_label_ = nullptr;
     QTimer* tick_timer_ = nullptr;
     QPointF last_pick_position_{};

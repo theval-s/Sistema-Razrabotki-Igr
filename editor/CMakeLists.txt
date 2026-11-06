@@ -20,12 +20,16 @@ qt_standard_project_setup()
 add_subdirectory(core)
 
 qt_add_executable(editor
+    src/log_model.cpp
+    src/log_panel.cpp
     src/main.cpp
     src/main_window.cpp
     src/module_loader.cpp
     src/project_dialog.cpp
     src/viewport_overlay.cpp
     src/viewport_widget.cpp
+    include/editor/log_model.hpp
+    include/editor/log_panel.hpp
     include/editor/main_window.hpp
     include/editor/module_loader.hpp
     include/editor/project_dialog.hpp

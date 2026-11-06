@@ -11,7 +11,6 @@
 #include <QMenuBar>
 #include <QMenu>
 #include <QMessageBox>
-#include <QPlainTextEdit>
 #include <QProcess>
 #include <QSettings>
 #include <QStatusBar>
@@ -26,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-#include <spdlog/sinks/callback_sink.h>
+#include <spdlog/sinks/sink.h>
 #include <spdlog/spdlog.h>
 
 #include <DockManager.h>
@@ -45,6 +44,8 @@
 #include <editor/edit_actions.hpp>
 #include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
+#include <editor/log_model.hpp>
+#include <editor/log_panel.hpp>
 #include <editor/module_loader.hpp>
 #include <editor/paths.hpp>
 #include <editor/play_session.hpp>
@@ -446,28 +447,13 @@ void MainWindow::buildGizmoActions(QMenu& menu) {
 }
 
 void MainWindow::buildLogDock() {
-    log_view_ = new QPlainTextEdit;
-    log_view_->setReadOnly(true);
-    log_view_->setMaximumBlockCount(5000);
+    auto* panel = new LogPanel;
+    context_->addPanel(QStringLiteral("LogDock"), tr("Log"), panel, Qt::BottomDockWidgetArea);
 
-    context_->addPanel(QStringLiteral("LogDock"), tr("Log"), log_view_, Qt::BottomDockWidgetArea);
-
-    // Hook into spdlog's default logger, which the engine logs to as well.
-    // The sink runs on whatever thread logs: copy the text and hop to the GUI
-    // thread. Queued calls are dropped if `this` is gone.
-    log_sink_ = std::make_shared<spdlog::sinks::callback_sink_mt>([this](const spdlog::details::log_msg& msg) {
-        const auto level = spdlog::level::to_string_view(msg.level);
-        QMetaObject::invokeMethod(
-            this,
-            [this, level = toQString({level.data(), level.size()}),
-             text = toQString({msg.payload.data(), msg.payload.size()})] { appendLog(level, text); },
-            Qt::QueuedConnection);
-    });
+    // Hook into spdlog's default logger, which the engine logs to as well. The sink
+    // only buffers, so logging from other threads never touches the panel.
+    log_sink_ = panel->sink();
     spdlog::default_logger()->sinks().push_back(log_sink_);
-}
-
-void MainWindow::appendLog(const QString& level, const QString& text) {
-    log_view_->appendPlainText(QStringLiteral("[%1] %2").arg(level, text));
 }
 
 void MainWindow::refreshStatus() {
