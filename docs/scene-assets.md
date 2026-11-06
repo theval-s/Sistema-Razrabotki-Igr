@@ -128,6 +128,12 @@ persistent links; check handles after a scene switch. Optional entity `tags` are
 an array of distinct, nonempty strings, for example `"tags": ["animated"]`.
 Use `AddTag`/`RemoveTag` to author them in code.
 
+Root entities may have an optional `editorFolder`, such as
+`"editorFolder": "Props/Barrels"`, and the scene may list `"editorFolders"` so
+that empty folders survive a save. Folder paths are nonempty names separated by
+single slashes. Only the editor's hierarchy uses them; the runtime ignores them.
+An entity with a parent can't have a folder (`Scene::SetParent` clears it).
+
 One optional `Controller` component is supported per entity:
 
 ~~~json
