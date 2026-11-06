@@ -22,6 +22,11 @@ struct ENGINE_API PresentPass : RenderPass {
 private:
     ShaderHandle vertexShader_;
     ShaderHandle pixelShader_;
+    ShaderHandle outlinedPixelShader_;
+    ShaderHandle linesVertexShader_;
+    ShaderHandle screenLinesVertexShader_;
+    ShaderHandle linesGeometryShader_;
+    ShaderHandle linesPixelShader_;
     TextureHandle backBufferView_;
 };
 

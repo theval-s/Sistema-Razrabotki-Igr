@@ -91,4 +91,21 @@ TEST(AssetCatalog, MissingMetadataDoesNotHideHealthyAssets) {
     EXPECT_NE(catalog.FindPath("game/models/healthy.obj"), nullptr);
     EXPECT_EQ(catalog.FindPath("game/models/missing.obj"), nullptr);
 }
+
+TEST(AssetCatalog, ListReturnsOneKindSortedByPath) {
+    Fixture fixture;
+    std::ofstream(fixture.root / "game/models/b.png") << "image";
+    std::ofstream(fixture.root / "game/models/a.png") << "image";
+    std::ofstream(fixture.root / "game/models/table.obj") << "mesh";
+    std::size_t generated = 0;
+    std::string error;
+    ASSERT_TRUE(engine::GenerateMissingAssetMetadata(fixture.root / "game", generated, error)) << error;
+    engine::AssetCatalog catalog;
+    ASSERT_TRUE(catalog.Scan(fixture.root / "game", {}, error)) << error;
+    const auto textures = catalog.List(engine::CatalogAssetKind::Texture);
+    ASSERT_EQ(textures.size(), 2u);
+    EXPECT_EQ(textures[0]->path, "game/models/a.png");
+    EXPECT_EQ(textures[1]->path, "game/models/b.png");
+    EXPECT_TRUE(catalog.List(engine::CatalogAssetKind::Scene).empty());
+}
 }

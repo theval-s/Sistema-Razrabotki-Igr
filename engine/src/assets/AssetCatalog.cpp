@@ -2,15 +2,11 @@
 
 #include <algorithm>
 #include <array>
-#include <cstddef>
-#include <functional>
-#include <random>
 #include <set>
 #include <stdexcept>
 #include <unordered_set>
 
 #include <nlohmann/json.hpp>
-#include <stduuid/uuid.h>
 
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/ResourceID.hpp>
@@ -30,6 +26,7 @@ std::string_view KindName(CatalogAssetKind kind) {
     case CatalogAssetKind::Material: return "material";
     case CatalogAssetKind::MaterialInstance: return "materialInstance";
     case CatalogAssetKind::Scene: return "scene";
+    case CatalogAssetKind::Script: return "script";
     }
     return {};
 }
@@ -96,7 +93,7 @@ AssetMetadata MetadataFromJson(const Json& j) {
     const auto kind = j.at("kind").get<std::string>();
     bool found = false;
     for (const auto candidate : {CatalogAssetKind::Mesh, CatalogAssetKind::Texture, CatalogAssetKind::Shader,
-                                  CatalogAssetKind::Material, CatalogAssetKind::MaterialInstance, CatalogAssetKind::Scene}) {
+                                  CatalogAssetKind::Material, CatalogAssetKind::MaterialInstance, CatalogAssetKind::Scene, CatalogAssetKind::Script}) {
         if (kind == KindName(candidate)) { meta.kind = candidate; found = true; break; }
     }
     if (!found || (j.contains("centerOnLoad") && meta.kind != CatalogAssetKind::Mesh))
@@ -111,6 +108,10 @@ AssetMetadata MetadataFromJson(const Json& j) {
 
 std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& path) {
     const std::string name = NormalizeName(ToGenericUtf8(path.filename()));
+
+    // exclude LuaLS file recognition
+    if (name.ends_with(".d.lua")) return std::nullopt;
+
     if (name.ends_with(".material-instance.json")) return CatalogAssetKind::MaterialInstance;
     if (name.ends_with(".material.json")) return CatalogAssetKind::Material;
     if (name.ends_with(".scene.json")) return CatalogAssetKind::Scene;
@@ -120,51 +121,8 @@ std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& 
         ext == ".tiff" || ext == ".dds" || ext == ".bmp") return CatalogAssetKind::Texture;
     if (ext == ".fbx" || ext == ".gltf" || ext == ".glb" || ext == ".obj" ||
         ext == ".dae" || ext == ".blend" || ext == ".ply") return CatalogAssetKind::Mesh;
+    if (ext == ".lua") return CatalogAssetKind::Script;
     return std::nullopt;
-}
-
-bool IsUuid(std::string_view text) noexcept {
-    if (text.size() != 36) return false;
-    for (std::size_t i = 0; i < text.size(); ++i) {
-        if (i == 8 || i == 13 || i == 18 || i == 23) {
-            if (text[i] != '-') return false;
-        } else if (!((text[i] >= '0' && text[i] <= '9') || (text[i] >= 'a' && text[i] <= 'f'))) return false;
-    }
-    return true;
-}
-
-AssetUuid::AssetUuid(std::string_view text) noexcept {
-    if (!IsUuid(text)) return;
-    if (const auto parsed = uuids::uuid::from_string(text)) {
-        std::ranges::transform(parsed->as_bytes(), bytes_.begin(),
-                               [](std::byte byte) { return std::to_integer<std::uint8_t>(byte); });
-    }
-}
-
-std::optional<AssetUuid> AssetUuid::Parse(std::string_view text) noexcept {
-    if (!IsUuid(text)) return std::nullopt;
-    return AssetUuid(text);
-}
-
-bool AssetUuid::IsValid() const noexcept {
-    return std::any_of(bytes_.begin(), bytes_.end(), [](auto byte) { return byte != 0; });
-}
-
-std::string AssetUuid::ToString() const {
-    return uuids::to_string(uuids::uuid(bytes_.begin(), bytes_.end()));
-}
-
-std::string NewUuid() {
-    //mt for faster gen
-    thread_local std::mt19937 engine = [] {
-        std::random_device device;
-        std::array<std::uint32_t, std::mt19937::state_size> seed{};
-        std::ranges::generate(seed, std::ref(device));
-        std::seed_seq sequence(seed.begin(), seed.end());
-        return std::mt19937(sequence);
-    }();
-    thread_local uuids::uuid_random_generator generator{engine};
-    return uuids::to_string(generator());
 }
 
 bool ParseAssetMetadata(std::string_view json, AssetMetadata& value, std::string& error) {
@@ -288,6 +246,15 @@ const CatalogEntry* AssetCatalog::Find(const AssetUuid& uuid, CatalogAssetKind k
 const CatalogEntry* AssetCatalog::FindPath(std::string_view path) const {
     const auto it = paths_.find(NormalizeName(path));
     return it == paths_.end() ? nullptr : Find(it->second);
+}
+
+std::vector<const CatalogEntry*> AssetCatalog::List(CatalogAssetKind kind) const {
+    std::vector<const CatalogEntry*> result;
+    for (const auto& [id, entry] : entries_) {
+        if (entry.metadata.kind == kind) result.push_back(&entry);
+    }
+    std::ranges::sort(result, {}, &CatalogEntry::path);
+    return result;
 }
 
 bool GenerateMissingAssetMetadata(const std::filesystem::path& root, std::size_t& generated, std::string& error) {

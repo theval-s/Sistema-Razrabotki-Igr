@@ -5,6 +5,7 @@
 #include <dxgi.h>
 #include <initializer_list>
 #include <optional>
+#include <span>
 #include <windows.h>
 
 #include <engine/core/Surface.hpp>
@@ -17,9 +18,16 @@
 #include <engine/rendering/resources/RenderedMesh.hpp>
 #include <engine/rendering/RenderingResourceManager.hpp>
 #include <engine/rendering/resources/Texture.hpp>
+#include <SimpleMath.h>
 
 namespace engine {
 using Microsoft::WRL::ComPtr;
+
+/// One end of a line drawn by RenderingContext::DrawLines().
+struct LineVertex {
+    DirectX::SimpleMath::Vector3 position;
+    DirectX::SimpleMath::Color color;
+};
 
 /**
  * Simple thin wrapper around DX11 Context, helps to set shaders and resources via Handles
@@ -46,6 +54,8 @@ struct ENGINE_API RenderingContext {
     void BindMesh(MeshHandle h);
     void RawDrawIndexed(uint32_t indexCount, uint32_t baseIndex = 0, uint32_t baseVertex = 0) const;
     void RawDraw(uint32_t vertexCount, uint32_t baseVertex = 0) const;
+    /// Draws line pairs with the currently bound shaders (POSITION and COLOR input).
+    void DrawLines(std::span<const LineVertex> endpoints);
     void DrawMesh(MeshHandle h);
     void BindCBuffer(BindSlot slot, BufferHandle h);
     void UnbindCBuffer(BindSlot slot);
@@ -84,6 +94,9 @@ private:
     RenderingResourceManager resourceManager_;
     RenderStates renderingStates_;
     ShaderLayoutHandle vsInputLayout_{};
+    ComPtr<ID3D11Buffer> lineBuffer_;
+    uint32_t lineBufferCapacity_ = 0;
+    MeshLayoutHandle lineLayout_{};
 };
 
 }

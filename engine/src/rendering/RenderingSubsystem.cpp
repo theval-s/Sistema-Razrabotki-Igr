@@ -2,7 +2,7 @@
 
 #include <engine/engine.hpp>
 
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 namespace engine {
 
@@ -13,11 +13,11 @@ std::string_view RenderingSubsystem::GetName() const {
 bool RenderingSubsystem::Initialize() {
     surface_ = GetEngine().GetSurface();
     if (!surface_.IsValid()) {
-        spdlog::error("RenderingSubsystem: the host gave the engine no window to render into");
+        log::Render().error("The host gave the engine no window to render into");
         return false;
     }
     if (!renderer_.Initialize(surface_)) {
-        spdlog::error("RenderingSubsystem: the renderer could not be created for {}x{}",
+        log::Render().error("The renderer could not be created for {}x{}",
                       surface_.width, surface_.height);
         return false;
     }
@@ -34,18 +34,16 @@ void RenderingSubsystem::OnSurfaceChanged(const SurfaceChangedEvent& event) {
     resizePending_ = true;
 }
 
-void RenderingSubsystem::Render(const FrameContext&) {
+void RenderingSubsystem::Render(const FrameContext& frame) {
     // A minimized window has no drawable area. Keep the pending resize for restoration.
-    if (!surface_.IsValid()) {
-        return;
-    }
-    if (resizePending_) {
-        if (!renderer_.Reinitialize(surface_)) {
-            return; // retry next frame; never draw with missing or mismatched resources
-        }
+    if (surface_.IsValid() && resizePending_ && renderer_.Reinitialize(surface_)) {
         resizePending_ = false;
     }
-    renderer_.RenderFrame();
+    // A failed resize is retried next frame; never draw with missing or mismatched resources.
+    if (surface_.IsValid() && !resizePending_) {
+        renderer_.RenderFrame(frame);
+    }
+    GetWorld().debugDraw.Clear();
 }
 
 RenderingSystem& RenderingSubsystem::GetRendering() noexcept {

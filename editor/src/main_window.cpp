@@ -1,40 +1,61 @@
+#include <engine/physics/PhysicsSubsystem.hpp>
 #include <editor/main_window.hpp>
 
 #include <QAction>
+#include <QActionGroup>
 #include <QCoreApplication>
 #include <QDir>
 #include <QCloseEvent>
+#include <QKeySequence>
 #include <QLabel>
 #include <QMenuBar>
+#include <QMenu>
 #include <QMessageBox>
-#include <QPlainTextEdit>
 #include <QProcess>
 #include <QSettings>
 #include <QStatusBar>
 #include <QString>
 #include <QTimer>
 
+#include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
-#include <spdlog/sinks/callback_sink.h>
+#include <spdlog/sinks/sink.h>
 #include <spdlog/spdlog.h>
 
 #include <DockManager.h>
 #include <DockWidget.h>
 
+#include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/core/PathUtils.hpp>
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/rendering/RenderExtractionSubsystem.hpp>
+#include <engine/scene/SceneQueries.hpp>
+#include <engine/scripting/ScriptSubsystem.hpp>
 
+#include <editor/edit_actions.hpp>
 #include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
+#include <editor/log_model.hpp>
+#include <editor/log_panel.hpp>
 #include <editor/module_loader.hpp>
 #include <editor/paths.hpp>
+#include <editor/play_session.hpp>
 #include <editor/project_dialog.hpp>
+#include <editor/scene_document.hpp>
+#include <editor/transform_gizmo.hpp>
+#include <editor/viewport_overlay.hpp>
 #include <editor/viewport_widget.hpp>
+#include <editor/selection.hpp>
+#include <editor/editor_log.hpp>
 
 namespace editor {
 
@@ -59,7 +80,6 @@ engine::EngineConfig makeEngineConfig() {
 
 MainWindow::MainWindow(engine::Project project, QWidget* parent)
     : QMainWindow(parent), project_(std::move(project)), engine_(makeEngineConfig()) {
-    setWindowTitle(tr("%1 — SRI Editor").arg(QString::fromStdString(project_.name)));
     resize(1280, 720);
 
     status_label_ = new QLabel(this);
@@ -69,12 +89,35 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     // central widget: always there, never floated, so its HWND (and swap chain) stays put.
     dock_manager_ = new ads::CDockManager(this);
     viewport_ = new ViewportWidget;
+    connect(viewport_, &ViewportWidget::mousePressed, this, &MainWindow::viewportPressed);
+    connect(viewport_, &ViewportWidget::mouseMoved, this, &MainWindow::viewportMoved);
+    connect(viewport_, &ViewportWidget::mouseReleased, this, &MainWindow::viewportReleased);
     auto* viewport_dock = new ads::CDockWidget(dock_manager_, tr("Viewport"));
     viewport_dock->setObjectName(QStringLiteral("Viewport"));
     viewport_dock->setWidget(viewport_, ads::CDockWidget::ForceNoScrollArea);
     dock_manager_->setCentralWidget(viewport_dock);
 
     context_ = std::make_unique<EditorContext>(engine_, project_, *this, *dock_manager_);
+    context_->editActions().attach(viewport_);
+    gizmo_ = std::make_unique<TransformGizmo>(engine_.GetScene(), context_->selection());
+    SceneDocument& document = context_->sceneDocument();
+    connect(&document, &SceneDocument::stateChanged, this, [this] {
+        refreshTitle();
+        adoptStartupScene();
+    });
+    connect(&document, &SceneDocument::opened, this, [this] {
+        has_last_pick_ = false;
+        if (camera_ != nullptr) {
+            camera_->ResetToSceneCamera();
+        }
+    });
+    connect(&context_->playSession(), &PlaySession::playingChanged, this, [this](const bool playing) {
+        viewport_->setPlaying(playing);
+        // The running copy isn't the scene being edited.
+        gizmo_->setEnabled(!playing);
+        if (playing) viewport_->setFocus();
+    });
+    refreshTitle();
     buildMenus();
     buildLogDock();  // before modules and engine init, so their startup messages show up
 
@@ -98,16 +141,23 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
 
 MainWindow::~MainWindow() {
     tick_timer_->stop();
+    context_->playSession().stop();
     // The viewport outlives the engine (Qt deletes children after our members).
     viewport_->setInput(nullptr);
     // First, so nothing logs into the Log panel once it is gone.
-    std::erase(spdlog::default_logger()->sinks(), log_sink_);
+    engine::log::Sinks()->remove_sink(log_sink_);
     // Modules and panels go before the engine they use.
     modules_.reset();
     context_.reset();
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    context_->playSession().stop();
+    if (!context_->sceneDocument().maybeSave(this)) {
+        relaunch_project_.clear();
+        event->ignore();
+        return;
+    }
     QSettings settings;
     settings.setValue(GeometryKey, saveGeometry());
     settings.setValue(DockStateKey, dock_manager_->saveState(LayoutVersion));
@@ -143,28 +193,45 @@ void MainWindow::restoreLayout() {
 }
 
 void MainWindow::startEngine() {
+    engine_.SetEditorMode();
     // The editor owns the loop: the engine only advances when we Tick() it.
     engine_.SetSurface(viewport_->surface());
     // The camera's aspect ratio follows the surface (RenderExtractionSubsystem); the renderer keeps
     // its initial buffer size and DXGI stretches it, so proportions stay right if blurrier.
     connect(viewport_, &ViewportWidget::surfaceResized, this,
             [this](quint32 width, quint32 height) { engine_.ResizeSurface(width, height); });
-    // Input first, so it's latched before anything reads it; the camera moves before
-    // RenderExtractionSubsystem copies it into the RenderWorld.
+    // Input first, so it's latched before anything reads it; the editor camera last, so it
+    // replaces the scene camera that RenderExtractionSubsystem copied into the RenderWorld.
     viewport_->setInput(engine_.AddSubsystem<engine::InputSubsystem>());
-    engine_.AddSubsystem<EditorCameraSubsystem>();
+    engine_.AddSubsystem<engine::ScriptSubsystem>();
     engine_.AddSubsystem<engine::RenderingSubsystem>();
+    engine_.AddSubsystem<engine::PhysicsSubsystem>();
     engine_.AddSubsystem<engine::RenderExtractionSubsystem>();
+    camera_ = engine_.AddSubsystem<EditorCameraSubsystem>();
+    engine_.AddSubsystem<ViewportOverlaySubsystem>(context_->selection(), *gizmo_, *viewport_);
 
     // On failure keep the window up so the Log dock shows why, but don't tick.
     if (!engine_.Initialize()) {
-        spdlog::critical("Engine failed to initialize, see log above");
+        editorLog().critical("Engine failed to initialize, see log above");
         return;
     }
-    setupDefaultScene();
+    viewport_->setCamera(camera_);
+    openStartupScene();
 
     tick_timer_->start(16);
     refreshStatus();
+}
+
+void MainWindow::openStartupScene() {
+    if (!project_.startupScene.empty()) {
+        std::string error;
+        if (context_->sceneDocument().open(engine::AssetPathResolver::ToAbsolute(engine::FromUtf8(project_.startupScene)),
+                                           error)) {
+            return;
+        }
+        editorLog().error("Startup scene '{}': {}", project_.startupScene, error);
+    }
+    setupDefaultScene();
 }
 
 void MainWindow::setupDefaultScene() {
@@ -172,27 +239,54 @@ void MainWindow::setupDefaultScene() {
     using DirectX::SimpleMath::Vector3;
     engine::Scene& scene = engine_.GetScene();
 
-    // Looking down at the origin; EditorCameraSubsystem flies it.
-    const entt::entity camera = scene.CreateEntity("Camera");
-    scene.GetTransform(camera).position = Vector3{0.0f, 4.0f, 9.0f};
-    scene.GetTransform(camera).rotation = Quaternion::CreateFromYawPitchRoll(0.0f, -0.4f, 0.0f);
-    scene.AddComponent<engine::Camera>(camera);
-    scene.SetActiveCamera(camera);
-
+    // No camera: the editor has its own viewpoint.
     const entt::entity sun = scene.CreateEntity("Sun");
     Vector3 sun_direction{-0.45f, -1.0f, -0.3f};
     sun_direction.Normalize();
-    scene.GetTransform(sun).rotation = Quaternion::FromToRotation(Vector3::Forward, sun_direction);
+    engine::Transform sun_transform = scene.GetTransform(sun);
+    sun_transform.rotation = Quaternion::FromToRotation(Vector3::Forward, sun_direction);
+    scene.SetTransform(sun, sun_transform);
     scene.AddComponent<engine::DirectionalLight>(sun, Vector3{1.0f, 0.95f, 0.85f}, 1.25f);
     scene.SetDirectionalLight(sun);
 
     const entt::entity ground = scene.CreateEntity("Ground");
-    engine::Transform& transform = scene.GetTransform(ground);
-    transform.position = Vector3{0.0f, -0.05f, 0.0f};
-    transform.scale = Vector3{20.0f, 0.1f, 20.0f};
+    engine::Transform ground_transform = scene.GetTransform(ground);
+    ground_transform.scale = Vector3{20.0f, 1.0f, 20.0f};
+    scene.SetTransform(ground, ground_transform);
     scene.AddComponent<engine::MeshRenderer>(ground,
-        engine_.GetSceneAssets().RequestMesh(engine::BuiltinAssets::CubeMesh),
+        engine_.GetSceneAssets().RequestMesh(engine::BuiltinAssets::PlaneMesh),
         engine_.GetSceneAssets().RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance));
+    context_->sceneDocument().markClean();
+}
+
+void MainWindow::refreshTitle() {
+    const SceneDocument& document = context_->sceneDocument();
+    // [*] shows the unsaved-changes mark set by setWindowModified().
+    setWindowTitle(tr("%1[*] — %2 — SRI Editor").arg(document.displayName(), QString::fromStdString(project_.name)));
+    setWindowModified(document.isDirty());
+}
+
+void MainWindow::adoptStartupScene() {
+    if (context_->playSession().isPlaying()) return;
+    const std::filesystem::path& file = context_->sceneDocument().filePath();
+    if (file.empty() || context_->sceneDocument().isDirty()) {
+        return;
+    }
+    // Keep a startup scene that still exists; one that was moved or deleted gets replaced.
+    std::error_code ec;
+    if (!project_.startupScene.empty() &&
+        std::filesystem::exists(engine::AssetPathResolver::ToAbsolute(engine::FromUtf8(project_.startupScene)), ec)) {
+        return;
+    }
+    const std::string name = engine::AssetPathResolver::ToName(file);
+    if (!name.starts_with("game/")) {
+        return;  // outside the project's content
+    }
+    engine::Project updated = project_;
+    updated.startupScene = name;
+    if (std::string error; !context_->updateProject(std::move(updated), error)) {
+        editorLog().warn("Could not remember {} as the startup scene: {}", name, error);
+    }
 }
 
 void MainWindow::tickEngine() {
@@ -200,45 +294,167 @@ void MainWindow::tickEngine() {
     refreshStatus();
 }
 
+std::optional<ViewportView> MainWindow::viewportView() const {
+    if (!engine_.IsInitialized() || camera_ == nullptr || viewport_->width() <= 0 || viewport_->height() <= 0) {
+        return std::nullopt;
+    }
+    return ViewportView::fromCamera(engine_.GetSubsystem<engine::RenderingSubsystem>()->GetWorld().camera,
+                                    {static_cast<float>(viewport_->width()), static_cast<float>(viewport_->height())});
+}
+
+void MainWindow::viewportPressed(const QPointF position, const Qt::MouseButton button,
+                                 const Qt::KeyboardModifiers modifiers) {
+    if (button == Qt::RightButton) {
+        gizmo_->cancel();
+        return;
+    }
+    if (button != Qt::LeftButton) return;
+    // The gizmo's handles are in front of everything.
+    if (const auto view = viewportView();
+        view && gizmo_->press(*view, {static_cast<float>(position.x()), static_cast<float>(position.y())})) {
+        return;
+    }
+    pickViewport(position, modifiers & Qt::ControlModifier);
+}
+
+void MainWindow::viewportMoved(const QPointF position) {
+    const auto view = viewportView();
+    if (!view) return;
+    const DirectX::SimpleMath::Vector2 cursor{static_cast<float>(position.x()), static_cast<float>(position.y())};
+    if (gizmo_->dragging()) {
+        gizmo_->drag(*view, cursor);
+    } else {
+        gizmo_->hover(*view, cursor);
+    }
+}
+
+void MainWindow::viewportReleased(QPointF, const Qt::MouseButton button) {
+    if (button == Qt::LeftButton) gizmo_->release();
+}
+
+void MainWindow::pickViewport(const QPointF position, const bool toggle) {
+    if (!engine_.IsInitialized() || camera_ == nullptr || viewport_->width() <= 0 || viewport_->height() <= 0) return;
+    const auto& camera = engine_.GetSubsystem<engine::RenderingSubsystem>()->GetWorld().camera;
+    const auto view_projection = camera.GetViewMatrix() * camera.GetProjectionMatrix();
+    const auto inverse = view_projection.Invert();
+    const float x = static_cast<float>(2.0 * position.x() / viewport_->width() - 1.0);
+    const float y = static_cast<float>(1.0 - 2.0 * position.y() / viewport_->height());
+    // Reverse-Z: near is 1, far is 0. Qt's local coordinates are normalized against
+    // its logical size, which cancels the physical-pixel scaling of the swap chain.
+    const auto near_point = DirectX::SimpleMath::Vector3::Transform({x, y, 1.0f}, inverse);
+    const auto far_point = DirectX::SimpleMath::Vector3::Transform({x, y, 0.0f}, inverse);
+    std::vector<entt::entity> hits;
+    for (const auto& hit : engine::RaycastAll(engine_.GetScene(), engine_.GetSceneAssets(),
+                                              near_point, far_point - near_point, camera.farPlane)) {
+        // The general scene query also returns authored Bounds without a drawable mesh.
+        const auto* renderer = engine_.GetScene().TryGetComponent<engine::MeshRenderer>(hit.entity);
+        if (renderer && engine_.GetSceneAssets().Peek(renderer->mesh) &&
+            engine_.GetSceneAssets().Peek(renderer->materialInstance)) hits.push_back(hit.entity);
+    }
+
+    auto& selection = context_->selection();
+    const bool same_position = std::abs(position.x() - last_pick_position_.x()) <= 3.0 &&
+                               std::abs(position.y() - last_pick_position_.y()) <= 3.0;
+    const bool same_camera = std::memcmp(&view_projection, &last_pick_view_projection_, sizeof(view_projection)) == 0;
+    const bool cycle = has_last_pick_ && same_position && same_camera && hits == last_pick_hits_ &&
+                       (toggle || selection.primary() == last_picked_);
+    std::size_t index = 0;
+    if (cycle) {
+        const auto previous = std::find(hits.begin(), hits.end(), last_picked_);
+        if (previous != hits.end()) index = (static_cast<std::size_t>(previous - hits.begin()) + 1) % hits.size();
+    }
+    last_pick_position_ = position;
+    last_pick_view_projection_ = view_projection;
+    last_pick_hits_ = hits;
+    last_picked_ = hits.empty() ? entt::null : hits[index];
+    has_last_pick_ = !hits.empty();
+    if (toggle) {
+        if (last_picked_ != entt::null) selection.toggle(last_picked_);
+    } else {
+        selection.select(last_picked_);
+    }
+}
+
 void MainWindow::buildMenus() {
     auto* file_menu = context_->menu(tr("&File"));
     file_menu->addAction(tr("New &Project..."), this, [this] { switchProject(createProjectInteractively(this)); });
     file_menu->addAction(tr("&Open Project..."), this, [this] { switchProject(pickProjectFile(this)); });
     file_menu->addSeparator();
+    SceneDocument& document = context_->sceneDocument();
+    file_menu->addAction(tr("&New Scene..."), QKeySequence::New, this,
+                         [this, &document] { document.createInteractive(this); });
+    file_menu->addAction(tr("Open &Scene..."), QKeySequence::Open, this,
+                         [this, &document] { document.openInteractive(this); });
+    file_menu->addAction(tr("&Save Scene"), QKeySequence::Save, this,
+                         [this, &document] { document.saveInteractive(this, false); });
+    file_menu->addAction(tr("Save Scene &As..."), QKeySequence::SaveAs, this,
+                         [this, &document] { document.saveInteractive(this, true); });
+    file_menu->addSeparator();
+
     file_menu->addAction(tr("E&xit"), this, &QWidget::close);
+    // Scenes and projects can't be opened or saved while the scene is a running copy.
+    connect(&context_->playSession(), &PlaySession::playingChanged, file_menu, &QWidget::setDisabled);
 
-    auto* engine_menu = context_->menu(tr("&Engine"));
-    auto* pause_action = engine_menu->addAction(tr("&Pause simulation"));
-    pause_action->setCheckable(true);
-    connect(pause_action, &QAction::toggled, this, [this](bool paused) { engine_.SetPaused(paused); });
+    const EditActions& edit = context_->editActions();
+    auto* edit_menu = context_->menu(tr("&Edit"));
+    edit_menu->addAction(edit.duplicateAction());
+    edit_menu->addAction(edit.deleteAction());
+    edit_menu->addSeparator();
+    edit_menu->addAction(edit.selectAllAction());
+    edit_menu->addAction(edit.deselectAction());
+    edit_menu->addSeparator();
+    edit_menu->addAction(edit.focusAction());
+    edit_menu->addSeparator();
+    buildGizmoActions(*edit_menu);
 
-    // Filled by EditorContext::addPanel().
-    context_->menu(tr("&View"));
+    // The menu bar's order. Modules fill Project and Engine, EditorContext::addPanel() fills View.
+    for (const QString& title : {tr("&Project"), tr("&Engine"), tr("&View")}) {
+        context_->menu(title);
+    }
+}
+
+void MainWindow::buildGizmoActions(QMenu& menu) {
+    // Shortcuts only while the viewport has focus, so W/E/R/X still type in fields elsewhere.
+    // While the right button turns the view, the viewport keeps them for the camera.
+    const auto add = [this, &menu](const QString& text, const Qt::Key key) {
+        auto* action = menu.addAction(text);
+        action->setShortcut(QKeySequence(key));
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        action->setCheckable(true);
+        viewport_->addAction(action);
+        // During Play these keys are the game's.
+        connect(&context_->playSession(), &PlaySession::playingChanged, action, &QAction::setDisabled);
+        return action;
+    };
+    auto* modes = new QActionGroup(this);
+    const std::pair<QString, TransformGizmo::Mode> entries[] = {
+        {tr("&Move"), TransformGizmo::Mode::Translate},
+        {tr("&Rotate"), TransformGizmo::Mode::Rotate},
+        {tr("S&cale"), TransformGizmo::Mode::Scale},
+    };
+    const Qt::Key keys[] = {Qt::Key_W, Qt::Key_E, Qt::Key_R};
+    for (std::size_t i = 0; i < std::size(entries); ++i) {
+        const auto mode = entries[i].second;
+        auto* action = add(entries[i].first, keys[i]);
+        action->setActionGroup(modes);
+        action->setChecked(gizmo_->mode() == mode);
+        connect(action, &QAction::triggered, this, [this, mode] { gizmo_->setMode(mode); });
+    }
+    auto* local = add(tr("&Local Axes"), Qt::Key_X);
+    local->setChecked(gizmo_->space() == TransformGizmo::Space::Local);
+    connect(local, &QAction::toggled, this, [this](const bool checked) {
+        gizmo_->setSpace(checked ? TransformGizmo::Space::Local : TransformGizmo::Space::World);
+    });
 }
 
 void MainWindow::buildLogDock() {
-    log_view_ = new QPlainTextEdit;
-    log_view_->setReadOnly(true);
-    log_view_->setMaximumBlockCount(5000);
+    auto* panel = new LogPanel;
+    context_->addPanel(QStringLiteral("LogDock"), tr("Log"), panel, Qt::BottomDockWidgetArea);
 
-    context_->addPanel(QStringLiteral("LogDock"), tr("Log"), log_view_, Qt::BottomDockWidgetArea);
-
-    // Hook into spdlog's default logger, which the engine logs to as well.
-    // The sink runs on whatever thread logs: copy the text and hop to the GUI
-    // thread. Queued calls are dropped if `this` is gone.
-    log_sink_ = std::make_shared<spdlog::sinks::callback_sink_mt>([this](const spdlog::details::log_msg& msg) {
-        const auto level = spdlog::level::to_string_view(msg.level);
-        QMetaObject::invokeMethod(
-            this,
-            [this, level = toQString({level.data(), level.size()}),
-             text = toQString({msg.payload.data(), msg.payload.size()})] { appendLog(level, text); },
-            Qt::QueuedConnection);
-    });
-    spdlog::default_logger()->sinks().push_back(log_sink_);
-}
-
-void MainWindow::appendLog(const QString& level, const QString& text) {
-    log_view_->appendPlainText(QStringLiteral("[%1] %2").arg(level, text));
+    // Every log channel writes to these sinks, the engine's and the editor's. The panel's
+    // only buffers, so logging from other threads never touches the panel.
+    log_sink_ = panel->sink();
+    engine::log::Sinks()->add_sink(log_sink_);
 }
 
 void MainWindow::refreshStatus() {

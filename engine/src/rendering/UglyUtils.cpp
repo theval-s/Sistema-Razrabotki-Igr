@@ -208,10 +208,5 @@ RawMesh CreateCube(const float sizeX, const float sizeY, const float sizeZ) {
     return mesh;
 }
 
-RawMesh CreateSpotLightBoundingBox(const float range, const float spotOuterAngle) {
-    const float halfExtent = range * std::tan(spotOuterAngle * 0.5f);
-    return CreateCube(halfExtent * 2.0f, halfExtent * 2.0f, range);
-}
-
 }
 }

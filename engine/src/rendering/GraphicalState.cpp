@@ -142,6 +142,13 @@ void RenderStates::InitializeDepthStates(ID3D11Device* device) {
 
         init(desc, DepthState::ReadOnly);
     }
+    {
+        D3D11_DEPTH_STENCIL_DESC desc{};
+        desc.DepthEnable = TRUE;
+        desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+        desc.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL;
+        init(desc, DepthState::ReadOnlyReverseZ);
+    }
 }
 
 void RenderStates::InitializeRasterizerStates(ID3D11Device* device) {

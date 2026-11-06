@@ -6,6 +6,7 @@
 #include <entt/entity/entity.hpp>
 
 #include <engine/scene/Transform.hpp>
+#include <engine/core/Uuid.hpp>
 
 // Components every entity created through Scene::CreateEntity() has.
 // Maintained by Scene -- modify Hierarchy only via Scene::SetParent().
@@ -28,12 +29,17 @@ struct GamePersistence {
 };
 
 struct EntityId {
-    std::string value; // persistent UUID, independent of EnTT's transient entity value
+    EntityUuid value; // persistent UUID, independent of EnTT's transient entity value
 };
 
 struct Hierarchy {
     entt::entity parent{entt::null};
     std::vector<entt::entity> children;
+};
+
+// Editor-only group. Saved with the scene and ignored at runtime.
+struct EditorFolder {
+    std::string path;
 };
 
 }  // namespace engine

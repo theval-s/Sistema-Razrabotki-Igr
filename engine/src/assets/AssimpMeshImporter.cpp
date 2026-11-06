@@ -69,7 +69,8 @@ bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/
     MeshCpu mesh;
     bool hasUVs = false;
     for (const aiMesh* source : std::span(scene->mMeshes, scene->mNumMeshes)) {
-        if (source == nullptr || !source->HasPositions() || !source->HasFaces()) {
+        if (source == nullptr || !source->HasPositions() || !source->HasFaces() ||
+            (source->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) == 0) {
             continue;
         }
         const uint32_t baseVertex = static_cast<uint32_t>(mesh.vertices.size());
@@ -113,6 +114,16 @@ bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/
     if (desc.centerOnLoad) {
         CenterAndNormalize(mesh);
     }
+
+    auto geometry = std::make_shared<MeshGeometry>();
+    geometry->positions.reserve(mesh.vertices.size());
+    for (const auto& vertex : mesh.vertices)
+        geometry->positions.emplace_back(vertex.pos.x, vertex.pos.y, vertex.pos.z);
+    geometry->indices = mesh.indices;
+    // Rendering uses D3D winding; Jolt expects CCW triangles.
+    for (std::size_t i = 0; i + 2 < geometry->indices.size(); i += 3)
+        std::swap(geometry->indices[i + 1], geometry->indices[i + 2]);
+    mesh.geometry = std::move(geometry);
 
     payload = CpuPayload{};
     payload.kind = CpuPayload::Kind::Mesh;

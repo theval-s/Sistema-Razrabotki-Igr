@@ -4,8 +4,7 @@
 #include <algorithm>
 #include <utility>
 
-#include <spdlog/spdlog.h>
-#include <engine/assets/AssetCatalog.hpp>
+#include <engine/core/Log.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 
 namespace engine {
@@ -15,7 +14,11 @@ Scene::Scene() {
     static_cast<void>(registry_.storage<MeshRenderer>());
     static_cast<void>(registry_.storage<Camera>());
     static_cast<void>(registry_.storage<DirectionalLight>());
+    static_cast<void>(registry_.storage<PointLight>());
+    static_cast<void>(registry_.storage<SpotLight>());
     static_cast<void>(registry_.storage<Bounds>());
+    static_cast<void>(registry_.storage<RigidBody>());
+    static_cast<void>(registry_.storage<Collider>());
     static_cast<void>(registry_.storage<GamePersistence>());
 }
 Scene::~Scene() { Clear(); }
@@ -23,13 +26,23 @@ Scene::~Scene() { Clear(); }
 // --- Entities -------------------------------------------------------------------
 
 entt::entity Scene::CreateEntity(const std::string_view name, const entt::entity parent) {
-    return CreateEntityWithId(NewUuid(), name, parent);
+    return CreateEntityWithUuid(EntityUuid(NewUuid()), name, parent);
 }
 
 entt::entity Scene::CreateEntityWithId(const std::string_view id, const std::string_view name,
                                        const entt::entity parent) {
-    if (!IsUuid(id) || ids_.contains(std::string(id))) {
-        spdlog::error("Scene::CreateEntityWithId: invalid or duplicate UUID '{}'", id);
+    const auto parsed = EntityUuid::Parse(id);
+    if (!parsed) {
+        log::Scene().error("Scene::CreateEntityWithId: invalid UUID '{}'", id);
+        return entt::null;
+    }
+    return CreateEntityWithUuid(*parsed, name, parent);
+}
+
+entt::entity Scene::CreateEntityWithUuid(EntityUuid id, const std::string_view name,
+                                         const entt::entity parent) {
+    if (ids_.contains(id)) {
+        log::Scene().error("Scene::CreateEntityWithUuid: duplicate UUID '{}'", id.ToString());
         return entt::null;
     }
     if (parent != entt::null && !CheckEntity(parent, "CreateEntity")) {
@@ -38,7 +51,7 @@ entt::entity Scene::CreateEntityWithId(const std::string_view id, const std::str
 
     // we can also just use plain vectors but entt registry looks good
     const entt::entity entity = registry_.create();
-    registry_.emplace<EntityId>(entity, std::string(id));
+    registry_.emplace<EntityId>(entity, id);
     registry_.emplace<Name>(entity, std::string(name));
     registry_.emplace<Tags>(entity);
     registry_.emplace<Transform>(entity);
@@ -46,6 +59,7 @@ entt::entity Scene::CreateEntityWithId(const std::string_view id, const std::str
     Attach(entity, parent);
     ids_.emplace(id, entity);
     ++revision_;
+    NotifyChange(ChangeKind::Created, entity);
     return entity;
 }
 
@@ -71,12 +85,13 @@ void Scene::DestroyEntity(const entt::entity entity) {
 
     Detach(entity);
     const auto& id = registry_.get<EntityId>(entity).value;
-    if (id == activeCameraId_) activeCameraId_.clear();
-    if (id == directionalLightId_) directionalLightId_.clear();
+    if (activeCameraId_ == id) activeCameraId_.reset();
+    if (directionalLightId_ == id) directionalLightId_.reset();
     ids_.erase(registry_.get<EntityId>(entity).value);
     unsupported_.erase(entity);
     registry_.destroy(entity);
     ++revision_;
+    NotifyChange(ChangeKind::Destroyed, entity);
     if (--destructionDepth_ == 0) FlushCommands();
 }
 
@@ -95,9 +110,12 @@ void Scene::Clear() {
     unsupported_.clear();
     controllers_.clear();
     pendingGameStates_.clear();
-    activeCameraId_.clear();
-    directionalLightId_.clear();
+    const bool had_folders = !editorFolders_.empty();
+    activeCameraId_.reset();
+    directionalLightId_.reset();
+    editorFolders_.clear();
     ++revision_;
+    if (had_folders) NotifyChange(ChangeKind::Settings);
     if (--destructionDepth_ == 0) FlushCommands();
 }
 
@@ -105,13 +123,18 @@ bool Scene::IsValid(const entt::entity entity) const {
     return registry_.valid(entity) && registry_.all_of<Name, Transform, Hierarchy, EntityId>(entity);
 }
 
-std::string_view Scene::GetId(const entt::entity entity) const {
-    return IsValid(entity) ? registry_.get<EntityId>(entity).value : std::string_view{};
+EntityUuid Scene::GetId(const entt::entity entity) const {
+    return IsValid(entity) ? registry_.get<EntityId>(entity).value : EntityUuid{};
+}
+
+entt::entity Scene::FindByUuid(EntityUuid id) const {
+    const auto it = ids_.find(id);
+    return it == ids_.end() ? entt::null : it->second;
 }
 
 entt::entity Scene::FindById(const std::string_view id) const {
-    const auto it = ids_.find(std::string(id));
-    return it == ids_.end() ? entt::null : it->second;
+    const auto parsed = EntityUuid::Parse(id);
+    return parsed ? FindByUuid(*parsed) : entt::null;
 }
 
 void Scene::Visit(const std::function<void(entt::entity)>& callback) const {
@@ -150,15 +173,19 @@ std::span<const std::string> Scene::GetTags(entt::entity entity) const {
 void Scene::AddTag(entt::entity entity, std::string_view tag) {
     if (!IsValid(entity) || tag.empty()) return;
     auto& values = registry_.get<Tags>(entity).values;
-    if (std::find(values.begin(), values.end(), tag) == values.end()) { values.emplace_back(tag); ++revision_; }
+    if (std::find(values.begin(), values.end(), tag) != values.end()) return;
+    values.emplace_back(tag);
+    ++revision_;
+    NotifyChange(ChangeKind::Modified, entity);
 }
 
 void Scene::RemoveTag(entt::entity entity, std::string_view tag) {
     if (!IsValid(entity)) return;
     auto& values = registry_.get<Tags>(entity).values;
-    const auto size = values.size();
+    if (std::find(values.begin(), values.end(), tag) == values.end()) return;
     std::erase(values, tag);
-    if (values.size() != size) ++revision_;
+    ++revision_;
+    NotifyChange(ChangeKind::Modified, entity);
 }
 
 bool Scene::RegisterController(std::string_view type, ControllerRegistration registration) {
@@ -201,7 +228,7 @@ void Scene::AttachController(entt::entity entity, ControllerDefinition definitio
     (void)inserted;
     auto& slot = it->second;
     std::string error;
-    if (ValidateController(slot.definition, error)) {
+    if (controllerInstantiationEnabled_ && ValidateController(slot.definition, error)) {
         try {
             slot.instance = controllerTypes_.at(slot.definition.type).create();
             if (slot.instance) {
@@ -231,8 +258,9 @@ void Scene::AttachController(entt::entity entity, ControllerDefinition definitio
             inControllerCallback_ = false;
         }
     }
-    if (!error.empty()) spdlog::error("Scene controller on {}: {}", GetId(entity), error);
+    if (!error.empty()) log::Scene().error("Scene controller on {}: {}", GetId(entity).ToString(), error);
     ++revision_;
+    NotifyChange(ChangeKind::Modified, entity);
     FlushCommands();
 }
 
@@ -243,10 +271,10 @@ void Scene::DestroyController(entt::entity entity) {
         inControllerCallback_ = true;
         if (it->second.active) {
             try { it->second.instance->OnDisable(); }
-            catch (const std::exception& e) { spdlog::error("Controller disable: {}", e.what()); }
+            catch (const std::exception& e) { log::Scene().error("Controller disable: {}", e.what()); }
         }
         try { it->second.instance->OnDestroy(); }
-        catch (const std::exception& e) { spdlog::error("Controller destroy: {}", e.what()); }
+        catch (const std::exception& e) { log::Scene().error("Controller destroy: {}", e.what()); }
         inControllerCallback_ = false;
     }
     controllers_.erase(it);
@@ -258,7 +286,9 @@ void Scene::RemoveController(entt::entity entity) {
         commands_.push_back({Command::Kind::RemoveController, entity});
         return;
     }
+    const bool reported = IsValid(entity) && controllers_.contains(entity);
     DestroyController(entity);
+    if (reported) NotifyChange(ChangeKind::Modified, entity);
     FlushCommands();
 }
 
@@ -276,10 +306,11 @@ void Scene::SetControllerEnabled(entt::entity entity, bool enabled) {
         try {
             if (enabled) { slot.active = true; slot.instance->OnEnable(); }
             else { slot.active = false; slot.instance->OnDisable(); }
-        } catch (const std::exception& e) { spdlog::error("Controller enable: {}", e.what()); }
+        } catch (const std::exception& e) { log::Scene().error("Controller enable: {}", e.what()); }
         inControllerCallback_ = false;
     }
     ++revision_;
+    NotifyChange(ChangeKind::Modified, entity);
     FlushCommands();
 }
 
@@ -292,6 +323,7 @@ void Scene::SetControllerAuthoredData(entt::entity entity, StateValue data) {
     if (auto it = controllers_.find(entity); it != controllers_.end()) {
         it->second.definition.data = std::move(data);
         ++revision_;
+        NotifyChange(ChangeKind::Modified, entity);
     }
 }
 
@@ -305,6 +337,7 @@ bool Scene::CommitControllerAuthored(entt::entity entity, std::string& error) {
             it->second.definition.version, it->second.definition.enabled, authored}, error)) return false;
         it->second.definition.data = std::move(authored);
         ++revision_;
+        NotifyChange(ChangeKind::Modified, entity);
         error.clear();
         return true;
     } catch (const std::exception& e) { error = e.what(); return false; }
@@ -333,6 +366,18 @@ bool Scene::RestoreControllerGameState(entt::entity entity, const StateValue& st
     catch (const std::exception& e) { error = e.what(); return false; }
 }
 
+void Scene::SetControllerInstantiationEnabled(bool enabled) {
+    controllerInstantiationEnabled_ = enabled;
+    if (!enabled) {
+        SetControllersActive(false);
+        return;
+    }
+    std::vector<std::pair<entt::entity, ControllerDefinition>> pending;
+    for (const auto& [entity, slot] : controllers_)
+        if (!slot.instance) pending.emplace_back(entity, slot.definition);
+    for (auto& [entity, definition] : pending) AttachController(entity, std::move(definition));
+}
+
 void Scene::SetControllersActive(bool active) {
     if (inControllerCallback_) {
         commands_.push_back({Command::Kind::SetControllersActive, entt::null, {}, active});
@@ -347,7 +392,7 @@ void Scene::SetControllersActive(bool active) {
             it->second.active = active;
             if (active) it->second.instance->OnEnable();
             else it->second.instance->OnDisable();
-        } catch (const std::exception& e) { spdlog::error("Controller activation: {}", e.what()); }
+        } catch (const std::exception& e) { log::Scene().error("Controller activation: {}", e.what()); }
         inControllerCallback_ = false;
     });
     FlushCommands();
@@ -362,7 +407,7 @@ void Scene::UpdateControllers(double deltaSeconds) {
         auto it = controllers_.find(entity);
         if (it != controllers_.end() && it->second.active) {
             try { it->second.instance->Update(deltaSeconds); }
-            catch (const std::exception& e) { spdlog::error("Controller update: {}", e.what()); }
+            catch (const std::exception& e) { log::Scene().error("Controller update: {}", e.what()); }
         }
     }
     inControllerCallback_ = false;
@@ -401,6 +446,27 @@ void Scene::RemoveLifecycleObserver(std::size_t token) {
     lifecycleObservers_.erase(token);
 }
 
+std::size_t Scene::AddChangeObserver(ChangeHandler handler) {
+    const auto token = ++nextChangeObserver_;
+    changeObservers_.emplace(token, std::move(handler));
+    return token;
+}
+
+void Scene::RemoveChangeObserver(std::size_t token) {
+    changeObservers_.erase(token);
+}
+
+void Scene::NotifyChange(const ChangeKind kind, const entt::entity entity) {
+    if (changeObservers_.empty()) return;
+    // Tokens, not iterators: a handler may remove observers.
+    std::vector<std::size_t> tokens;
+    tokens.reserve(changeObservers_.size());
+    for (const auto& [token, handler] : changeObservers_) tokens.push_back(token);
+    for (const auto token : tokens) {
+        if (const auto it = changeObservers_.find(token); it != changeObservers_.end()) it->second(kind, entity);
+    }
+}
+
 void Scene::NotifyLifecycle(LifecycleEvent event, entt::entity entity, entt::id_type component) {
     std::vector<std::size_t> tokens;
     tokens.reserve(lifecycleObservers_.size());
@@ -413,24 +479,37 @@ void Scene::NotifyLifecycle(LifecycleEvent event, entt::entity entity, entt::id_
 
 void Scene::SetActiveCamera(entt::entity entity) {
     if (entity != entt::null && !HasComponent<Camera>(entity)) return;
-    activeCameraId_ = entity == entt::null ? "" : std::string(GetId(entity));
+    activeCameraId_ = entity == entt::null ? std::nullopt : std::optional{GetId(entity)};
     ++revision_;
+    NotifyChange(ChangeKind::Settings);
 }
 
 entt::entity Scene::GetActiveCamera() const {
-    const auto entity = FindById(activeCameraId_);
+    const auto entity = activeCameraId_ ? FindByUuid(*activeCameraId_) : entt::null;
     return HasComponent<Camera>(entity) ? entity : FirstWith<Camera>();
 }
 
 void Scene::SetDirectionalLight(entt::entity entity) {
     if (entity != entt::null && !HasComponent<DirectionalLight>(entity)) return;
-    directionalLightId_ = entity == entt::null ? "" : std::string(GetId(entity));
+    directionalLightId_ = entity == entt::null ? std::nullopt : std::optional{GetId(entity)};
     ++revision_;
+    NotifyChange(ChangeKind::Settings);
 }
 
 entt::entity Scene::GetDirectionalLight() const {
-    const auto entity = FindById(directionalLightId_);
+    const auto entity = directionalLightId_ ? FindByUuid(*directionalLightId_) : entt::null;
     return HasComponent<DirectionalLight>(entity) ? entity : FirstWith<DirectionalLight>();
+}
+
+std::vector<Scene::ComponentType> Scene::GetComponentTypes(const entt::entity entity) const {
+    // is only called from editor (at least now) so this should be fine
+    // but maybe there is a more optimized way
+    std::vector<ComponentType> types;
+    if (!IsValid(entity)) return types;
+    for (const auto [id, storage] : registry_.storage()) {
+        if (storage.contains(entity)) types.push_back({id, storage.info().name()});
+    }
+    return types;
 }
 
 const std::string& Scene::GetName(const entt::entity entity) const {
@@ -445,8 +524,13 @@ void Scene::SetName(const entt::entity entity, const std::string_view name) {
     if (!CheckEntity(entity, "SetName")) {
         return;
     }
-    registry_.get<Name>(entity).value = name;
+    std::string& value = registry_.get<Name>(entity).value;
+    if (value == name) {
+        return;
+    }
+    value = name;
     ++revision_;
+    NotifyChange(ChangeKind::Modified, entity);
 }
 
 // --- Transform & hierarchy -----------------------------------------------------
@@ -458,10 +542,18 @@ Transform& Scene::GetTransform(const entt::entity entity) {
 const Transform& Scene::GetTransform(const entt::entity entity) const {
     if (!CheckEntity(entity, "GetTransform")) {
         //TODO: handle it somehow, maybe throw error event system
-        spdlog::critical("Scene::GetTransform on an invalid entity, exiting");
+        log::Scene().critical("Scene::GetTransform on an invalid entity, exiting");
         std::exit(EXIT_FAILURE);
     }
     return registry_.get<Transform>(entity);
+}
+
+void Scene::SetTransform(const entt::entity entity, const Transform& transform) {
+    if (!CheckEntity(entity, "SetTransform")) {
+        return;
+    }
+    registry_.get<Transform>(entity) = transform;
+    NotifyChange(ChangeKind::Modified, entity);
 }
 
 DirectX::SimpleMath::Matrix Scene::GetWorldMatrix(const entt::entity entity) const {
@@ -502,8 +594,97 @@ bool Scene::SetParent(const entt::entity entity, const entt::entity parent) {
     }
 
     Detach(entity);
-    Attach(entity, parent);
+    Attach(entity, parent);  // which takes it out of its folder under a parent
     ++revision_;
+    NotifyChange(ChangeKind::Hierarchy, entity);
+    return true;
+}
+
+bool Scene::IsValidEditorFolder(const std::string_view path) {
+    if (path.empty()) {
+        return false;
+    }
+    for (std::size_t start = 0;;) {
+        const std::size_t slash = path.find('/', start);
+        if (slash == start || start == path.size()) {
+            return false;  // an empty name: leading, trailing or double slash
+        }
+        if (slash == std::string_view::npos) {
+            return true;
+        }
+        start = slash + 1;
+    }
+}
+
+bool Scene::SetEditorFolder(const entt::entity entity, const std::string_view path) {
+    if (!CheckEntity(entity, "SetEditorFolder")) {
+        return false;
+    }
+    if (!path.empty() && (!IsValidEditorFolder(path) || registry_.get<Hierarchy>(entity).parent != entt::null)) {
+        return false;
+    }
+    if (GetEditorFolder(entity) == path) {
+        return true;
+    }
+    if (path.empty()) {
+        registry_.remove<EditorFolder>(entity);
+    } else {
+        registry_.emplace_or_replace<EditorFolder>(entity, std::string(path));
+    }
+    ++revision_;
+    NotifyChange(ChangeKind::Hierarchy, entity);
+    return true;
+}
+
+const std::string& Scene::GetEditorFolder(const entt::entity entity) const {
+    static const std::string none;
+    if (!CheckEntity(entity, "GetEditorFolder")) {
+        return none;
+    }
+    const auto* folder = registry_.try_get<EditorFolder>(entity);
+    return folder != nullptr ? folder->path : none;
+}
+
+void Scene::SetEditorFolders(std::vector<std::string> folders) {
+    std::vector<std::string> kept;
+    for (std::string& folder : folders) {
+        if (IsValidEditorFolder(folder) && std::ranges::find(kept, folder) == kept.end()) {
+            kept.push_back(std::move(folder));
+        }
+    }
+    if (kept != editorFolders_) {
+        editorFolders_ = std::move(kept);
+        ++revision_;
+        NotifyChange(ChangeKind::Settings);
+    }
+}
+
+bool Scene::SetParentKeepingWorld(const entt::entity entity, const entt::entity parent) {
+    if (!CheckEntity(entity, "SetParentKeepingWorld")) {
+        return false;
+    }
+    if (registry_.get<Hierarchy>(entity).parent == parent) {
+        return true;
+    }
+    const DirectX::SimpleMath::Matrix world = GetWorldMatrix(entity);
+    if (!SetParent(entity, parent)) {
+        return false;
+    }
+    // world = local * parentWorld (row vectors).
+    DirectX::SimpleMath::Matrix local = world;
+    if (parent != entt::null) {
+        local *= GetWorldMatrix(parent).Invert();
+    }
+    Transform& transform = registry_.get<Transform>(entity);
+    DirectX::SimpleMath::Vector3 scale;
+    DirectX::SimpleMath::Quaternion rotation;
+    DirectX::SimpleMath::Vector3 position;
+    if (local.Decompose(scale, rotation, position)) {
+        transform = Transform{position, rotation, scale};
+    } else {
+        transform.position = local.Translation();  // a zero scale somewhere: keep at least the place
+    }
+    NotifyChange(ChangeKind::Modified, entity);
     return true;
 }
 
@@ -524,7 +705,7 @@ bool Scene::CheckEntity(const entt::entity entity, const std::string_view caller
     if (IsValid(entity)) {
         return true;
     }
-    spdlog::error("Scene::{}: invalid or destroyed entity {}", caller, entt::to_integral(entity));
+    log::Scene().error("Scene::{}: invalid or destroyed entity {}", caller, entt::to_integral(entity));
     return false;
 }
 
@@ -537,6 +718,9 @@ void Scene::Detach(const entt::entity entity) {
 
 void Scene::Attach(const entt::entity entity, const entt::entity parent) {
     registry_.get<Hierarchy>(entity).parent = parent;
+    if (parent != entt::null) {
+        registry_.remove<EditorFolder>(entity);  // folders only group roots
+    }
     auto& siblings = parent != entt::null ? registry_.get<Hierarchy>(parent).children : roots_;
     siblings.push_back(entity);
 }

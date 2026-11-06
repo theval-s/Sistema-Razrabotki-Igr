@@ -24,8 +24,11 @@ endif()
 
 set(ENGINE_PUBLIC_HEADERS
     include/engine/core/HandleMap.hpp
+    include/engine/core/Log.hpp
     include/engine/core/ResourceID.hpp
+    include/engine/core/Uuid.hpp
     include/engine/engine.hpp
+    include/engine/rendering/DebugDraw.hpp
     include/engine/rendering/FPSCamera.hpp
     include/engine/rendering/GraphicalState.hpp
     include/engine/rendering/MaterialDrawList.hpp
@@ -33,6 +36,7 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/rendering/passes/LightPass.hpp
     include/engine/rendering/passes/PresentPass.hpp
     include/engine/rendering/passes/RenderPass.hpp
+    include/engine/rendering/passes/SelectionMaskPass.hpp
     include/engine/rendering/passes/ShadowPass.hpp
     include/engine/rendering/RenderWorld.hpp
     include/engine/rendering/RenderingContext.hpp
@@ -49,18 +53,28 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/rendering/resources/VertexLayoutCache.hpp
     include/engine/rendering/UglyUtils.hpp
     include/engine/window.hpp
+    include/engine/scripting/LuaRuntime.hpp
+    include/engine/scripting/ScriptComponent.hpp
+    include/engine/scripting/ScriptProperties.hpp
+    include/engine/scripting/AutoloadDefinition.hpp
+    include/engine/scripting/ScriptSubsystem.hpp
 )
 
 set(ENGINE_SOURCES
+    src/scripting/ScriptProperties.cpp
     src/core/HandleMap.cpp
+    src/core/Log.cpp
     src/core/ResourceID.cpp
+    src/core/Uuid.cpp
     src/engine.cpp
+    src/rendering/DebugDraw.cpp
     src/rendering/FPSCamera.cpp
     src/rendering/GraphicalState.cpp
     src/rendering/passes/GBufferPass.cpp
     src/rendering/passes/LightPass.cpp
     src/rendering/passes/PresentPass.cpp
     src/rendering/passes/RenderPass.cpp
+    src/rendering/passes/SelectionMaskPass.cpp
     src/rendering/passes/ShadowPass.cpp
     src/rendering/RenderingContext.cpp
     src/rendering/RenderingResources.cpp
@@ -76,15 +90,20 @@ set(ENGINE_SOURCES
     src/rendering/resources/VertexLayoutCache.cpp
     src/rendering/UglyUtils.cpp
     src/window.cpp
+    src/scripting/LuaRuntime.cpp
+    src/scripting/AutoloadDefinition.cpp
+    src/scripting/ScriptSubsystem.cpp
 )
 
 set(ENGINE_SHADERS
     shaders/Common.hlsl
+    shaders/DebugDraw.hlsl
     shaders/DirectionalLightVS.hlsl
     shaders/GBufferPass.hlsl
     shaders/GBufferVS.hlsl
     shaders/GBufferPS.hlsl
     shaders/PresentPass.hlsl
+    shaders/SelectionMask.hlsl
     shaders/LightPass.hlsl
     shaders/MaterialTemplate.hlsl
     shaders/ShadowCSMPass.hlsl
@@ -210,6 +229,7 @@ find_package(assimp CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(nlohmann_json_schema_validator CONFIG REQUIRED)
 find_package(stduuid CONFIG REQUIRED)
+find_package(Jolt CONFIG REQUIRED)
 
 # Embed the schema so material parsing does not depend on runtime file locations.
 set(MATERIAL_SCHEMA_FILE "${CMAKE_CURRENT_SOURCE_DIR}/schemas/material.schema.json")
@@ -220,6 +240,8 @@ configure_file(cmake/MaterialSchema.hpp.in generated/MaterialSchema.hpp @ONLY)
 set(ENGINE_CORE_HEADERS
     include/engine/input/InputSubsystem.hpp
     include/engine/input/InputTypes.hpp
+    include/engine/input/Win32InputHost.hpp
+    include/engine/input/Win32PhysicalKey.hpp
     include/engine/rendering/RenderingSubsystem.hpp
     include/engine/rendering/RenderComponents.hpp
     include/engine/rendering/RenderExtractionSubsystem.hpp
@@ -248,12 +270,15 @@ set(ENGINE_CORE_HEADERS
     include/engine/scene/Scene.hpp
     include/engine/scene/SceneDocument.hpp
     include/engine/scene/GameDocument.hpp
+    include/engine/physics/PhysicsComponents.hpp
+    include/engine/physics/PhysicsSubsystem.hpp
     include/engine/scene/Transform.hpp
 )
 
 set(ENGINE_CORE_SOURCES
     src/rendering/RenderingSubsystem.cpp
     src/input/InputSubsystem.cpp
+    src/input/Win32InputHost.cpp
     src/rendering/RenderExtractionSubsystem.cpp
     src/assets/AssetPathResolver.cpp
     src/assets/AssetAuthoring.cpp
@@ -266,6 +291,8 @@ set(ENGINE_CORE_SOURCES
     src/assets/MaterialImporter.cpp
     src/core/FileSystem.cpp
     src/core/Subsystem.cpp
+    src/physics/PhysicsComponents.cpp
+    src/physics/PhysicsSubsystem.cpp
     src/project/Project.cpp
     src/scene/Scene.cpp
     src/scene/SceneDocument.cpp
@@ -283,7 +310,7 @@ foreach(engine_target IN ITEMS engine engine_static)
         target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
         # Assimp is PRIVATE on purpose: AssimpMeshImporter.cpp is its only user and no
         # public header mentions it. Static consumers still get it via the link-only interface.
-        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid Lua::Lua sol2::sol2)
+        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid Lua::Lua sol2::sol2 Jolt::Jolt)
     endif()
 endforeach()
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QPoint>
+#include <QPointF>
 #include <QWidget>
 
 #include <optional>
@@ -12,12 +13,14 @@ class InputSubsystem;
 }
 
 namespace editor {
+class EditorCameraSubsystem;
 
 /// The area the engine renders into. Owns a native window (HWND) that is
 /// handed to the engine as its NativeSurface; Qt never paints it.
 /// Also forwards its keyboard and mouse input to the engine's InputSubsystem.
 /// While the right button is held the cursor is hidden and pinned, so mouse-look
-/// can turn without hitting the screen edge.
+/// can turn without hitting the screen edge, and every key goes to the camera rather than
+/// to shortcuts, so W/E/Q... keep flying.
 class ViewportWidget : public QWidget {
     Q_OBJECT
 
@@ -27,6 +30,8 @@ public:
     [[nodiscard]] engine::NativeSurface surface();
     /// nullptr = input goes nowhere.
     void setInput(engine::InputSubsystem* input);
+    void setCamera(EditorCameraSubsystem* camera);
+    void setPlaying(bool playing);
 
     /// No Qt painting at all, so it can't draw over the swap chain.
     [[nodiscard]] QPaintEngine* paintEngine() const override;
@@ -34,8 +39,16 @@ public:
 signals:
     /// Size in physical pixels.
     void surfaceResized(quint32 width, quint32 height);
+    // Positions are viewport-local, in logical pixels. Not while the right button turns the
+    // view: the cursor is hidden then, and pinned.
+    /// A button went down, before the engine's input sees it.
+    void mousePressed(QPointF position, Qt::MouseButton button, Qt::KeyboardModifiers modifiers);
+    /// The cursor moved over the viewport, or anywhere while a button is held.
+    void mouseMoved(QPointF position);
+    void mouseReleased(QPointF position, Qt::MouseButton button);
 
 protected:
+    bool event(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
@@ -44,6 +57,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
+    void focusInEvent(QFocusEvent* event) override;
     void leaveEvent(QEvent* event) override;
 
 private:
@@ -51,11 +65,13 @@ private:
     void releaseCursor();
 
     engine::InputSubsystem* input_ = nullptr;
+    EditorCameraSubsystem* camera_ = nullptr;
     /// Global position of the previous mouse move; none after the cursor left the widget,
     /// so coming back in elsewhere isn't reported as a jump.
     std::optional<QPoint> last_cursor_{};
     /// Right button held: cursor hidden and warped back to last_cursor_.
     bool cursor_pinned_ = false;
+    bool playing_ = false;
 };
 
 }  // namespace editor

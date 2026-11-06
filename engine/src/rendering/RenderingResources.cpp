@@ -34,7 +34,7 @@ void RenderingResources::Destroy(RenderingResourceManager& resourceManager) {
 }
 
 void RenderingResources::BindCBuffers(RenderingContext& context) {
-    //context.BindCBuffer(BindSlot::CBuffer::Frame, frameCBuffer.GetHandle());
+    context.BindCBuffer(BindSlots::CBuffer::Frame, frameCBuffer.GetHandle());
     context.BindCBuffer(BindSlots::CBuffer::View, viewCBuffer.GetHandle());
     context.BindCBuffer(BindSlots::CBuffer::Material, materialCBuffer.GetHandle());
     context.BindCBuffer(BindSlots::CBuffer::Object, objectCBuffer.GetHandle());

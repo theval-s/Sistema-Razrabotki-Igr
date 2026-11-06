@@ -1,5 +1,5 @@
 ﻿#include <engine/rendering/RenderingSystem.hpp>
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 namespace engine {
 
@@ -22,7 +22,7 @@ bool RenderingSystem::Reinitialize(const NativeSurface& surface) {
     auto& resourceManager = renderingContext_.GetResourceManager();
     for (const auto& renderPass : renderPasses_) {
         if (!renderPass->PreReinitialize(resourceManager, renderingContext_, resources_)) {
-            spdlog::error("Rendering pass failed to release resources before resize");
+            log::Render().error("Rendering pass failed to release resources before resize");
             return false;
         }
     }
@@ -33,7 +33,7 @@ bool RenderingSystem::Reinitialize(const NativeSurface& surface) {
         // the next resize attempt can release it again and retry cleanly.
         for (const auto& renderPass : renderPasses_) {
             if (!renderPass->Reinitialize(resourceManager, renderingContext_, resources_)) {
-                spdlog::error("Failed to restore pass resources after resize failure");
+                log::Render().error("Failed to restore pass resources after resize failure");
             }
         }
         return false;
@@ -42,7 +42,7 @@ bool RenderingSystem::Reinitialize(const NativeSurface& surface) {
     resources_.screenHeight = surface.height;
     for (const auto& renderPass : renderPasses_) {
         if (!renderPass->Reinitialize(resourceManager, renderingContext_, resources_)) {
-            spdlog::error("Rendering pass failed to recreate resources after resize");
+            log::Render().error("Rendering pass failed to recreate resources after resize");
             return false;
         }
     }
@@ -58,6 +58,7 @@ void RenderingSystem::InitializePasses(const uint32_t screenWidth, const uint32_
     renderPasses_.push_back(std::make_unique<ShadowCSMPass>());
     renderPasses_.push_back(std::make_unique<GBufferPass>());
     renderPasses_.push_back(std::make_unique<LightPass>());
+    renderPasses_.push_back(std::make_unique<SelectionMaskPass>());
     renderPasses_.push_back(std::make_unique<PresentPass>());
 
     for (const auto& renderPass : renderPasses_) {
@@ -65,12 +66,15 @@ void RenderingSystem::InitializePasses(const uint32_t screenWidth, const uint32_
     }
 }
 
-void RenderingSystem::RenderFrame() {
+void RenderingSystem::RenderFrame(const FrameContext& frame) {
     if (!ready_) {
         return;
     }
     renderingContext_.ClearState();
     resources_.BindCBuffers(renderingContext_);
+    resources_.frameCBuffer.Update(renderingContext_, [&](FrameBufferData& data) {
+        data.simulationTimeSeconds = static_cast<float>(frame.simulationTimeSeconds);
+    });
     renderingContext_.BindSamplers();
 
     for (const auto& renderPass : renderPasses_) {

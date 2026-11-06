@@ -5,7 +5,7 @@
 
 #include <ranges>
 
-#include <spdlog/spdlog.h>
+#include <editor/editor_log.hpp>
 
 #include <editor/editor_module.hpp>
 
@@ -22,7 +22,7 @@ ModuleLoader::ModuleLoader() = default;
 ModuleLoader::~ModuleLoader() {
     //using std::ranges and std::views is scary for me
     for (Loaded& loaded : std::views::reverse(modules_)) {
-        spdlog::info("Shutting down editor module '{}'", loaded.module->name());
+        editorLog().info("Shutting down editor module '{}'", loaded.module->name());
         loaded.module->shutdown();
         loaded.module.reset();
     }
@@ -34,7 +34,7 @@ void ModuleLoader::loadAll(const QString& directory, EditorContext& context) {
     // By name: vcpkg copies the modules' dependency DLLs into the same directory.
     const QStringList files = dir.entryList({QStringLiteral("editor_module_*.dll")}, QDir::Files, QDir::Name);
     if (files.isEmpty()) {
-        spdlog::warn("No editor modules found in '{}'", directory.toStdString());
+        editorLog().warn("No editor modules found in '{}'", directory.toStdString());
         return;
     }
 
@@ -42,20 +42,20 @@ void ModuleLoader::loadAll(const QString& directory, EditorContext& context) {
         const std::string path = dir.filePath(file).toStdString();
         auto library = std::make_unique<QLibrary>(dir.filePath(file));
         if (!library->load()) {
-            spdlog::error("Editor module '{}' failed to load: {}", path, library->errorString().toStdString());
+            editorLog().error("Editor module '{}' failed to load: {}", path, library->errorString().toStdString());
             continue;
         }
         const auto create = reinterpret_cast<CreateModuleFn>(library->resolve(ModuleEntryPoint));
         if (create == nullptr) {
-            spdlog::error("'{}' has no {}(), not an editor module", path, ModuleEntryPoint);
+            editorLog().error("'{}' has no {}(), not an editor module", path, ModuleEntryPoint);
             continue;
         }
         std::unique_ptr<IEditorModule> module{create()};
         if (module == nullptr) {
-            spdlog::error("Editor module '{}' returned no module", path);
+            editorLog().error("Editor module '{}' returned no module", path);
             continue;
         }
-        spdlog::info("Starting editor module '{}' from {}", module->name(), file.toStdString());
+        editorLog().info("Starting editor module '{}' from {}", module->name(), file.toStdString());
         module->startup(context);
         modules_.push_back({std::move(library), std::move(module)});
     }

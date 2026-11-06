@@ -1,20 +1,17 @@
 #include <editor/selection.hpp>
 
-#include <QTimer>
-
 #include <algorithm>
 #include <utility>
 
 #include <engine/scene/Scene.hpp>
 
+#include <editor/scene_events.hpp>
+
 namespace editor {
 
-Selection::Selection(const engine::Scene& scene, QObject* parent)
-    : QObject(parent), scene_(scene), checked_revision_(scene.GetRevision()) {
-    // Scene has no change signal, only a revision counter: poll it.
-    auto* timer = new QTimer(this);
-    connect(timer, &QTimer::timeout, this, &Selection::dropDestroyed);
-    timer->start(100);
+Selection::Selection(const engine::Scene& scene, SceneEvents& events, QObject* parent)
+    : QObject(parent), scene_(scene) {
+    connect(&events, &SceneEvents::changed, this, &Selection::dropDestroyed);
 }
 
 std::span<const entt::entity> Selection::entities() const noexcept {
@@ -83,11 +80,10 @@ void Selection::assign(std::vector<entt::entity> entities) {
     }
 }
 
-void Selection::dropDestroyed() {
-    if (scene_.GetRevision() == checked_revision_) {
+void Selection::dropDestroyed(const SceneChanges& changes) {
+    if (!changes.structure) {
         return;
     }
-    checked_revision_ = scene_.GetRevision();
     std::vector<entt::entity> entities = entities_;
     std::erase_if(entities, [this](const entt::entity entity) { return !scene_.IsValid(entity); });
     assign(std::move(entities));

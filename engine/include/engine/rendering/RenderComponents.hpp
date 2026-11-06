@@ -38,9 +38,28 @@ struct DirectionalLight {
     float intensity = 1.0f;
 };
 
+/// Omnidirectional light centered at the entity's world position.
+struct PointLight {
+    DirectX::SimpleMath::Vector3 color{1.0f, 1.0f, 1.0f};
+    float intensity = 1.0f;
+    float range = 5.0f;
+};
+
+/// Cone of light centered at the entity's world position, pointing along its
+/// local -Z. Half angles are in radians (not shader-space cosines).
+struct SpotLight {
+    DirectX::SimpleMath::Vector3 color{1.0f, 1.0f, 1.0f};
+    float intensity = 1.0f;
+    float range = 10.0f;
+    float innerHalfAngle = 0.2617994f;
+    float outerHalfAngle = 0.44879895f;
+};
+
 /// Asset names of the primitives shipped in engine/primitives (copied next to the executable).
 namespace BuiltinAssets {
 inline constexpr const char* CubeMesh = "engine/primitives/cube";
+/// 1x1 in XZ, facing +Y.
+inline constexpr const char* PlaneMesh = "engine/primitives/plane";
 inline constexpr const char* WhiteTexture = "engine/primitives/white";
 inline constexpr const char* DefaultMaterialInstance = "engine/primitives/default.material-instance.json";
 }  // namespace BuiltinAssets

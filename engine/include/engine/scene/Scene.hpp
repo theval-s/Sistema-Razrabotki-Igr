@@ -19,6 +19,8 @@
 
 #include <engine/engine_export.hpp>
 #include <engine/scene/Components.hpp>
+#include <engine/physics/PhysicsComponents.hpp>
+#include <engine/scripting/ScriptComponent.hpp>
 #include <engine/scene/Controller.hpp>
 #include <engine/scene/SceneQueries.hpp>
 #include <engine/rendering/RenderComponents.hpp>
@@ -54,6 +56,8 @@ public:
     /// Used when loading saved entities. A duplicate or malformed UUID is rejected.
     entt::entity CreateEntityWithId(std::string_view id, std::string_view name = "Entity",
                                     entt::entity parent = entt::null);
+    entt::entity CreateEntityWithUuid(EntityUuid id, std::string_view name = "Entity",
+                                      entt::entity parent = entt::null);
     /// Destroys the entity and all of its descendants.
     /// Destruction, Clear, controller attachment/removal and activation requested
     /// from a controller callback run FIFO after the outermost callback/teardown.
@@ -62,7 +66,10 @@ public:
     void Clear();
 
     [[nodiscard]] bool IsValid(entt::entity entity) const;
-    [[nodiscard]] std::string_view GetId(entt::entity entity) const;
+    /// Returns the default (zero) UUID for an invalid entity; check IsValid(entity)
+    /// when distinguishing it from a scene entity whose ID is the zero UUID.
+    [[nodiscard]] EntityUuid GetId(entt::entity entity) const;
+    [[nodiscard]] entt::entity FindByUuid(EntityUuid id) const;
     [[nodiscard]] entt::entity FindById(std::string_view id) const;
     [[nodiscard]] entt::entity FindFirstByName(std::string_view name) const;
     [[nodiscard]] std::vector<entt::entity> FindAllByName(std::string_view name) const;
@@ -83,6 +90,7 @@ public:
     [[nodiscard]] std::optional<StateValue> CaptureControllerGameState(entt::entity entity, std::string& error) const;
     [[nodiscard]] bool RestoreControllerGameState(entt::entity entity, const StateValue& state, std::string& error);
     void SetControllersActive(bool active);
+    void SetControllerInstantiationEnabled(bool enabled);
     void UpdateControllers(double deltaSeconds);
     [[nodiscard]] bool IsInControllerCallback() const noexcept { return inControllerCallback_; }
     enum class LifecycleEvent { ComponentRemoving, EntityDestroying };
@@ -91,12 +99,58 @@ public:
     /// Returns a subscription token; remove observers before their captured state dies.
     [[nodiscard]] std::size_t AddLifecycleObserver(LifecycleHandler handler);
     void RemoveLifecycleObserver(std::size_t token);
+
+    // --- Change notifications --------------------------------------------------------
+    // Every change made through Scene's API is reported, for editor.
+    // Writes through the mutable TryGetComponent()/GetTransform() don't emit events,
+    // runtime systems use those every frame a lot. Use Modify()/SetTransform() where it matters.
+
+    enum class ChangeKind : std::uint8_t {
+        /// A new entity. Its components may still be added before the call that created it returns.
+        Created,
+        /// The entity is gone and its handle stale. Children go first.
+        Destroyed,
+        /// Reparented. Also emits for changing which folder entity is in
+        Hierarchy,
+        /// Changing name, tags, transform, components, controller etc
+        Modified,
+        /// Not about an entity (entt::null): the editor folder list, the active camera etc
+        Settings,
+    };
+    using ChangeHandler = std::function<void(ChangeKind, entt::entity)>;
+    /// Called synchronously, right after the scene changes. Handlers must not change the scene.
+
+    /// Returns a subscription token; remove observers before their captured state dies.
+    [[nodiscard]] std::size_t AddChangeObserver(ChangeHandler handler);
+    void RemoveChangeObserver(std::size_t token);
+
     void SetActiveCamera(entt::entity entity);
     [[nodiscard]] entt::entity GetActiveCamera() const;
     void SetDirectionalLight(entt::entity entity);
     [[nodiscard]] entt::entity GetDirectionalLight() const;
+
+    // --- Editor folders ------------------------------------------------------------
+    // Grouping for the editor's hierarchy, saved with the scene and ignored at runtime.
+
+    /// "A/B": nonempty folder names separated by single slashes.
+    [[nodiscard]] static bool IsValidEditorFolder(std::string_view path);
+    /// Puts a entity into a folder
+    bool SetEditorFolder(entt::entity entity, std::string_view path);
+    /// Empty when the entity isn't in a folder.
+    [[nodiscard]] const std::string& GetEditorFolder(entt::entity entity) const;
+    /// Folders that exist even with no entity in them. Invalid paths and repeats are dropped.
+    void SetEditorFolders(std::vector<std::string> folders);
+    [[nodiscard]] std::span<const std::string> GetEditorFolders() const noexcept { return editorFolders_; }
     [[nodiscard]] bool HasUnsupportedComponents() const noexcept { return !unsupported_.empty(); }
     [[nodiscard]] bool HasUnsupportedComponents(entt::entity entity) const noexcept { return unsupported_.contains(entity); }
+
+    /// A component type an entity has, for editor inspector
+    struct ComponentType {
+        entt::id_type id;       // entt::type_hash<T>::value()
+        std::string_view name;  // EnTT's type name, for display only
+    };
+    /// All components for given entity
+    [[nodiscard]] std::vector<ComponentType> GetComponentTypes(entt::entity entity) const;
 
     template <class T, class... Args>
     T* AddComponent(entt::entity entity, Args&&... args) {
@@ -105,6 +159,7 @@ public:
         T& result = registry_.emplace<T>(entity, std::forward<Args>(args)...);
         if constexpr (!IsSerializableComponent<T>) unsupported_[entity].insert(entt::type_hash<T>::value());
         ++revision_;
+        NotifyChange(ChangeKind::Modified, entity);
         return &result;
     }
 
@@ -121,9 +176,23 @@ public:
             }
         }
         ++revision_;
+        NotifyChange(ChangeKind::Modified, entity);
         return true;
     }
 
+    /// Edits the entity's T through `edit(T&)` and reports it. False, without
+    /// calling `edit`, if the entity has no T.
+    template <class T, class Fn>
+    bool Modify(entt::entity entity, Fn&& edit) {
+        static_assert(!IsRequiredComponent<T>, "required components are managed by Scene");
+        T* component = IsValid(entity) ? registry_.try_get<T>(entity) : nullptr;
+        if (component == nullptr) return false;
+        std::forward<Fn>(edit)(*component);
+        NotifyChange(ChangeKind::Modified, entity);
+        return true;
+    }
+
+    /// Writes through it aren't reported; see Modify().
     template <class T>
     [[nodiscard]] T* TryGetComponent(entt::entity entity) {
         static_assert(!IsRequiredComponent<T>, "required components are managed by Scene");
@@ -159,8 +228,11 @@ public:
     void SetName(entt::entity entity, std::string_view name);
 
     // --- Transform & hierarchy -----------------------------------------------------
+    /// Writes through it aren't reported; see SetTransform().
     [[nodiscard]] Transform& GetTransform(entt::entity entity);
     [[nodiscard]] const Transform& GetTransform(entt::entity entity) const;
+    /// The local transform, reported.
+    void SetTransform(entt::entity entity, const Transform& transform);
     /// Local transform combined with all ancestors.
     [[nodiscard]] DirectX::SimpleMath::Matrix GetWorldMatrix(entt::entity entity) const;
 
@@ -169,23 +241,27 @@ public:
     /// entt::null as parent makes the entity a root. Returns false (and changes
     /// nothing) if that would create a cycle or an entity is invalid.
     bool SetParent(entt::entity entity, entt::entity parent);
+    /// SetParent() that changes the local transform too
+    /// without this entity would teleport when reparenting
+    bool SetParentKeepingWorld(entt::entity entity, entt::entity parent);
     [[nodiscard]] std::span<const entt::entity> GetChildren(entt::entity entity) const;
     [[nodiscard]] std::span<const entt::entity> GetRootEntities() const noexcept;
 
     /// Incremented when entities are created, destroyed, renamed or reparented
-    /// through Scene. Cheap way for the editor to know when to rebuild its
-    /// hierarchy view. Component insertion and removal also increment it.
+    /// through Scene, and when components are added or removed. Not by value
+    /// changes such as Modify(): observe changes for those.
     [[nodiscard]] std::uint64_t GetRevision() const noexcept { return revision_; }
 
 private:
     template <class T>
     static constexpr bool IsRequiredComponent = std::is_same_v<T, Name> || std::is_same_v<T, Transform> ||
                                                  std::is_same_v<T, Hierarchy> || std::is_same_v<T, EntityId> ||
-                                                 std::is_same_v<T, Tags>;
+                                                 std::is_same_v<T, Tags> || std::is_same_v<T, EditorFolder>;
     template <class T>
     static constexpr bool IsSerializableComponent = std::is_same_v<T, MeshRenderer> ||
-        std::is_same_v<T, Camera> || std::is_same_v<T, DirectionalLight> || std::is_same_v<T, Bounds> ||
-        std::is_same_v<T, GamePersistence>;
+        std::is_same_v<T, Camera> || std::is_same_v<T, DirectionalLight> ||
+        std::is_same_v<T, PointLight> || std::is_same_v<T, SpotLight> || std::is_same_v<T, Bounds> ||
+        std::is_same_v<T, GamePersistence> || std::is_same_v<T, RigidBody> || std::is_same_v<T, Collider> || std::is_same_v<T, ScriptComponent>;
     /// Logs and returns false for an invalid entity. `caller` names the public function.
     [[nodiscard]] bool CheckEntity(entt::entity entity, std::string_view caller) const;
     void Detach(entt::entity entity);
@@ -194,6 +270,7 @@ private:
     void FlushCommands();
     void DestroyController(entt::entity entity);
     void NotifyLifecycle(LifecycleEvent event, entt::entity entity, entt::id_type component);
+    void NotifyChange(ChangeKind kind, entt::entity entity = entt::null);
 
     struct ControllerSlot {
         ControllerDefinition definition;
@@ -210,7 +287,7 @@ private:
     };
 
     entt::registry registry_;
-    std::unordered_map<std::string, entt::entity> ids_;
+    std::unordered_map<EntityUuid, entt::entity, EntityUuidHash> ids_;
     std::unordered_map<entt::entity, std::unordered_set<entt::id_type>> unsupported_;
     std::unordered_map<std::string, ControllerRegistration> controllerTypes_;
     std::unordered_map<entt::entity, ControllerSlot> controllers_;
@@ -221,11 +298,15 @@ private:
     bool flushingCommands_ = false;
     std::unordered_map<std::size_t, LifecycleHandler> lifecycleObservers_;
     std::size_t nextLifecycleObserver_ = 0;
+    std::unordered_map<std::size_t, ChangeHandler> changeObservers_;
+    std::size_t nextChangeObserver_ = 0;
     bool controllersActive_ = false;
+    bool controllerInstantiationEnabled_ = true;
     bool inControllerCallback_ = false;
     std::size_t destructionDepth_ = 0;
-    std::string activeCameraId_;
-    std::string directionalLightId_;
+    std::optional<EntityUuid> activeCameraId_;
+    std::optional<EntityUuid> directionalLightId_;
+    std::vector<std::string> editorFolders_;
     std::vector<entt::entity> roots_;
     std::uint64_t revision_ = 0;
 };

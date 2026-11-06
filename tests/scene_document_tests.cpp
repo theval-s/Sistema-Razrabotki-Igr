@@ -5,6 +5,7 @@
 #include <engine/assets/AssetCatalog.hpp>
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -81,6 +82,39 @@ TEST(StateValue, MissingFieldsAndWrongTypesHaveDefaults) {
     EXPECT_TRUE(scalar.HasValue("child"));
     EXPECT_TRUE(scalar.At("child").At("value").Boolean());
     EXPECT_EQ(engine::StateValue{-1}.Unsigned(), 0u);
+}
+
+TEST(SceneDocument, ScriptSlotsRoundTripEmptyDisabledAndMissingAssets) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    const auto empty = scene.CreateEntity("Empty script slot");
+    scene.AddComponent<engine::ScriptComponent>(empty);
+    const auto assigned = scene.CreateEntity("Missing script");
+    const engine::AssetReference reference{engine::NewUuid(), "game/deleted.lua"};
+    scene.AddComponent<engine::ScriptComponent>(assigned, engine::ScriptComponent{reference, false,
+        {{"horseName", "Runner"}, {"speed", 3.5}, {"racing", true}}});
+    engine::SceneDocument captured, parsed;
+    std::string text, error;
+    ASSERT_TRUE(engine::CaptureSceneDocument(scene, host.GetSceneAssets(), captured, error)) << error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(captured, text, error)) << error;
+    ASSERT_TRUE(engine::ParseSceneDocument(text, parsed, error)) << error;
+    engine::Scene restored;
+    engine::PopulateScene(parsed, host.GetSceneAssets(), restored);
+    const auto* emptySlot = restored.TryGetComponent<engine::ScriptComponent>(restored.FindFirstByName("Empty script slot"));
+    ASSERT_NE(emptySlot, nullptr);
+    EXPECT_FALSE(emptySlot->script.id.IsValid());
+    const auto* missing = restored.TryGetComponent<engine::ScriptComponent>(restored.FindFirstByName("Missing script"));
+    ASSERT_NE(missing, nullptr);
+    EXPECT_EQ(missing->script.id, reference.id);
+    EXPECT_EQ(missing->script.path, reference.path);
+    EXPECT_FALSE(missing->enabled);
+    EXPECT_EQ(missing->properties.at("horseName").String(), "Runner");
+    EXPECT_EQ(missing->properties.at("speed").Number(), 3.5);
+    EXPECT_TRUE(missing->properties.at("racing").Boolean());
+    const auto enabled = text.find("\"enabled\": false");
+    ASSERT_NE(enabled, std::string::npos);
+    text.replace(enabled, std::string("\"enabled\": false").size(), "\"enabled\": 1");
+    EXPECT_FALSE(engine::ParseSceneDocument(text, parsed, error));
 }
 
 TEST(SceneDocument, ControllerCommandsFlushInFifoOrderWithoutReentry) {
@@ -205,9 +239,9 @@ TEST(SceneDocument, RoundTripAndStructuralValidation) {
     engine::SceneDocument parsed;
     ASSERT_TRUE(engine::ParseSceneDocument(json, parsed, error)) << error;
     ASSERT_EQ(parsed.entities.size(), 2u);
-    EXPECT_EQ(parsed.entities[1].parent, cameraId);
+    EXPECT_EQ(parsed.entities[1].parent, engine::EntityUuid(cameraId));
     EXPECT_EQ(parsed.entities[1].renderer->mesh.path, "engine/primitives/cube/model.obj");
-    EXPECT_EQ(parsed.activeCamera, cameraId);
+    EXPECT_EQ(parsed.activeCamera, engine::EntityUuid(cameraId));
 
     parsed.entities[0].parent = meshId;
     EXPECT_FALSE(engine::SerializeSceneDocument(parsed, json, error));
@@ -216,6 +250,39 @@ TEST(SceneDocument, RoundTripAndStructuralValidation) {
     parsed.entities[1].id = cameraId;
     EXPECT_FALSE(engine::SerializeSceneDocument(parsed, json, error));
     EXPECT_NE(error.find("duplicate"), std::string::npos);
+}
+
+TEST(SceneDocument, LocalLightsRoundTripAndValidateSpotAngles) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    const auto point = scene.CreateEntity("Point");
+    const auto spot = scene.CreateEntity("Spot");
+    scene.GetTransform(spot).position = {1, 2, 3};
+    ASSERT_NE(scene.AddComponent<engine::PointLight>(point,
+        engine::PointLight{{0.2f, 0.4f, 0.6f}, 3.0f, 4.0f}), nullptr);
+    ASSERT_NE(scene.AddComponent<engine::SpotLight>(spot,
+        engine::SpotLight{{0.8f, 0.1f, 0.3f}, 7.0f, 9.0f, 0.2f, 0.5f}), nullptr);
+    engine::SceneDocument captured;
+    std::string json, error;
+    ASSERT_TRUE(engine::CaptureSceneDocument(scene, host.GetSceneAssets(), captured, error)) << error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(captured, json, error)) << error;
+    engine::SceneDocument decoded;
+    ASSERT_TRUE(engine::ParseSceneDocument(json, decoded, error)) << error;
+    engine::Scene restored;
+    engine::PopulateScene(decoded, host.GetSceneAssets(), restored);
+    const auto* restoredPoint = restored.TryGetComponent<engine::PointLight>(restored.FindById(scene.GetId(point).ToString()));
+    const auto* restoredSpot = restored.TryGetComponent<engine::SpotLight>(restored.FindById(scene.GetId(spot).ToString()));
+    ASSERT_NE(restoredPoint, nullptr);
+    ASSERT_NE(restoredSpot, nullptr);
+    EXPECT_FLOAT_EQ(restoredPoint->range, 4.0f);
+    EXPECT_FLOAT_EQ(restoredPoint->color.y, 0.4f);
+    EXPECT_FLOAT_EQ(restoredSpot->innerHalfAngle, 0.2f);
+    EXPECT_FLOAT_EQ(restoredSpot->outerHalfAngle, 0.5f);
+    EXPECT_FLOAT_EQ(restored.GetTransform(restored.FindById(scene.GetId(spot).ToString())).position.y, 2.0f);
+
+    decoded.entities[1].spotLight->innerHalfAngle = 0.5f;
+    EXPECT_FALSE(engine::SerializeSceneDocument(decoded, json, error));
+    EXPECT_NE(error.find("half angles"), std::string::npos);
 }
 
 TEST(SceneDocument, RejectsUnknownComponentsAndPreservesOutputOnFailure) {
@@ -236,7 +303,7 @@ TEST(SceneDocument, SceneOwnsIdentifiersHierarchyAndRequiredComponents) {
     const auto child = scene.CreateEntity("Child", parent);
     ASSERT_TRUE(parent != entt::null);
     ASSERT_TRUE(child != entt::null);
-    const std::string childId(scene.GetId(child));
+    const auto childId = scene.GetId(child);
     EXPECT_EQ(scene.FindById(parentId), parent);
     EXPECT_EQ(scene.GetParent(child), parent);
     EXPECT_TRUE(scene.CreateEntityWithId(parentId) == entt::null);
@@ -252,7 +319,59 @@ TEST(SceneDocument, SceneOwnsIdentifiersHierarchyAndRequiredComponents) {
     EXPECT_FALSE(scene.HasUnsupportedComponents());
     scene.DestroyEntity(parent);
     EXPECT_TRUE(scene.FindById(parentId) == entt::null);
-    EXPECT_TRUE(scene.FindById(childId) == entt::null);
+    EXPECT_TRUE(scene.FindByUuid(childId) == entt::null);
+}
+
+TEST(SceneDocument, CompactTypedIdsPreserveCanonicalJsonAndZeroEntityId) {
+    static_assert(sizeof(engine::EntityUuid) == 16);
+    static_assert(!std::is_same_v<engine::EntityUuid, engine::AssetUuid>);
+    constexpr auto zero = "00000000-0000-0000-0000-000000000000";
+    const auto id = engine::EntityUuid::Parse(zero);
+    ASSERT_TRUE(id);
+    EXPECT_FALSE(id->IsValid()); // Zero remains a valid *entity* ID in existing scene files.
+    EXPECT_FALSE(engine::AssetUuid(zero).IsValid());
+    engine::Scene scene;
+    const auto camera = scene.CreateEntityWithId(zero, "Zero camera");
+    ASSERT_TRUE(camera != entt::null);
+    scene.AddComponent<engine::Camera>(camera);
+    scene.SetActiveCamera(camera);
+    EXPECT_EQ(scene.FindByUuid(*id), camera);
+    EXPECT_EQ(scene.FindById(zero), camera);
+    engine::SceneDocument document;
+    document.entities.push_back({.id = *id, .name = "Zero camera", .camera = engine::Camera{}});
+    document.activeCamera = *id;
+    std::string json, error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(document, json, error)) << error;
+    EXPECT_NE(json.find(zero), std::string::npos);
+    engine::SceneDocument parsed;
+    ASSERT_TRUE(engine::ParseSceneDocument(json, parsed, error)) << error;
+    EXPECT_EQ(parsed.entities[0].id, *id);
+    EXPECT_EQ(parsed.activeCamera, id);
+}
+
+TEST(SceneDocument, ListsComponentTypesOfAnEntity) {
+    engine::Scene scene;
+    const auto entity = scene.CreateEntity("Light");
+    const auto other = scene.CreateEntity("Camera");
+    ASSERT_NE(scene.AddComponent<engine::PointLight>(entity), nullptr);
+    ASSERT_NE(scene.AddComponent<engine::Camera>(other), nullptr);
+    auto has = [&](entt::entity e, entt::id_type id) {
+        const auto types = scene.GetComponentTypes(e);
+        return std::any_of(types.begin(), types.end(), [id](const auto& type) { return type.id == id; });
+    };
+    for (const entt::id_type required : {entt::type_hash<engine::Name>::value(), entt::type_hash<engine::Tags>::value(),
+                                         entt::type_hash<engine::Transform>::value(),
+                                         entt::type_hash<engine::Hierarchy>::value(),
+                                         entt::type_hash<engine::EntityId>::value()}) {
+        EXPECT_TRUE(has(entity, required));
+    }
+    EXPECT_TRUE(has(entity, entt::type_hash<engine::PointLight>::value()));
+    EXPECT_FALSE(has(entity, entt::type_hash<engine::Camera>::value()));
+    EXPECT_EQ(scene.GetComponentTypes(entity).size(), 6u);
+    EXPECT_TRUE(scene.RemoveComponent<engine::PointLight>(entity));
+    EXPECT_FALSE(has(entity, entt::type_hash<engine::PointLight>::value()));
+    scene.DestroyEntity(entity);
+    EXPECT_TRUE(scene.GetComponentTypes(entity).empty());
 }
 
 TEST(SceneDocument, CodeOnlySaveLoadAndMalformedFilePreservesScene) {
@@ -315,6 +434,19 @@ TEST(SceneDocument, ExampleGameSceneResolvesAllAssetReferences) {
     engine::SceneDocument document;
     std::string error;
     ASSERT_TRUE(engine::ParseSceneDocument(text, document, error)) << error;
+    std::size_t pointLights = 0, spotLights = 0, animatedLights = 0;
+    for (const auto& entity : document.entities) {
+        pointLights += entity.pointLight.has_value();
+        spotLights += entity.spotLight.has_value();
+        if (entity.pointLight || entity.spotLight) {
+            ASSERT_TRUE(entity.controller.has_value()) << entity.name;
+            EXPECT_EQ(entity.controller->type, "example/light-motion");
+            ++animatedLights;
+        }
+    }
+    EXPECT_EQ(pointLights, 2u);
+    EXPECT_EQ(spotLights, 2u);
+    EXPECT_EQ(animatedLights, 4u);
     engine::AssetCatalog catalog;
     ASSERT_TRUE(catalog.Scan(root / "example_game", root / "engine", error)) << error;
     for (const auto& entity : document.entities) {
@@ -341,21 +473,21 @@ TEST(GameDocument, SavesOnlyOptedInStateWithSpawnsAndTombstones) {
     EXPECT_EQ(groundHits.front().entity, ground);
     ASSERT_TRUE(host.GetScene().TryGetComponent<engine::GamePersistence>(host.GetScene().FindFirstByName("Sign")));
     auto& scene = host.GetScene();
-    const auto signId = std::string(scene.GetId(scene.FindFirstByName("Sign")));
-    const auto tableId = std::string(scene.GetId(scene.FindFirstByName("Table")));
-    scene.GetTransform(scene.FindById(signId)).position = {7, 8, 9};
-    scene.GetTransform(scene.FindById(tableId)).position = {100, 100, 100}; // not persisted
+    const auto signId = scene.GetId(scene.FindFirstByName("Sign"));
+    const auto tableId = scene.GetId(scene.FindFirstByName("Table"));
+    scene.GetTransform(scene.FindByUuid(signId)).position = {7, 8, 9};
+    scene.GetTransform(scene.FindByUuid(tableId)).position = {100, 100, 100}; // not persisted
     struct TransientCache { int value; };
-    ASSERT_NE(scene.AddComponent<TransientCache>(scene.FindById(tableId), 123), nullptr);
+    ASSERT_NE(scene.AddComponent<TransientCache>(scene.FindByUuid(tableId), 123), nullptr);
     std::string detail;
-    ASSERT_TRUE(scene.RestoreControllerGameState(scene.FindById(signId),
+    ASSERT_TRUE(scene.RestoreControllerGameState(scene.FindByUuid(signId),
         engine::StateValue::Object{{"goal", "trade"}}, detail));
-    const auto spawned = scene.CreateEntity("Spawned NPC", scene.FindById(tableId));
-    const auto spawnedId = std::string(scene.GetId(spawned));
+    const auto spawned = scene.CreateEntity("Spawned NPC", scene.FindByUuid(tableId));
+    const auto spawnedId = scene.GetId(spawned);
     ASSERT_NE(scene.AddComponent<engine::GamePersistence>(spawned, engine::GamePersistence{true, false}), nullptr);
     scene.GetTransform(spawned).position = {3, 4, 5};
     const auto child = scene.CreateEntity("Spawned child", spawned);
-    const auto childId = std::string(scene.GetId(child));
+    const auto childId = scene.GetId(child);
     ASSERT_NE(scene.AddComponent<engine::GamePersistence>(child, engine::GamePersistence{true, false}), nullptr);
     scene.DestroyEntity(scene.FindFirstByName("Hammer"));
     const auto file = std::filesystem::temp_directory_path() / ("sri-game-" + engine::NewUuid() + ".save.json");
@@ -373,25 +505,25 @@ TEST(GameDocument, SavesOnlyOptedInStateWithSpawnsAndTombstones) {
     EXPECT_EQ(document.entities.size(), 3u); // sign + two spawns, not table/terrain
     ASSERT_TRUE(host.LoadGame(file, error)) << error;
     EXPECT_TRUE(scene.FindFirstByName("Hammer") == entt::null);
-    EXPECT_EQ(scene.GetTransform(scene.FindById(signId)).position,
+    EXPECT_EQ(scene.GetTransform(scene.FindByUuid(signId)).position,
               (DirectX::SimpleMath::Vector3{7, 8, 9}));
-    EXPECT_EQ(scene.GetTransform(scene.FindById(tableId)).position,
+    EXPECT_EQ(scene.GetTransform(scene.FindByUuid(tableId)).position,
               (DirectX::SimpleMath::Vector3{-2.5f, 0.55f, 0}));
-    EXPECT_TRUE(scene.FindById(spawnedId) != entt::null);
-    EXPECT_EQ(scene.GetParent(scene.FindById(spawnedId)), scene.FindById(tableId));
-    EXPECT_EQ(scene.GetParent(scene.FindById(childId)), scene.FindById(spawnedId));
-    const auto retained = scene.CaptureControllerGameState(scene.FindById(signId), detail);
+    EXPECT_TRUE(scene.FindByUuid(spawnedId) != entt::null);
+    EXPECT_EQ(scene.GetParent(scene.FindByUuid(spawnedId)), scene.FindByUuid(tableId));
+    EXPECT_EQ(scene.GetParent(scene.FindByUuid(childId)), scene.FindByUuid(spawnedId));
+    const auto retained = scene.CaptureControllerGameState(scene.FindByUuid(signId), detail);
     ASSERT_TRUE(retained);
     EXPECT_EQ(retained->At("goal").String(), "trade");
     ASSERT_TRUE(host.SaveGame(file, error)) << error;
     ASSERT_TRUE(host.LoadGame(file, error)) << error;
-    EXPECT_TRUE(scene.FindById(spawnedId) != entt::null);
+    EXPECT_TRUE(scene.FindByUuid(spawnedId) != entt::null);
     document.scene.id = engine::NewUuid();
     std::string invalid;
     ASSERT_TRUE(engine::SerializeGameDocument(document, invalid, error)) << error;
     std::ofstream(file, std::ios::trunc) << invalid;
     EXPECT_FALSE(host.LoadGame(file, error));
-    EXPECT_TRUE(scene.FindById(spawnedId) != entt::null);
+    EXPECT_TRUE(scene.FindByUuid(spawnedId) != entt::null);
     host.Shutdown();
     std::filesystem::remove(file);
 }
@@ -421,4 +553,186 @@ TEST(GameDocument, RestoresRegisteredControllerBeforeEnable) {
     EXPECT_EQ(host.GetScene().GetControllerDefinition(host.GetScene().FindFirstByName("Sign"))->data.Number(), 0.3);
     host.Shutdown();
     std::filesystem::remove(file);
+}
+
+TEST(SceneDocument, DuplicatedSubtreesGetFreshIdsAndKeepTheirParent) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    const auto group = scene.CreateEntity("Group");
+    const auto lamp = scene.CreateEntity("Lamp", group);
+    scene.AddTag(lamp, "light");
+    scene.GetTransform(lamp).position = {1, 2, 3};
+    scene.AddComponent<engine::PointLight>(lamp, engine::PointLight{{1, 0, 0}, 2.0f, 7.0f});
+    const auto loose = scene.CreateEntity("Loose", group);
+
+    // Lamp is inside Group's subtree, so it's taken once, after its parent.
+    std::vector<engine::SceneEntityDefinition> captured;
+    std::string error;
+    const std::vector<entt::entity> picked{lamp, group};
+    ASSERT_TRUE(engine::CaptureEntities(scene, host.GetSceneAssets(), picked, captured, error)) << error;
+    ASSERT_EQ(captured.size(), 3u);
+    EXPECT_EQ(captured[0].name, "Group");
+
+    const auto copies = engine::InstantiateEntities(captured, host.GetSceneAssets(), scene, true);
+    ASSERT_EQ(copies.size(), 3u);
+    const auto groupCopy = copies[0];
+    const auto lampCopy = copies[1];
+    EXPECT_NE(scene.GetId(groupCopy), scene.GetId(group));
+    EXPECT_TRUE(scene.GetParent(groupCopy) == entt::null);
+    EXPECT_EQ(scene.GetParent(lampCopy), groupCopy);
+    EXPECT_EQ(scene.GetChildren(groupCopy).size(), 2u);
+    EXPECT_EQ(scene.GetName(lampCopy), "Lamp");
+    ASSERT_EQ(scene.GetTags(lampCopy).size(), 1u);
+    EXPECT_EQ(scene.GetTags(lampCopy)[0], "light");
+    EXPECT_EQ(scene.GetTransform(lampCopy).position, (DirectX::SimpleMath::Vector3{1, 2, 3}));
+    const auto* light = scene.TryGetComponent<engine::PointLight>(lampCopy);
+    ASSERT_NE(light, nullptr);
+    EXPECT_EQ(light->range, 7.0f);
+    EXPECT_EQ(scene.GetChildren(group).size(), 2u);  // the original is untouched
+
+    // A subtree whose parent isn't copied goes under the same parent.
+    const std::vector<entt::entity> child{loose};
+    ASSERT_TRUE(engine::CaptureEntities(scene, host.GetSceneAssets(), child, captured, error)) << error;
+    const auto looseCopy = engine::InstantiateEntities(captured, host.GetSceneAssets(), scene, true);
+    ASSERT_EQ(looseCopy.size(), 1u);
+    EXPECT_EQ(scene.GetParent(looseCopy[0]), group);
+}
+
+TEST(SceneDocument, InstantiateWithKeptIdsRestoresDeletedSubtree) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    const auto parent = scene.CreateEntity("Parent");
+    const auto group = scene.CreateEntity("Group", parent);
+    const auto child = scene.CreateEntity("Child", group);
+    const auto groupId = scene.GetId(group);
+    const auto childId = scene.GetId(child);
+
+    std::vector<engine::SceneEntityDefinition> captured;
+    std::string error;
+    const std::vector<entt::entity> picked{group};
+    ASSERT_TRUE(engine::CaptureEntities(scene, host.GetSceneAssets(), picked, captured, error)) << error;
+    scene.DestroyEntity(group);
+    ASSERT_TRUE(scene.FindByUuid(childId) == entt::null);
+
+    const auto restored = engine::InstantiateEntities(captured, host.GetSceneAssets(), scene, false);
+    ASSERT_EQ(restored.size(), 2u);
+    EXPECT_EQ(scene.GetId(restored[0]), groupId);
+    EXPECT_EQ(scene.GetParent(restored[0]), parent);
+    EXPECT_EQ(scene.GetParent(scene.FindByUuid(childId)), restored[0]);
+
+    // Already there: skipped rather than duplicated.
+    const auto again = engine::InstantiateEntities(captured, host.GetSceneAssets(), scene, false);
+    EXPECT_TRUE(again[0] == entt::null);
+    EXPECT_EQ(scene.GetChildren(parent).size(), 1u);
+}
+
+TEST(Scene, SetParentKeepingWorldLeavesEntityInPlace) {
+    using DirectX::SimpleMath::Quaternion;
+    using DirectX::SimpleMath::Vector3;
+    engine::Scene scene;
+    const auto parent = scene.CreateEntity("Parent");
+    scene.GetTransform(parent) = {{10, 0, 0}, Quaternion::CreateFromYawPitchRoll(1.0f, 0, 0), {2, 2, 2}};
+    const auto child = scene.CreateEntity("Child");
+    scene.GetTransform(child).position = {1, 2, 3};
+    const auto expectNear = [](const Vector3& a, const Vector3& b) {
+        EXPECT_NEAR(a.x, b.x, 1e-4f);
+        EXPECT_NEAR(a.y, b.y, 1e-4f);
+        EXPECT_NEAR(a.z, b.z, 1e-4f);
+    };
+
+    ASSERT_TRUE(scene.SetParentKeepingWorld(child, parent));
+    EXPECT_EQ(scene.GetParent(child), parent);
+    expectNear(scene.GetWorldMatrix(child).Translation(), {1, 2, 3});
+    expectNear(scene.GetTransform(child).scale, {0.5f, 0.5f, 0.5f});
+
+    ASSERT_TRUE(scene.SetParentKeepingWorld(child, entt::null));
+    EXPECT_TRUE(scene.GetParent(child) == entt::null);
+    expectNear(scene.GetTransform(child).position, {1, 2, 3});
+    expectNear(scene.GetTransform(child).scale, {1, 1, 1});
+
+    // A cycle is refused and changes nothing.
+    ASSERT_TRUE(scene.SetParentKeepingWorld(child, parent));
+    const auto before = scene.GetTransform(parent).position;
+    EXPECT_FALSE(scene.SetParentKeepingWorld(parent, child));
+    EXPECT_TRUE(scene.GetParent(parent) == entt::null);
+    EXPECT_EQ(scene.GetTransform(parent).position, before);
+}
+
+TEST(SceneDocument, EditorFoldersRoundTripAndOnlyGroupRoots) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    const auto barrel = scene.CreateEntity("Barrel");
+    ASSERT_TRUE(scene.SetEditorFolder(barrel, "Props/Barrels"));
+    const auto lid = scene.CreateEntity("Lid", barrel);
+    EXPECT_FALSE(scene.SetEditorFolder(lid, "Props"));  // not a root
+    EXPECT_FALSE(scene.SetEditorFolder(barrel, "Props//Barrels"));
+    scene.SetEditorFolders({"Empty", "Props/Barrels", "Empty", "/bad"});
+    ASSERT_EQ(scene.GetEditorFolders().size(), 2u);
+
+    engine::SceneDocument captured, parsed;
+    std::string text, error;
+    ASSERT_TRUE(engine::CaptureSceneDocument(scene, host.GetSceneAssets(), captured, error)) << error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(captured, text, error)) << error;
+    ASSERT_TRUE(engine::ParseSceneDocument(text, parsed, error)) << error;
+    engine::Scene restored;
+    engine::PopulateScene(parsed, host.GetSceneAssets(), restored);
+    const auto restoredBarrel = restored.FindFirstByName("Barrel");
+    EXPECT_EQ(restored.GetEditorFolder(restoredBarrel), "Props/Barrels");
+    EXPECT_EQ(restored.GetEditorFolder(restored.FindFirstByName("Lid")), "");
+    ASSERT_EQ(restored.GetEditorFolders().size(), 2u);
+    EXPECT_EQ(restored.GetEditorFolders()[0], "Empty");
+
+    // Getting a parent takes the entity out of its folder.
+    const auto crate = restored.CreateEntity("Crate");
+    ASSERT_TRUE(restored.SetParent(restoredBarrel, crate));
+    EXPECT_EQ(restored.GetEditorFolder(restoredBarrel), "");
+
+    // A folder on a child is rejected when loading.
+    const auto childWithFolder = text.find("\"name\": \"Lid\"");
+    ASSERT_NE(childWithFolder, std::string::npos);
+    std::string invalid = text;
+    invalid.insert(childWithFolder, "\"editorFolder\": \"Props\", ");
+    EXPECT_FALSE(engine::ParseSceneDocument(invalid, parsed, error));
+    EXPECT_NE(error.find("root entities"), std::string::npos) << error;
+}
+
+TEST(Scene, ChangeObserversSeeEveryEditMadeThroughTheScene) {
+    engine::Scene scene;
+    using Kind = engine::Scene::ChangeKind;
+    std::vector<std::pair<Kind, entt::entity>> changes;
+    const auto token = scene.AddChangeObserver([&](Kind kind, entt::entity entity) { changes.emplace_back(kind, entity); });
+    const auto take = [&changes] { return std::exchange(changes, {}); };
+    using Changes = std::vector<std::pair<Kind, entt::entity>>;
+
+    const auto parent = scene.CreateEntity("Parent");
+    const auto child = scene.CreateEntity("Child");
+    EXPECT_EQ(take(), (Changes{{Kind::Created, parent}, {Kind::Created, child}}));
+
+    scene.SetName(child, "Renamed");
+    scene.SetName(child, "Renamed");  // no change, no report
+    scene.AddTag(child, "a");
+    scene.AddTag(child, "a");
+    EXPECT_EQ(take(), (Changes{{Kind::Modified, child}, {Kind::Modified, child}}));
+
+    ASSERT_TRUE(scene.SetEditorFolder(child, "Props"));
+    ASSERT_TRUE(scene.SetParent(child, parent));
+    scene.SetEditorFolders({"Empty"});
+    EXPECT_EQ(take(), (Changes{{Kind::Hierarchy, child}, {Kind::Hierarchy, child}, {Kind::Settings, entt::null}}));
+
+    auto transform = scene.GetTransform(child);
+    transform.position.x = 2.0f;
+    scene.SetTransform(child, transform);
+    scene.GetTransform(child).position.y = 3.0f;  // runtime-style write: not reported
+    ASSERT_NE(scene.AddComponent<engine::PointLight>(child), nullptr);
+    EXPECT_TRUE(scene.Modify<engine::PointLight>(child, [](engine::PointLight& light) { light.range = 4.0f; }));
+    EXPECT_FALSE(scene.Modify<engine::SpotLight>(child, [](engine::SpotLight&) { FAIL(); }));
+    EXPECT_TRUE(scene.RemoveComponent<engine::PointLight>(child));
+    EXPECT_EQ(take(), (Changes(4, {Kind::Modified, child})));
+
+    scene.DestroyEntity(parent);  // children first
+    EXPECT_EQ(take(), (Changes{{Kind::Destroyed, child}, {Kind::Destroyed, parent}}));
+
+    scene.RemoveChangeObserver(token);
+    scene.CreateEntity("Unseen");
+    EXPECT_TRUE(changes.empty());
 }

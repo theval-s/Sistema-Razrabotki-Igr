@@ -65,8 +65,11 @@ Store a scene under the game root as `<name>.scene.json` and give it its own
 
 The cube and material UUIDs above match checked-in engine sidecars. Entity UUIDs
 are illustrative and unique within the scene. Parent values refer to entity UUIDs
-within the same file. The codec also supports `Bounds`, `Controller` and
-`GamePersistence` (below);
+within the same file. The codec also supports `Bounds`, `Controller`,
+`GamePersistence` (below), and one `Script` component per entity. A Script stores
+`{"script": {"id": "<asset UUID>", "path": "game/Move.lua"}, "enabled": true}`;
+an unassigned slot uses `"script": null`. Lua tables and instance IDs are not saved.
+See [scripting.md](scripting.md) for attachment and lifecycle details. The codec
 it rejects unknown fields/components, duplicate keys, cycles, invalid numbers,
 and bad active camera/light selections before scene switching.
 
@@ -109,13 +112,13 @@ own requests and tracks dependencies; `LoadScene` evicts only the scene instance
 
 `RenderWorld::sceneItems` are replaced by extraction every frame, while
 `RenderWorld::renderItems` remain available for host-owned procedural draws.
-ExampleGame loads `game/scenes/demo.scene.json` at startup for its file-backed
-meshes, materials and sun; its procedural ground, enchanted cube and animated
-point/spot lights remain host-owned. Their materials and shader dependencies are
-requested from disk; the host supplies procedural geometry, textures and the
-cube's custom constant buffer. Sign and hammer motion use registered native
-scene controllers. CMake copies the scene, sidecars and source assets under the
-executable's `game/` directory.
+ExampleGame loads `game/scenes/demo.scene.json` for its file-backed meshes,
+materials, textures and sun, including the ground, enchanted cube and visible
+light markers. The cube's shader reads engine simulation time from the frame
+buffer. The host still animates point/spot lights in `RenderWorld::lights` and
+updates matching scene entity transforms for the visible markers. Sign and
+hammer motion use registered native scene controllers. CMake copies the scene,
+sidecars and source assets under the executable's `game/` directory.
 
 ## Names, tags, controllers, and queries
 
@@ -124,6 +127,12 @@ Names need not be unique. `Scene::FindFirstByName`, `FindAllByName` and
 persistent links; check handles after a scene switch. Optional entity `tags` are
 an array of distinct, nonempty strings, for example `"tags": ["animated"]`.
 Use `AddTag`/`RemoveTag` to author them in code.
+
+Root entities may have an optional `editorFolder`, such as
+`"editorFolder": "Props/Barrels"`, and the scene may list `"editorFolders"` so
+that empty folders survive a save. Folder paths are nonempty names separated by
+single slashes. Only the editor's hierarchy uses them; the runtime ignores them.
+An entity with a parent can't have a folder (`Scene::SetParent` clears it).
 
 One optional `Controller` component is supported per entity:
 

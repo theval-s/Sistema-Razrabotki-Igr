@@ -1,14 +1,15 @@
 #include <engine/engine.hpp>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
-#include <set>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <TaskScheduler.h>
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
@@ -18,6 +19,7 @@
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/scene/SceneDocument.hpp>
 #include <engine/scene/GameDocument.hpp>
+#include <engine/scripting/ScriptSubsystem.hpp>
 
 namespace engine {
 
@@ -61,6 +63,9 @@ struct Engine::Impl {
     bool paused = false;
 
     FrameContext frame{};
+    double fixedAccumulator = 0.0;
+    FixedUpdateContext fixedStep{};
+    std::uint64_t simulationRevision = 0;
     std::uint64_t nextFrameIndex = 0;
     std::chrono::steady_clock::time_point lastTickTime{};
 
@@ -72,6 +77,15 @@ struct Engine::Impl {
     AssetReference sceneReference;
     bool hasSceneReference = false;
     bool deferControllerActivation = false;
+    bool editorMode = false;
+    bool transitioning = false;
+    bool inCallbacks = false;
+    struct PlaySnapshot {
+        SceneDocument scene, baseline;
+        AssetReference reference;
+        bool hasReference = false;
+    };
+    std::optional<PlaySnapshot> playSnapshot;
     std::optional<std::filesystem::path> queuedScene;
     enki::TaskScheduler scheduler;
     // Kernel state, so it is reachable before any subsystem is registered.
@@ -80,7 +94,7 @@ struct Engine::Impl {
 };
 
 std::string_view version() noexcept {
-    return "0.1.0";
+    return "0.2.0";
 }
 
 Engine::Engine(EngineConfig config) : impl_(std::make_unique<Impl>(std::move(config))) {
@@ -106,9 +120,9 @@ Subsystem* Engine::RegisterSubsystem(const entt::id_type type, const std::string
     const auto existing = std::ranges::find(impl_->subsystems, type, &Impl::Entry::type); //or using <algorithm>
     if (existing != impl_->subsystems.end()) {
         if (existing->typeName == typeName) {
-            spdlog::error("Engine: subsystem '{}' is already registered", typeName);
+            log::Engine().error("Subsystem '{}' is already registered", typeName);
         } else {
-            spdlog::error("Engine: type hash collision between subsystems '{}' and '{}'", existing->typeName, typeName);
+            log::Engine().error("Type hash collision between subsystems '{}' and '{}'", existing->typeName, typeName);
         }
         return nullptr;
     }
@@ -120,9 +134,9 @@ Subsystem* Engine::RegisterSubsystem(const entt::id_type type, const std::string
     // walking the list the new entry is simply picked up by its loop instead.
     const bool allOthersInitialized = impl_->initializedCount + 1 == impl_->subsystems.size();
     if (impl_->initialized && allOthersInitialized) {
-        spdlog::info("Initializing subsystem '{}'", added->GetName());
+        log::Engine().info("Initializing subsystem '{}'", added->GetName());
         if (!added->Initialize()) {
-            spdlog::error("Subsystem '{}' failed to initialize", added->GetName());
+            log::Engine().error("Subsystem '{}' failed to initialize", added->GetName());
             impl_->subsystems.pop_back();
             return nullptr;
         }
@@ -141,7 +155,13 @@ bool Engine::Initialize() {
     if (impl_->initialized) {
         return true;
     }
-    spdlog::info("Engine {} initializing '{}'", version(), impl_->config.applicationName);
+    if (!std::isfinite(impl_->config.fixedStepSeconds) || impl_->config.fixedStepSeconds <= 0 ||
+        impl_->config.maxFixedStepsPerFrame == 0) {
+        log::Engine().error("Invalid fixed update configuration");
+        return false;
+    }
+    impl_->fixedStep.deltaSeconds = impl_->config.fixedStepSeconds;
+    log::Engine().info("Engine {} initializing '{}'", version(), impl_->config.applicationName);
 
     // Up before any subsystem, so they can already schedule work in Initialize().
     if (impl_->config.taskThreads == 0) {
@@ -151,7 +171,7 @@ bool Engine::Initialize() {
         schedulerConfig.numTaskThreadsToCreate = impl_->config.taskThreads;
         impl_->scheduler.Initialize(schedulerConfig);
     }
-    spdlog::info("Task scheduler running with {} threads", impl_->scheduler.GetNumTaskThreads());
+    log::Engine().info("Task scheduler running with {} threads", impl_->scheduler.GetNumTaskThreads());
 
     // Up before the subsystems: they already request assets from their Initialize().
     impl_->assets->Initialize();
@@ -162,9 +182,9 @@ bool Engine::Initialize() {
     impl_->initialized = true;
     for (; impl_->initializedCount < impl_->subsystems.size(); ++impl_->initializedCount) {
         Subsystem& subsystem = *impl_->subsystems[impl_->initializedCount].subsystem;
-        spdlog::info("Initializing subsystem '{}'", subsystem.GetName());
+        log::Engine().info("Initializing subsystem '{}'", subsystem.GetName());
         if (!subsystem.Initialize()) {
-            spdlog::error("Subsystem '{}' failed to initialize, shutting the engine down", subsystem.GetName());
+            log::Engine().error("Subsystem '{}' failed to initialize, shutting the engine down", subsystem.GetName());
             // Unwind whatever did come up, so a failed start leaves no half-initialized systems.
             Shutdown();
             return false;
@@ -180,7 +200,9 @@ void Engine::Shutdown() {
     if (!impl_->initialized) {
         return;
     }
-    spdlog::info("Engine shutting down");
+    log::Engine().info("Engine shutting down");
+    StopPlay();
+    ResetSimulation();
 
     impl_->scene.SetControllersActive(false);
     impl_->scene.Clear();
@@ -203,7 +225,7 @@ bool Engine::IsInitialized() const noexcept {
 
 void Engine::Tick() {
     if (!impl_->initialized) {
-        spdlog::error("Engine::Tick() called before Initialize()");
+        log::Engine().error("Engine::Tick() called before Initialize()");
         return;
     }
 
@@ -220,14 +242,18 @@ void Engine::Tick() {
     frame.paused = impl_->paused;
     frame.realDeltaSeconds = realDelta;
     frame.realTimeSeconds += realDelta;
-    frame.deltaSeconds = impl_->paused ? 0.0 : realDelta;
+    frame.deltaSeconds = (impl_->paused || (impl_->editorMode && !IsPlaying())) ? 0.0 : realDelta;
     frame.simulationTimeSeconds += frame.deltaSeconds;
 
     // Deliver events queued during the previous frame (or from outside Tick).
+    impl_->inCallbacks = true;
     impl_->events.update();
+    impl_->inCallbacks = false;
 
     // Copy: a subsystem reacting to the frame must not see it change under it.
     const FrameContext current = frame;
+    const auto frameRevision = impl_->simulationRevision;
+    impl_->inCallbacks = true;
     // Finished background loads become usable before anything can ask for them this frame.
     impl_->assets->Update(current);
     impl_->sceneAssets->Update(current);
@@ -235,11 +261,42 @@ void Engine::Tick() {
         impl_->subsystems[i].subsystem->Update(current);
     }
     impl_->scene.UpdateControllers(current.deltaSeconds);
+    impl_->inCallbacks = false;
     if (impl_->queuedScene) {
         const auto file = std::move(*impl_->queuedScene);
         impl_->queuedScene.reset();
         std::string error;
-        if (!LoadScene(file, error) || !error.empty()) spdlog::error("Deferred scene load: {}", error);
+        if (!LoadScene(file, error) || !error.empty()) log::Engine().error("Deferred scene load: {}", error);
+    }
+    const auto revision = impl_->simulationRevision;
+    // A newly committed scene starts accumulating time on the next frame.
+    if (!impl_->paused && (!impl_->editorMode || IsPlaying()) && revision == frameRevision) {
+        impl_->fixedAccumulator += current.deltaSeconds;
+        std::uint32_t steps = 0;
+        while (impl_->fixedAccumulator >= impl_->config.fixedStepSeconds &&
+               steps < impl_->config.maxFixedStepsPerFrame) {
+            impl_->fixedAccumulator -= impl_->config.fixedStepSeconds;
+            impl_->fixedStep.simulationTimeSeconds += impl_->config.fixedStepSeconds;
+            impl_->inCallbacks = true;
+            const auto step = impl_->fixedStep;
+            for (std::size_t i = 0; i < impl_->subsystems.size(); ++i)
+                impl_->subsystems[i].subsystem->FixedUpdate(step);
+            impl_->inCallbacks = false;
+            ++impl_->fixedStep.stepIndex;
+            ++steps;
+            if (impl_->queuedScene) {
+                const auto file = std::move(*impl_->queuedScene);
+                impl_->queuedScene.reset();
+                std::string error;
+                if (!LoadScene(file, error) || !error.empty()) log::Engine().error("Deferred scene load: {}", error);
+                if (revision != impl_->simulationRevision) break;
+            }
+            if (impl_->paused || impl_->exitRequested) break;
+        }
+        if (impl_->fixedAccumulator >= impl_->config.fixedStepSeconds) {
+            impl_->fixedAccumulator = std::fmod(impl_->fixedAccumulator, impl_->config.fixedStepSeconds);
+            log::Engine().warn("FixedUpdate catch-up limit reached; discarded simulation backlog");
+        }
     }
     for (std::size_t i = 0; i < impl_->subsystems.size(); ++i) {
         impl_->subsystems[i].subsystem->LateUpdate(current);
@@ -276,6 +333,7 @@ void Engine::SetPaused(const bool paused) {
         return;
     }
     impl_->paused = paused;
+    impl_->fixedAccumulator = 0;
     impl_->events.trigger(PauseChangedEvent{paused});
 }
 
@@ -318,8 +376,133 @@ Scene& Engine::GetScene() noexcept {
     return impl_->scene;
 }
 
+void Engine::SetEditorMode() {
+    if (IsPlaying()) return;
+    impl_->editorMode = true;
+    impl_->paused = true;
+    impl_->scene.SetControllerInstantiationEnabled(false);
+}
+
+bool Engine::IsPlaying() const noexcept { return impl_->playSnapshot.has_value(); }
+
+bool Engine::PlayCurrentScene(const std::filesystem::path& root,
+                             std::span<const AutoloadDefinition> autoloads, std::string& error) {
+    if (!IsInitialized() || !impl_->editorMode || IsPlaying() || impl_->transitioning || impl_->inCallbacks) {
+        error = "Play requires an initialized editor in Edit mode";
+        return false;
+    }
+    auto* scripting = GetSubsystem<ScriptSubsystem>();
+    if (!scripting) {
+        error = "ScriptSubsystem is not registered";
+        return false;
+    }
+    Impl::PlaySnapshot snapshot;
+    if (!CaptureSceneDocument(impl_->scene, *impl_->sceneAssets, snapshot.scene, error)) return false;
+    snapshot.baseline = impl_->sceneBaseline;
+    snapshot.reference = impl_->sceneReference;
+    snapshot.hasReference = impl_->hasSceneReference;
+    impl_->playSnapshot = std::move(snapshot);
+    impl_->transitioning = true;
+    impl_->queuedScene.reset();
+    CommitScene(impl_->playSnapshot->scene);
+    scripting->GetRuntime().SetLevelLoader([this](std::string_view name, std::string& failure) {
+        return RequestOpenLevel(name, failure);
+    });
+    if (!scripting->BeginPlay(root, autoloads, error)) {
+        impl_->transitioning = false;
+        StopPlay();
+        return false;
+    }
+    scripting->StartSceneScripts(impl_->scene);
+    impl_->scene.SetControllerInstantiationEnabled(true);
+    impl_->scene.SetControllersActive(true);
+    impl_->frame.simulationTimeSeconds = 0;
+    impl_->lastTickTime = std::chrono::steady_clock::now();
+    impl_->transitioning = false;
+    SetPaused(false);
+    error.clear();
+    return true;
+}
+
+void Engine::StopPlay() {
+    if (!impl_->playSnapshot || impl_->transitioning || impl_->inCallbacks) return;
+    impl_->transitioning = true;
+    impl_->queuedScene.reset();
+    if (auto* scripting = GetSubsystem<ScriptSubsystem>()) {
+        scripting->EndPlay();
+        scripting->GetRuntime().SetLevelLoader({});
+    }
+    CommitScene(impl_->playSnapshot->scene);
+    impl_->sceneBaseline = impl_->playSnapshot->baseline;
+    impl_->sceneReference = impl_->playSnapshot->reference;
+    impl_->hasSceneReference = impl_->playSnapshot->hasReference;
+    impl_->playSnapshot.reset();
+    impl_->queuedScene.reset();
+    impl_->transitioning = false;
+    impl_->frame.simulationTimeSeconds = 0;
+    SetPaused(true);
+}
+
+bool Engine::RequestOpenLevel(std::string_view name, std::string& error) {
+    auto fail = [&](std::string message) {
+        error = std::move(message);
+        log::Engine().error("OpenLevel: {}", error);
+        return false;
+    };
+    if (!IsPlaying()) return fail("OpenLevel requires a play session");
+    std::string logical(name);
+    if (logical.empty() || logical.find('\\') != std::string::npos || logical.find(':') != std::string::npos)
+        return fail("Use a project scene name or game/scenes/name.scene.json");
+    for (const auto& part : FromUtf8(logical))
+        if (part == ".." || part == ".") return fail("Scene traversal is not allowed");
+    if (!logical.starts_with("game/")) logical = (logical.find('/') == std::string::npos ? "game/scenes/" : "game/") + logical;
+    if (!logical.ends_with(".scene.json")) logical += ".scene.json";
+    const auto* entry = impl_->assets->GetCatalog().FindPath(logical);
+    if (!entry || entry->metadata.kind != CatalogAssetKind::Scene) return fail("Scene not found: " + logical);
+    std::error_code ec;
+    const auto* scripting = GetSubsystem<ScriptSubsystem>();
+    if (!scripting || scripting->GetRoot().empty()) return fail("Scripting session is not ready");
+    const auto relative = std::filesystem::relative(entry->source, scripting->GetRoot(), ec);
+    if (ec || relative.empty() || relative.is_absolute()) return fail("Scene is outside project content");
+    for (const auto& part : relative) if (part == "..") return fail("Scene is outside project content");
+    std::string text;
+    SceneDocument checked;
+    if (!ReadTextFile(entry->source, text, error) || !ParseSceneDocument(text, checked, error)) return fail(error);
+    impl_->queuedScene = entry->source;
+    error.clear();
+    return true;
+}
+
+void Engine::ResetSimulation() {
+    impl_->fixedAccumulator = 0;
+    impl_->fixedStep = {0, impl_->config.fixedStepSeconds, 0};
+    ++impl_->simulationRevision;
+    for (std::size_t i = 0; i < impl_->initializedCount; ++i)
+        impl_->subsystems[i].subsystem->ResetSimulation();
+}
+
+void Engine::CommitScene(const SceneDocument& document) {
+    ResetSimulation();
+    if (auto* scripting = GetSubsystem<ScriptSubsystem>()) {
+        scripting->ClearSceneScripts();
+        scripting->GetRuntime().ClearEntityInstances();
+    }
+    if (auto* rendering = GetSubsystem<RenderingSubsystem>()) rendering->GetWorld().sceneItems.clear();
+    impl_->scene.SetControllerInstantiationEnabled(false);
+    impl_->scene.Clear();
+    impl_->sceneAssets->UnloadAll();
+    PopulateScene(document, *impl_->sceneAssets, impl_->scene);
+    impl_->sceneBaseline = document;
+    if (auto* scripting = GetSubsystem<ScriptSubsystem>(); scripting && scripting->IsPlaying())
+        scripting->StartSceneScripts(impl_->scene);
+    if (!impl_->editorMode || (IsPlaying() && !impl_->transitioning)) {
+        impl_->scene.SetControllerInstantiationEnabled(true);
+        if (!impl_->deferControllerActivation) impl_->scene.SetControllersActive(true);
+    }
+}
+
 bool Engine::LoadScene(const std::filesystem::path& file, std::string& error) {
-    if (impl_->scene.IsInControllerCallback()) {
+    if (impl_->scene.IsInControllerCallback() || impl_->inCallbacks) {
         impl_->queuedScene = file;
         error.clear();
         return true;
@@ -335,21 +518,15 @@ bool Engine::LoadScene(const std::filesystem::path& file, std::string& error) {
     for (const auto& entity : document.entities) if (entity.controller) {
         std::string detail;
         if (!impl_->scene.ValidateController(*entity.controller, detail))
-            diagnostics += entity.name + " (" + entity.id + "): " + detail + "\n";
+            diagnostics += entity.name + " (" + entity.id.ToString() + "): " + detail + "\n";
     }
 
-    if (auto* rendering = GetSubsystem<RenderingSubsystem>()) rendering->GetWorld().sceneItems.clear();
-    impl_->scene.SetControllersActive(false);
-    impl_->scene.Clear();
-    impl_->sceneAssets->UnloadAll();
-    PopulateScene(document, *impl_->sceneAssets, impl_->scene);
-    impl_->sceneBaseline = document;
+    CommitScene(document);
     if (const auto* entry = impl_->sceneAssets->GetCatalog().FindPath(AssetPathResolver::ToName(absolute));
         entry && entry->metadata.kind == CatalogAssetKind::Scene) {
         impl_->sceneReference = {entry->metadata.id, entry->path};
         impl_->hasSceneReference = true;
     } else impl_->hasSceneReference = false;
-    if (!impl_->deferControllerActivation) impl_->scene.SetControllersActive(true);
     error = std::move(diagnostics);
     return true;
 }
@@ -361,7 +538,7 @@ bool Engine::LoadScene(const AssetReference& reference, std::string& error) {
         return false;
     }
     if (NormalizeName(reference.path) != NormalizeName(entry->path))
-        spdlog::warn("Scene UUID '{}' moved from '{}' to '{}'", reference.id.ToString(), reference.path, entry->path);
+        log::Engine().warn("Scene UUID '{}' moved from '{}' to '{}'", reference.id.ToString(), reference.path, entry->path);
     return LoadScene(entry->source, error);
 }
 
@@ -380,16 +557,17 @@ bool Engine::SaveGame(const std::filesystem::path& file, std::string& error) {
     if (!CaptureSceneDocument(impl_->scene, *impl_->sceneAssets, current, error, true)) return false;
     GameDocument game;
     game.scene = impl_->sceneReference;
-    std::set<std::string> original, present;
+    std::unordered_set<EntityUuid, EntityUuidHash> original, present;
     for (const auto& item : impl_->sceneBaseline.entities) original.insert(item.id);
     for (const auto& item : current.entities) present.insert(item.id);
     for (const auto& id : original) if (!present.contains(id)) game.deleted.push_back(id);
+    std::sort(game.deleted.begin(), game.deleted.end());
     for (auto item : current.entities) {
-        const auto entity = impl_->scene.FindById(item.id);
+        const auto entity = impl_->scene.FindByUuid(item.id);
         if (!item.persistence) continue;
         if (!original.contains(item.id)) {
             if (impl_->scene.HasUnsupportedComponents(entity)) {
-                error = "persistent spawned entity has unsupported components: " + item.id;
+                error = "persistent spawned entity has unsupported components: " + item.id.ToString();
                 return false;
             }
             if (item.parent) game.spawnParents[item.id] = *item.parent;
@@ -402,16 +580,16 @@ bool Engine::SaveGame(const std::filesystem::path& file, std::string& error) {
         if (item.persistence->controllerState && item.controller) {
             std::string detail;
             auto data = impl_->scene.CaptureControllerGameState(entity, detail);
-            if (!detail.empty()) { error = item.id + ": " + detail; return false; }
+            if (!detail.empty()) { error = item.id.ToString() + ": " + detail; return false; }
             if (data) state.controller = GameControllerState{item.controller->type, item.controller->version, *data};
         }
         if (state.transform || state.controller) game.entities.push_back(std::move(state));
     }
-    std::set<std::string> spawnedIds;
+    std::unordered_set<EntityUuid, EntityUuidHash> spawnedIds;
     for (const auto& item : game.spawned.entities) spawnedIds.insert(item.id);
     for (const auto& [id, parent] : game.spawnParents)
         if (!original.contains(parent) && !spawnedIds.contains(parent)) {
-            error = "persistent spawn " + id + " has a non-persistent spawned parent: " + parent;
+            error = "persistent spawn " + id.ToString() + " has a non-persistent spawned parent: " + parent.ToString();
             return false;
         }
     std::string text;
@@ -432,36 +610,37 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
     if (!ReadTextFile(entry->source, sceneText, error)) return false;
     SceneDocument base;
     if (!ParseSceneDocument(sceneText, base, error)) return false;
-    std::set<std::string> authored, spawned, deleted(game.deleted.begin(), game.deleted.end());
+    std::unordered_set<EntityUuid, EntityUuidHash> authored, spawned, deleted(game.deleted.begin(), game.deleted.end());
     for (const auto& item : base.entities) authored.insert(item.id);
     for (const auto& item : game.spawned.entities) {
-        if (authored.contains(item.id)) { error = "spawned entity collides with scene UUID: " + item.id; return false; }
-        if (!item.persistence) { error = "spawned entity has no persistence policy: " + item.id; return false; }
+        if (authored.contains(item.id)) { error = "spawned entity collides with scene UUID: " + item.id.ToString(); return false; }
+        if (!item.persistence) { error = "spawned entity has no persistence policy: " + item.id.ToString(); return false; }
         spawned.insert(item.id);
     }
     for (const auto& id : game.deleted) if (!authored.contains(id)) {
-        error = "deleted entity is not in the scene: " + id; return false;
+        error = "deleted entity is not in the scene: " + id.ToString(); return false;
     }
-    auto removed = [&](std::string id) {
-        std::set<std::string> visited;
-        while (!id.empty() && visited.insert(id).second) {
+    auto removed = [&](EntityUuid id) {
+        std::unordered_set<EntityUuid, EntityUuidHash> visited;
+        while (visited.insert(id).second) {
             if (deleted.contains(id)) return true;
             if (const auto it = game.spawnParents.find(id); it != game.spawnParents.end()) {
                 id = it->second;
             } else {
                 const auto found = std::find_if(base.entities.begin(), base.entities.end(), [&](const auto& e) { return e.id == id; });
-                id = found != base.entities.end() && found->parent ? *found->parent : "";
+                if (found == base.entities.end() || !found->parent) break;
+                id = *found->parent;
             }
         }
         return false;
     };
     for (const auto& [id, parent] : game.spawnParents)
         if ((!authored.contains(parent) && !spawned.contains(parent)) || removed(parent)) {
-            error = "missing spawned parent for " + id; return false;
+            error = "missing spawned parent for " + id.ToString(); return false;
         }
     for (const auto& state : game.entities) {
         if ((!authored.contains(state.id) && !spawned.contains(state.id)) || removed(state.id)) {
-            error = "unknown saved entity: " + state.id; return false;
+            error = "unknown saved entity: " + state.id.ToString(); return false;
         }
         const auto* definition = [&]() -> const SceneEntityDefinition* {
             for (const auto& item : game.spawned.entities) if (item.id == state.id) return &item;
@@ -470,44 +649,58 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
         }();
         if (!definition->persistence || (state.transform && !definition->persistence->transform) ||
             (state.controller && !definition->persistence->controllerState)) {
-            error = "save-game state is not enabled for " + state.id; return false;
+            error = "save-game state is not enabled for " + state.id.ToString(); return false;
         }
         if (state.controller && (!definition->controller ||
             definition->controller->type != state.controller->type ||
             definition->controller->version != state.controller->version)) {
-            error = "saved controller type/version mismatch for " + state.id; return false;
+            error = "saved controller type/version mismatch for " + state.id.ToString(); return false;
         }
     }
     // Check parent cycles before touching the live scene.
     for (const auto& [id, parent] : game.spawnParents) {
-        std::set<std::string> seen{id};
-        std::string cursor = parent;
+        std::unordered_set<EntityUuid, EntityUuidHash> seen{id};
+        EntityUuid cursor = parent;
         while (spawned.contains(cursor) && game.spawnParents.contains(cursor)) {
             if (!seen.insert(cursor).second) { error = "spawn hierarchy cycle"; return false; }
             cursor = game.spawnParents.at(cursor);
         }
         if (!seen.insert(cursor).second) { error = "spawn hierarchy cycle"; return false; }
     }
+    // Validate the composed scene too: save-game transforms/parents can turn a
+    // valid authored collider into an unsupported dynamic hierarchy or shear.
+    SceneDocument restored = base;
+    std::erase_if(restored.entities, [&](const auto& item) { return removed(item.id); });
+    restored.entities.insert(restored.entities.end(), game.spawned.entities.begin(), game.spawned.entities.end());
+    for (auto& item : restored.entities) {
+        if (const auto it = game.spawnParents.find(item.id); it != game.spawnParents.end()) item.parent = it->second;
+        for (const auto& state : game.entities)
+            if (state.id == item.id && state.transform) item.transform = *state.transform;
+    }
+    if (restored.activeCamera && removed(*restored.activeCamera)) restored.activeCamera.reset();
+    if (restored.directionalLight && removed(*restored.directionalLight)) restored.directionalLight.reset();
+    std::string checkedScene;
+    if (!SerializeSceneDocument(restored, checkedScene, error)) return false;
     impl_->deferControllerActivation = true;
     const bool loaded = LoadScene(entry->source, error);
     impl_->deferControllerActivation = false;
     if (!loaded) return false;
     std::string diagnostics = std::move(error);
     for (const auto& id : game.deleted) {
-        if (const auto entity = impl_->scene.FindById(id); entity != entt::null) impl_->scene.DestroyEntity(entity);
+        if (const auto entity = impl_->scene.FindByUuid(id); entity != entt::null) impl_->scene.DestroyEntity(entity);
     }
     PopulateScene(game.spawned, *impl_->sceneAssets, impl_->scene);
     for (const auto& [id, parent] : game.spawnParents)
-        if (!impl_->scene.SetParent(impl_->scene.FindById(id), impl_->scene.FindById(parent)))
-            diagnostics += "cannot restore parent for " + id + "\n";
+        if (!impl_->scene.SetParent(impl_->scene.FindByUuid(id), impl_->scene.FindByUuid(parent)))
+            diagnostics += "cannot restore parent for " + id.ToString() + "\n";
     for (const auto& state : game.entities) {
-        const auto entity = impl_->scene.FindById(state.id);
-        if (entity == entt::null) { diagnostics += "missing saved entity " + state.id + "\n"; continue; }
+        const auto entity = impl_->scene.FindByUuid(state.id);
+        if (entity == entt::null) { diagnostics += "missing saved entity " + state.id.ToString() + "\n"; continue; }
         if (state.transform) impl_->scene.GetTransform(entity) = *state.transform;
         if (state.controller) {
             std::string detail;
             if (!impl_->scene.RestoreControllerGameState(entity, state.controller->data, detail) || !detail.empty())
-                diagnostics += state.id + ": " + detail + "\n";
+                diagnostics += state.id.ToString() + ": " + detail + "\n";
         }
     }
     impl_->scene.SetControllersActive(true);
@@ -528,7 +721,9 @@ bool Engine::EditEntityMaterial(entt::entity entity, const std::function<void(Ma
     const auto override = GetEntityMaterialOverride(entity);
     const auto* source = resources.TryGetMaterialInstance(override ? override : base);
     if (!source) { error = "material instance is no longer available"; return false; }
-    MaterialParameters parameters = source->parameters;
+    const auto* material = resources.TryGetMaterial(source->material);
+    if (!material) { error = "material is no longer available"; return false; }
+    MaterialParameters parameters = ResolveMaterialParameters(*material, *source);
     edit(parameters);
     if (!override) {
         const auto clone = resources.CreateMaterialInstance(source->material);
@@ -557,6 +752,10 @@ bool Engine::SetEntityAlbedoTexture(entt::entity entity, AssetHandle<TextureAsse
 
 MaterialInstanceHandle Engine::GetEntityMaterialOverride(entt::entity entity) const {
     return impl_->sceneRuntime.Find(entity);
+}
+
+void Engine::ClearEntityMaterialOverride(entt::entity entity) {
+    impl_->sceneRuntime.Release(entity, GetSubsystem<RenderingSubsystem>());
 }
 
 AssetSystem& Engine::GetAssets() noexcept {

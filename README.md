@@ -35,7 +35,8 @@ Imported meshes expose `MeshAsset::bounds` (`Aabb::min` / `max`) in mesh-local
 coordinates, after Assimp node transforms and optional `centerOnLoad`
 normalization. Assimp generates per-mesh bounding boxes via aiProcess_GenBoundingBoxes;
 the importer combines them into the asset bounds, which remain
-available after CPU geometry is released; apply the object's world transform
+available after upload. Shared CPU positions/triangles are retained for physics
+collider cooking (normals/UV upload data is released); apply the object's world transform
 separately when world-space bounds are needed.
 
 With `SRI_BUILD_TESTS=ON`, run `mesh_assets_tests.exe`, `asset_catalog_tests.exe`,
@@ -115,3 +116,5 @@ The engine SDK (headers, import library, CMake package) is a separate install co
 ```
 cmake --install build/windows-msvc --config RelWithDebInfo --component sdk --prefix dist/sdk
 ```
+
+Fixed-step simulation and Jolt integration: [physics guide](docs/physics.md).

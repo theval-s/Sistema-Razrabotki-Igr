@@ -8,7 +8,7 @@
 #include <vector>
 
 #include <TaskScheduler.h>
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 #include <engine/rendering/RenderingResourceManager.hpp>
 #include <engine/core/ResourceID.hpp>
@@ -27,6 +27,7 @@ struct MeshCpu {
     std::vector<ugly_utils::VertData> vertices;
     std::vector<uint32_t> indices;
     Aabb bounds;
+    std::shared_ptr<const MeshGeometry> geometry;
 };
 
 /// The decoded texture, already a device resource: WIC decoding a 4K image and building its
@@ -69,7 +70,7 @@ struct UploadTransfer {
     ID3D11Device* device = nullptr;
     ID3D11DeviceContext* context = nullptr;
     RenderingResourceManager* resources = nullptr;
-    MaterialParameters materialParameters; // resolved dependencies and inherited values; main thread only
+    MaterialParameters materialParameters; // resolved material defaults or explicit texture dependency
     MaterialHandle material;              // parent of a material instance
 };
 
@@ -122,6 +123,8 @@ public:
 
 class MaterialInstanceImporter final : public IAssetImporter {
 public:
+    static MaterialInstance::Overrides MakeOverrides(const MaterialParameterOverrides& authored,
+                                                      TextureHandle explicitTexture);
     bool ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPayload& payload,
                  std::string& error) const override;
     bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
@@ -158,7 +161,7 @@ struct LoadJob final : public enki::ITaskSet {
         const auto queueDelaySeconds = std::chrono::duration<double>(start - queuedAt).count();
         // threadnum 0 is the thread that called TaskScheduler::Initialize(), i.e. the main one:
         // a non-zero number here is the proof that the read never blocked the game loop.
-        spdlog::info("Asset '{}': CPU phase ran on worker {} ({} s in the pipe, {} s of work)",
+        log::Assets().info("Asset '{}': CPU phase ran on worker {} ({} s in the pipe, {} s of work)",
                      name, threadnum, queueDelaySeconds, cpuSeconds);
     }
 };

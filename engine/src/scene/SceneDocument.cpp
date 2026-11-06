@@ -5,10 +5,12 @@
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <nlohmann/json.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/scene/Scene.hpp>
+#include "../physics/PhysicsValidation.hpp"
 
 namespace engine {
 namespace {
@@ -42,7 +44,7 @@ std::array<float, N> Numbers(const Json& j) {
 
 Json Encode(const Vector3& value) { return Json::array({value.x, value.y, value.z}); }
 Json Encode(const Quaternion& value) { return Json::array({value.x, value.y, value.z, value.w}); }
-Json Encode(const std::optional<std::string>& value) { return value ? Json(*value) : Json(nullptr); }
+Json Encode(const std::optional<EntityUuid>& value) { return value ? Json(value->ToString()) : Json(nullptr); }
 
 AssetReference Reference(const Json& j) {
     AssetReference result;
@@ -57,18 +59,21 @@ Json Encode(const AssetReference& reference) {
     return Json::parse(json);
 }
 
-std::optional<std::string> OptionalId(const Json& j) {
+std::optional<EntityUuid> OptionalId(const Json& j) {
     if (j.is_null()) return std::nullopt;
     auto id = j.get<std::string>();
-    if (!IsUuid(id)) throw std::invalid_argument("invalid entity UUID: " + id);
-    return id;
+    auto parsed = EntityUuid::Parse(id);
+    if (!parsed) throw std::invalid_argument("invalid entity UUID: " + id);
+    return parsed;
 }
 
 SceneEntityDefinition DecodeEntity(const Json& j) {
-    Fields(j, {"id", "name", "tags", "parent", "components"});
+    Fields(j, {"id", "name", "tags", "parent", "editorFolder", "components"});
     SceneEntityDefinition entity;
-    entity.id = j.at("id").get<std::string>();
-    if (!IsUuid(entity.id)) throw std::invalid_argument("invalid entity UUID: " + entity.id);
+    const auto id = j.at("id").get<std::string>();
+    const auto parsed = EntityUuid::Parse(id);
+    if (!parsed) throw std::invalid_argument("invalid entity UUID: " + id);
+    entity.id = *parsed;
     entity.name = j.at("name").get<std::string>();
     if (j.contains("tags")) {
         if (!j.at("tags").is_array()) throw std::invalid_argument("tags must be an array");
@@ -81,8 +86,85 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         }
     }
     if (j.contains("parent")) entity.parent = OptionalId(j.at("parent"));
+    if (j.contains("editorFolder")) {
+        if (!j.at("editorFolder").is_string() || !Scene::IsValidEditorFolder(j.at("editorFolder").get<std::string>()))
+            throw std::invalid_argument("editorFolder must be folder names separated by '/'");
+        entity.editorFolder = j.at("editorFolder").get<std::string>();
+    }
     const auto& components = j.at("components");
-    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "Controller", "Bounds", "GamePersistence"});
+    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "RigidBody", "Collider"});
+    if (components.contains("RigidBody")) {
+        const auto& body = components.at("RigidBody");
+        Fields(body, {"motionType", "mass", "friction", "restitution"});
+        RigidBody value;
+        const auto type = body.at("motionType").get<std::string>();
+        if (type == "Dynamic") value.motionType = MotionType::Dynamic;
+        else if (type == "Kinematic") value.motionType = MotionType::Kinematic;
+        else if (type != "Static") throw std::invalid_argument("invalid RigidBody motionType");
+        value.mass = Number(body.at("mass"));
+        value.friction = Number(body.at("friction"));
+        value.restitution = Number(body.at("restitution"));
+        entity.rigidBody = value;
+    }
+    if (components.contains("Collider")) {
+        const auto& collider = components.at("Collider");
+        Collider value;
+        const auto shape = collider.at("shape").get<std::string>();
+        if (shape == "Cube") value.shape = ColliderShape::Cube;
+        else if (shape == "Box") value.shape = ColliderShape::Box;
+        else if (shape == "Sphere") value.shape = ColliderShape::Sphere;
+        else if (shape == "Capsule") value.shape = ColliderShape::Capsule;
+        else if (shape == "ConvexMesh") value.shape = ColliderShape::ConvexMesh;
+        else if (shape == "TriangleMesh") value.shape = ColliderShape::TriangleMesh;
+        else throw std::invalid_argument("invalid Collider shape");
+        const auto center = Numbers<3>(collider.at("center"));
+        value.center = {center[0], center[1], center[2]};
+        if (!collider.at("showDebug").is_boolean()) throw std::invalid_argument("Collider showDebug must be boolean");
+        value.showDebug = collider.at("showDebug").get<bool>();
+        if (collider.contains("isTrigger")) {
+            if (!collider.at("isTrigger").is_boolean()) throw std::invalid_argument("Collider isTrigger must be boolean");
+            value.isTrigger = collider.at("isTrigger").get<bool>();
+        }
+        switch (value.shape) {
+        case ColliderShape::Cube:
+        case ColliderShape::Box: {
+            Fields(collider, {"shape", "center", "showDebug", "isTrigger", "halfExtents"});
+            const auto extents = Numbers<3>(collider.at("halfExtents"));
+            value.halfExtents = {extents[0], extents[1], extents[2]};
+            break;
+        }
+        case ColliderShape::Sphere:
+            Fields(collider, {"shape", "center", "showDebug", "isTrigger", "radius"});
+            value.radius = Number(collider.at("radius"));
+            break;
+        case ColliderShape::Capsule:
+            Fields(collider, {"shape", "center", "showDebug", "isTrigger", "radius", "halfHeight"});
+            value.radius = Number(collider.at("radius"));
+            value.halfHeight = Number(collider.at("halfHeight"));
+            break;
+        case ColliderShape::ConvexMesh:
+        case ColliderShape::TriangleMesh:
+            Fields(collider, {"shape", "center", "showDebug", "isTrigger"});
+            break;
+        }
+        entity.collider = value;
+    }
+    if (components.contains("Script")) {
+        const auto& script = components.at("Script");
+        Fields(script, {"script", "enabled", "properties"});
+        ScriptComponent value;
+        if (!script.at("script").is_null()) value.script = Reference(script.at("script"));
+        value.enabled = script.at("enabled").get<bool>();
+        if (script.contains("properties")) {
+            StateValue propertyData;
+            std::string error;
+            if (!script.at("properties").is_object() || !ParseStateValue(script.at("properties").dump(), propertyData, error))
+                throw std::invalid_argument("Script properties must be an object: " + error);
+            value.properties = propertyData.Fields();
+            if (!ValidateScriptProperties(value.properties, error)) throw std::invalid_argument(error);
+        }
+        entity.script = std::move(value);
+    }
     if (components.contains("GamePersistence")) {
         const auto& persist = components.at("GamePersistence");
         Fields(persist, {"transform", "controllerState"});
@@ -145,23 +227,78 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
             throw std::invalid_argument("negative light color or intensity");
         entity.directionalLight = DirectionalLight{{color[0], color[1], color[2]}, intensity};
     }
+    if (components.contains("PointLight")) {
+        const auto& light = components.at("PointLight");
+        Fields(light, {"color", "intensity", "range"});
+        const auto color = Numbers<3>(light.at("color"));
+        const float intensity = Number(light.at("intensity"));
+        const float range = Number(light.at("range"));
+        if (intensity < 0 || range <= 0 || color[0] < 0 || color[1] < 0 || color[2] < 0)
+            throw std::invalid_argument("invalid point light color, intensity or range");
+        entity.pointLight = PointLight{{color[0], color[1], color[2]}, intensity, range};
+    }
+    if (components.contains("SpotLight")) {
+        const auto& light = components.at("SpotLight");
+        Fields(light, {"color", "intensity", "range", "innerHalfAngle", "outerHalfAngle"});
+        const auto color = Numbers<3>(light.at("color"));
+        const float intensity = Number(light.at("intensity"));
+        const float range = Number(light.at("range"));
+        const float inner = Number(light.at("innerHalfAngle"));
+        const float outer = Number(light.at("outerHalfAngle"));
+        if (intensity < 0 || range <= 0 || color[0] < 0 || color[1] < 0 || color[2] < 0 ||
+            inner < 0 || inner >= outer || outer >= 1.57079632679f)
+            throw std::invalid_argument("invalid spot light color, intensity, range or half angles");
+        entity.spotLight = SpotLight{{color[0], color[1], color[2]}, intensity, range, inner, outer};
+    }
     return entity;
 }
 
 void Validate(const SceneDocument& document) {
-    std::unordered_map<std::string, std::size_t> ids;
+    std::unordered_map<EntityUuid, std::size_t, EntityUuidHash> ids;
     for (std::size_t i = 0; i < document.entities.size(); ++i)
         if (!ids.emplace(document.entities[i].id, i).second)
-            throw std::invalid_argument("duplicate entity UUID: " + document.entities[i].id);
+            throw std::invalid_argument("duplicate entity UUID: " + document.entities[i].id.ToString());
     for (const auto& entity : document.entities) {
-        std::set<std::string> ancestors;
+        std::unordered_set<EntityUuid, EntityUuidHash> ancestors;
         const SceneEntityDefinition* current = &entity;
         while (current->parent) {
-            if (!ancestors.insert(current->id).second) throw std::invalid_argument("hierarchy cycle at " + entity.id);
+            if (!ancestors.insert(current->id).second) throw std::invalid_argument("hierarchy cycle at " + entity.id.ToString());
             const auto it = ids.find(*current->parent);
-            if (it == ids.end()) throw std::invalid_argument("unknown parent UUID: " + *current->parent);
+            if (it == ids.end()) throw std::invalid_argument("unknown parent UUID: " + current->parent->ToString());
             current = &document.entities[it->second];
         }
+    }
+    for (const auto& entity : document.entities)
+        if (entity.parent && !entity.editorFolder.empty())
+            throw std::invalid_argument("editorFolder is only allowed on root entities: " + entity.id.ToString());
+    std::set<std::string> folders;
+    for (const auto& folder : document.editorFolders) {
+        if (!Scene::IsValidEditorFolder(folder)) throw std::invalid_argument("invalid editor folder: " + folder);
+        if (!folders.insert(folder).second) throw std::invalid_argument("duplicate editor folder: " + folder);
+    }
+    for (const auto& entity : document.entities) {
+        if (entity.rigidBody.has_value() != entity.collider.has_value())
+            throw std::invalid_argument("RigidBody and Collider must be provided together");
+        if (!entity.rigidBody) continue;
+        std::string error;
+        if (!detail::ValidatePhysics(*entity.rigidBody, *entity.collider, error)) throw std::invalid_argument(error);
+        if ((entity.collider->shape == ColliderShape::ConvexMesh || entity.collider->shape == ColliderShape::TriangleMesh) && !entity.renderer)
+            throw std::invalid_argument("mesh collider requires MeshRenderer");
+        if (entity.parent && entity.rigidBody->motionType == MotionType::Dynamic)
+            throw std::invalid_argument("dynamic physics bodies must be root entities");
+        if (entity.transform.scale.x <= 0 || entity.transform.scale.y <= 0 || entity.transform.scale.z <= 0)
+            throw std::invalid_argument("physics entities require positive local scale");
+        auto matrix = entity.transform.ToMatrix();
+        const auto* current = &entity;
+        while (current->parent) {
+            current = &document.entities[ids.at(*current->parent)];
+            matrix *= current->transform.ToMatrix();
+        }
+        detail::PhysicsPose pose;
+        if (!detail::GetPhysicsPose(matrix, pose, error)) throw std::invalid_argument(error);
+        if (!detail::Finite(entity.collider->halfExtents * pose.scale) || !detail::Finite(entity.collider->center * pose.scale) ||
+            !detail::Finite(pose.scale * entity.collider->radius) || !detail::Finite(pose.scale * entity.collider->halfHeight))
+            throw std::invalid_argument("scaled collider is not finite");
     }
     if (document.activeCamera) {
         const auto it = ids.find(*document.activeCamera);
@@ -176,13 +313,20 @@ void Validate(const SceneDocument& document) {
 }
 
 SceneDocument Decode(const Json& j) {
-    Fields(j, {"version", "entities", "activeCamera", "directionalLight"});
+    Fields(j, {"version", "entities", "activeCamera", "directionalLight", "editorFolders"});
     if (j.at("version") != 1) throw std::invalid_argument("unsupported scene version");
     SceneDocument result;
     if (!j.at("entities").is_array()) throw std::invalid_argument("entities must be an array");
     for (const auto& item : j.at("entities")) result.entities.push_back(DecodeEntity(item));
     if (j.contains("activeCamera")) result.activeCamera = OptionalId(j.at("activeCamera"));
     if (j.contains("directionalLight")) result.directionalLight = OptionalId(j.at("directionalLight"));
+    if (j.contains("editorFolders")) {
+        if (!j.at("editorFolders").is_array()) throw std::invalid_argument("editorFolders must be an array");
+        for (const auto& folder : j.at("editorFolders")) {
+            if (!folder.is_string()) throw std::invalid_argument("editor folder must be a string");
+            result.editorFolders.push_back(folder.get<std::string>());
+        }
+    }
     Validate(result);
     return result;
 }
@@ -203,6 +347,14 @@ Json Encode(const SceneDocument& document) {
         if (entity.directionalLight)
             components["DirectionalLight"] = {{"color", Encode(entity.directionalLight->color)},
                                                 {"intensity", entity.directionalLight->intensity}};
+        if (entity.pointLight)
+            components["PointLight"] = {{"color", Encode(entity.pointLight->color)},
+                                         {"intensity", entity.pointLight->intensity}, {"range", entity.pointLight->range}};
+        if (entity.spotLight)
+            components["SpotLight"] = {{"color", Encode(entity.spotLight->color)},
+                                        {"intensity", entity.spotLight->intensity}, {"range", entity.spotLight->range},
+                                        {"innerHalfAngle", entity.spotLight->innerHalfAngle},
+                                        {"outerHalfAngle", entity.spotLight->outerHalfAngle}};
         if (entity.controller)
             components["Controller"] = {{"type", entity.controller->type}, {"version", entity.controller->version},
                                          {"enabled", entity.controller->enabled}, {"data", [&] {
@@ -211,16 +363,116 @@ Json Encode(const SceneDocument& document) {
                                                  throw std::invalid_argument(error);
                                              return Json::parse(json);
                                          }()}};
+        if (entity.rigidBody) {
+            const auto& body = *entity.rigidBody;
+            const char* motion = body.motionType == MotionType::Dynamic ? "Dynamic" :
+                                 body.motionType == MotionType::Kinematic ? "Kinematic" : "Static";
+            if (body.motionType != MotionType::Static && body.motionType != MotionType::Dynamic && body.motionType != MotionType::Kinematic)
+                throw std::invalid_argument("invalid RigidBody motionType");
+            components["RigidBody"] = {{"motionType", motion}, {"mass", body.mass}, {"friction", body.friction}, {"restitution", body.restitution}};
+        }
+        if (entity.collider) {
+            const auto& c = *entity.collider;
+            const char* shape = "Box";
+            switch (c.shape) {
+            case ColliderShape::Cube: shape = "Cube"; break;
+            case ColliderShape::Box: break;
+            case ColliderShape::Sphere: shape = "Sphere"; break;
+            case ColliderShape::Capsule: shape = "Capsule"; break;
+            case ColliderShape::ConvexMesh: shape = "ConvexMesh"; break;
+            case ColliderShape::TriangleMesh: shape = "TriangleMesh"; break;
+            }
+            auto& json = components["Collider"];
+            json = {{"shape", shape}, {"center", Encode(c.center)}, {"showDebug", c.showDebug}, {"isTrigger", c.isTrigger}};
+            if (c.shape == ColliderShape::Cube || c.shape == ColliderShape::Box) json["halfExtents"] = Encode(c.halfExtents);
+            if (c.shape == ColliderShape::Sphere || c.shape == ColliderShape::Capsule) json["radius"] = c.radius;
+            if (c.shape == ColliderShape::Capsule) json["halfHeight"] = c.halfHeight;
+        }
         if (entity.bounds)
             components["Bounds"] = {{"min", Encode(entity.bounds->local.min)}, {"max", Encode(entity.bounds->local.max)}};
         if (entity.persistence)
             components["GamePersistence"] = {{"transform", entity.persistence->transform},
                                               {"controllerState", entity.persistence->controllerState}};
-        root["entities"].push_back({{"id", entity.id}, {"name", entity.name}, {"tags", entity.tags},
-                                     {"parent", Encode(entity.parent)},
-                                     {"components", std::move(components)}});
+        if (entity.script) {
+            const auto& reference = entity.script->script;
+            if (!reference.id.IsValid() && !reference.path.empty())
+                throw std::invalid_argument("invalid Script reference");
+            components["Script"] = {{"script", reference.id.IsValid() ? Encode(reference) : Json(nullptr)},
+                                    {"enabled", entity.script->enabled}};
+            std::string properties, error;
+            if (!ValidateScriptProperties(entity.script->properties, error) ||
+                !SerializeStateValue(StateValue(entity.script->properties), properties, error)) throw std::invalid_argument(error);
+            components["Script"]["properties"] = Json::parse(properties);
+        }
+        Json encoded = {{"id", entity.id.ToString()}, {"name", entity.name}, {"tags", entity.tags},
+                        {"parent", Encode(entity.parent)}, {"components", std::move(components)}};
+        // Only when used, so scenes without folders keep their exact format.
+        if (!entity.editorFolder.empty()) encoded["editorFolder"] = entity.editorFolder;
+        root["entities"].push_back(std::move(encoded));
     }
+    if (!document.editorFolders.empty()) root["editorFolders"] = document.editorFolders;
     return root;
+}
+
+SceneEntityDefinition CaptureEntity(const Scene& scene, const AssetSystem& assets, const entt::entity entity) {
+    SceneEntityDefinition definition;
+    definition.id = scene.GetId(entity);
+    definition.name = scene.GetName(entity);
+    const auto tags = scene.GetTags(entity);
+    definition.tags.assign(tags.begin(), tags.end());
+    if (const auto* controller = scene.GetControllerDefinition(entity)) definition.controller = *controller;
+    if (const auto* body = scene.TryGetComponent<RigidBody>(entity)) definition.rigidBody = *body;
+    if (const auto* box = scene.TryGetComponent<Collider>(entity)) definition.collider = *box;
+    if (const auto* bounds = scene.TryGetComponent<Bounds>(entity)) definition.bounds = *bounds;
+    if (const auto* persistence = scene.TryGetComponent<GamePersistence>(entity)) definition.persistence = *persistence;
+    if (const auto* script = scene.TryGetComponent<ScriptComponent>(entity)) definition.script = *script;
+    if (auto parent = scene.GetParent(entity); parent != entt::null)
+        definition.parent = scene.GetId(parent);
+    definition.editorFolder = scene.GetEditorFolder(entity);
+    definition.transform = scene.GetTransform(entity);
+    if (const auto* renderer = scene.TryGetComponent<MeshRenderer>(entity)) {
+        auto authored = [&](const AssetReference& ref, CatalogAssetKind kind)
+            -> std::optional<AssetReference> {
+            if (!ref.id.IsValid()) return std::nullopt;
+            if (const auto* entry = assets.GetCatalog().Find(ref.id, kind))
+                return AssetReference{ref.id, entry->path};
+            return ref; // missing asset: keep the hand-editable recovery hint
+        };
+        auto mesh = authored(renderer->meshReference, CatalogAssetKind::Mesh);
+        if (!mesh) mesh = assets.ReferenceFor(renderer->mesh);
+        auto material = authored(renderer->materialReference, CatalogAssetKind::MaterialInstance);
+        if (!material) material = assets.ReferenceFor(renderer->materialInstance);
+        if (!mesh || !material)
+            throw std::invalid_argument("renderer has no file-backed mesh or material instance on " + definition.id.ToString());
+        definition.renderer = SceneEntityDefinition::Mesh{*mesh, *material};
+    }
+    if (const auto* component = scene.TryGetComponent<Camera>(entity)) definition.camera = *component;
+    if (const auto* component = scene.TryGetComponent<DirectionalLight>(entity)) definition.directionalLight = *component;
+    if (const auto* component = scene.TryGetComponent<PointLight>(entity)) definition.pointLight = *component;
+    if (const auto* component = scene.TryGetComponent<SpotLight>(entity)) definition.spotLight = *component;
+    return definition;
+}
+
+// Everything but the parent, onto a freshly created `entity` that already has its parent.
+void ApplyEntity(const SceneEntityDefinition& definition, AssetSystem& assets, Scene& destination, const entt::entity entity) {
+    for (const auto& tag : definition.tags) destination.AddTag(entity, tag);
+    // Refused under a parent, e.g. a copied root pasted as a child.
+    if (!definition.editorFolder.empty()) destination.SetEditorFolder(entity, definition.editorFolder);
+    destination.GetTransform(entity) = definition.transform;
+    if (definition.renderer) destination.AddComponent<MeshRenderer>(entity,
+        assets.RequestMesh(definition.renderer->mesh),
+        assets.RequestMaterialInstance(definition.renderer->materialInstance),
+        definition.renderer->mesh, definition.renderer->materialInstance);
+    if (definition.camera) destination.AddComponent<Camera>(entity, *definition.camera);
+    if (definition.directionalLight) destination.AddComponent<DirectionalLight>(entity, *definition.directionalLight);
+    if (definition.pointLight) destination.AddComponent<PointLight>(entity, *definition.pointLight);
+    if (definition.spotLight) destination.AddComponent<SpotLight>(entity, *definition.spotLight);
+    if (definition.rigidBody) destination.AddComponent<RigidBody>(entity, *definition.rigidBody);
+    if (definition.collider) destination.AddComponent<Collider>(entity, *definition.collider);
+    if (definition.bounds) destination.AddComponent<Bounds>(entity, *definition.bounds);
+    if (definition.persistence) destination.AddComponent<GamePersistence>(entity, *definition.persistence);
+    if (definition.script) destination.AddComponent<ScriptComponent>(entity, *definition.script);
+    if (definition.controller) destination.AttachController(entity, *definition.controller);
 }
 
 Json Read(std::string_view text) {
@@ -262,37 +514,10 @@ bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDo
         if (camera != entt::null) captured.activeCamera = scene.GetId(camera);
         const auto light = scene.GetDirectionalLight();
         if (light != entt::null) captured.directionalLight = scene.GetId(light);
+        const auto folders = scene.GetEditorFolders();
+        captured.editorFolders.assign(folders.begin(), folders.end());
         auto visit = [&](auto&& self, const entt::entity entity) -> void {
-            SceneEntityDefinition definition;
-            definition.id = scene.GetId(entity);
-            definition.name = scene.GetName(entity);
-            const auto tags = scene.GetTags(entity);
-            definition.tags.assign(tags.begin(), tags.end());
-            if (const auto* controller = scene.GetControllerDefinition(entity)) definition.controller = *controller;
-            if (const auto* bounds = scene.TryGetComponent<Bounds>(entity)) definition.bounds = *bounds;
-            if (const auto* persistence = scene.TryGetComponent<GamePersistence>(entity)) definition.persistence = *persistence;
-            if (auto parent = scene.GetParent(entity); parent != entt::null)
-                definition.parent = scene.GetId(parent);
-            definition.transform = scene.GetTransform(entity);
-            if (const auto* renderer = scene.TryGetComponent<MeshRenderer>(entity)) {
-                auto authored = [&](const AssetReference& ref, CatalogAssetKind kind)
-                    -> std::optional<AssetReference> {
-                    if (!ref.id.IsValid()) return std::nullopt;
-                    if (const auto* entry = assets.GetCatalog().Find(ref.id, kind))
-                        return AssetReference{ref.id, entry->path};
-                    return ref; // missing asset: keep the hand-editable recovery hint
-                };
-                auto mesh = authored(renderer->meshReference, CatalogAssetKind::Mesh);
-                if (!mesh) mesh = assets.ReferenceFor(renderer->mesh);
-                auto material = authored(renderer->materialReference, CatalogAssetKind::MaterialInstance);
-                if (!material) material = assets.ReferenceFor(renderer->materialInstance);
-                if (!mesh || !material)
-                    throw std::invalid_argument("renderer has no file-backed mesh or material instance on " + definition.id);
-                definition.renderer = SceneEntityDefinition::Mesh{*mesh, *material};
-            }
-            if (const auto* component = scene.TryGetComponent<Camera>(entity)) definition.camera = *component;
-            if (const auto* component = scene.TryGetComponent<DirectionalLight>(entity)) definition.directionalLight = *component;
-            captured.entities.push_back(std::move(definition));
+            captured.entities.push_back(CaptureEntity(scene, assets, entity));
             for (const auto child : scene.GetChildren(entity)) self(self, child);
         };
         for (const auto root : scene.GetRootEntities()) visit(visit, root);
@@ -306,23 +531,68 @@ bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDo
 
 void PopulateScene(const SceneDocument& document, AssetSystem& assets, Scene& destination) {
     for (const auto& definition : document.entities)
-        destination.CreateEntityWithId(definition.id, definition.name);
+        destination.CreateEntityWithUuid(definition.id, definition.name);
     for (const auto& definition : document.entities) {
-        const auto entity = destination.FindById(definition.id);
-        for (const auto& tag : definition.tags) destination.AddTag(entity, tag);
-        if (definition.parent) destination.SetParent(entity, destination.FindById(*definition.parent));
-        destination.GetTransform(entity) = definition.transform;
-        if (definition.renderer) destination.AddComponent<MeshRenderer>(entity,
-            assets.RequestMesh(definition.renderer->mesh),
-            assets.RequestMaterialInstance(definition.renderer->materialInstance),
-            definition.renderer->mesh, definition.renderer->materialInstance);
-        if (definition.camera) destination.AddComponent<Camera>(entity, *definition.camera);
-        if (definition.directionalLight) destination.AddComponent<DirectionalLight>(entity, *definition.directionalLight);
-        if (definition.bounds) destination.AddComponent<Bounds>(entity, *definition.bounds);
-        if (definition.persistence) destination.AddComponent<GamePersistence>(entity, *definition.persistence);
-        if (definition.controller) destination.AttachController(entity, *definition.controller);
+        const auto entity = destination.FindByUuid(definition.id);
+        if (definition.parent) destination.SetParent(entity, destination.FindByUuid(*definition.parent));
+        ApplyEntity(definition, assets, destination, entity);
     }
-    if (document.activeCamera) destination.SetActiveCamera(destination.FindById(*document.activeCamera));
-    if (document.directionalLight) destination.SetDirectionalLight(destination.FindById(*document.directionalLight));
+    if (document.activeCamera) destination.SetActiveCamera(destination.FindByUuid(*document.activeCamera));
+    if (document.directionalLight) destination.SetDirectionalLight(destination.FindByUuid(*document.directionalLight));
+    destination.SetEditorFolders(document.editorFolders);
+}
+
+bool CaptureEntities(const Scene& scene, const AssetSystem& assets, std::span<const entt::entity> entities,
+                     std::vector<SceneEntityDefinition>& result, std::string& error) {
+    try {
+        // An entity is taken with its subtree only when no ancestor of it is taken too.
+        const std::unordered_set<entt::entity> picked(entities.begin(), entities.end());
+        const auto underPicked = [&](entt::entity entity) {
+            for (auto parent = scene.GetParent(entity); parent != entt::null; parent = scene.GetParent(parent))
+                if (picked.contains(parent)) return true;
+            return false;
+        };
+        std::unordered_set<entt::entity> taken;
+        std::vector<SceneEntityDefinition> captured;
+        auto visit = [&](auto&& self, const entt::entity entity) -> void {
+            if (scene.HasUnsupportedComponents(entity))
+                throw std::invalid_argument("'" + scene.GetName(entity) + "' has components without a version 1 codec");
+            captured.push_back(CaptureEntity(scene, assets, entity));
+            for (const auto child : scene.GetChildren(entity)) self(self, child);
+        };
+        for (const auto entity : entities) {
+            if (!scene.IsValid(entity) || underPicked(entity) || !taken.insert(entity).second) continue;
+            visit(visit, entity);
+        }
+        result = std::move(captured);
+        error.clear();
+        return true;
+    } catch (const std::exception& e) { error = e.what(); return false; }
+}
+
+std::vector<entt::entity> InstantiateEntities(std::span<const SceneEntityDefinition> definitions, AssetSystem& assets,
+                                              Scene& destination, const bool freshIds) {
+    // Captured UUID -> created entity, for parents inside the set.
+    std::unordered_map<EntityUuid, entt::entity, EntityUuidHash> created;
+    std::vector<entt::entity> entities;
+    entities.reserve(definitions.size());
+    for (const auto& definition : definitions) {
+        const auto entity = freshIds ? destination.CreateEntity(definition.name)
+                                     : destination.CreateEntityWithUuid(definition.id, definition.name);
+        if (entity != entt::null) created.emplace(definition.id, entity);
+        entities.push_back(entity);
+    }
+    for (std::size_t i = 0; i < definitions.size(); ++i) {
+        const auto& definition = definitions[i];
+        const auto entity = entities[i];
+        if (entity == entt::null) continue;
+        if (definition.parent) {
+            const auto inside = created.find(*definition.parent);
+            const auto parent = inside != created.end() ? inside->second : destination.FindByUuid(*definition.parent);
+            if (parent != entt::null) destination.SetParent(entity, parent);
+        }
+        ApplyEntity(definition, assets, destination, entity);
+    }
+    return entities;
 }
 } // namespace engine

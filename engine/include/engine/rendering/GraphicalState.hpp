@@ -21,6 +21,7 @@ enum class DepthState : uint8_t {
     Disabled,
     ReadWrite, //.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL; (engine uses ReverseZ)
     ReadOnly, //.DepthFunc = D3D11_COMPARISON_LESS;
+    ReadOnlyReverseZ, // visible geometry, reverse-Z GREATER_EQUAL without depth writes
 
     Count
 };

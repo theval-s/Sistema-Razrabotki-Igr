@@ -9,6 +9,8 @@
 #include <cmath>
 
 #include <engine/input/InputSubsystem.hpp>
+#include <engine/input/Win32PhysicalKey.hpp>
+#include <editor/editor_camera.hpp>
 
 namespace editor {
 
@@ -78,8 +80,32 @@ void ViewportWidget::setInput(engine::InputSubsystem* input) {
     input_ = input;
 }
 
+void ViewportWidget::setCamera(EditorCameraSubsystem* camera) {
+    camera_ = camera;
+    if (camera_ && hasFocus()) camera_->SetInputActive(true);
+}
+
+void ViewportWidget::setPlaying(bool playing) {
+    releaseCursor();
+    last_cursor_.reset();
+    playing_ = playing;
+    if (input_) {
+        input_->Reset();
+    }
+}
+
 QPaintEngine* ViewportWidget::paintEngine() const {
     return nullptr;
+}
+
+bool ViewportWidget::event(QEvent* event) {
+    // Accepting the override keeps a shortcut (F, Ctrl+A...) from taking the key: it arrives
+    // in keyPressEvent instead, and from there at the camera.
+    if (event->type() == QEvent::ShortcutOverride && cursor_pinned_) {
+        event->accept();
+        return true;
+    }
+    return QWidget::event(event);
 }
 
 void ViewportWidget::resizeEvent(QResizeEvent* event) {
@@ -89,8 +115,18 @@ void ViewportWidget::resizeEvent(QResizeEvent* event) {
 }
 
 void ViewportWidget::keyPressEvent(QKeyEvent* event) {
+    // During Play, Escape hands the keyboard back to the editor instead of going to the game.
+    if (playing_ && event->key() == Qt::Key_Escape) {
+        releaseCursor();
+        clearFocus();
+        event->accept();
+        return;
+    }
     if (input_ != nullptr && !event->isAutoRepeat()) {
         input_->OnKey(toEngineKey(event->key()), true);
+        const auto scan = event->nativeScanCode();
+        input_->OnPhysicalKey(engine::PhysicalKeyFromWin32Scan(scan & 0xff,
+            (scan & 0xe000) == 0xe000 || (scan & 0x100) != 0), true);
     }
     QWidget::keyPressEvent(event);
 }
@@ -98,6 +134,9 @@ void ViewportWidget::keyPressEvent(QKeyEvent* event) {
 void ViewportWidget::keyReleaseEvent(QKeyEvent* event) {
     if (input_ != nullptr && !event->isAutoRepeat()) {
         input_->OnKey(toEngineKey(event->key()), false);
+        const auto scan = event->nativeScanCode();
+        input_->OnPhysicalKey(engine::PhysicalKeyFromWin32Scan(scan & 0xff,
+            (scan & 0xe000) == 0xe000 || (scan & 0x100) != 0), false);
     }
     QWidget::keyReleaseEvent(event);
 }
@@ -106,7 +145,10 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
     // Clicking the viewport is how it gets the keyboard, so WASD works right away.
     setFocus(Qt::MouseFocusReason);
     last_cursor_ = event->globalPosition().toPoint();
-    if (event->button() == Qt::RightButton) {
+    if (!cursor_pinned_) {
+        emit mousePressed(event->position(), event->button(), event->modifiers());
+    }
+    if (!playing_ && event->button() == Qt::RightButton) {
         cursor_pinned_ = true;
         setCursor(Qt::BlankCursor);
     }
@@ -118,6 +160,8 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
 void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::RightButton) {
         releaseCursor();
+    } else if (!cursor_pinned_) {
+        emit mouseReleased(event->position(), event->button());
     }
     if (const auto button = toEngineButton(event->button()); input_ != nullptr && button) {
         input_->OnMouseButton(*button, false);
@@ -125,6 +169,9 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void ViewportWidget::mouseMoveEvent(QMouseEvent* event) {
+    if (!cursor_pinned_) {
+        emit mouseMoved(event->position());
+    }
     const QPoint cursor = event->globalPosition().toPoint();
     if (!last_cursor_) {
         last_cursor_ = cursor;
@@ -156,7 +203,13 @@ void ViewportWidget::focusOutEvent(QFocusEvent* event) {
     if (input_ != nullptr) {
         input_->OnFocusLost();
     }
+    if (camera_) camera_->SetInputActive(false);
     QWidget::focusOutEvent(event);
+}
+
+void ViewportWidget::focusInEvent(QFocusEvent* event) {
+    QWidget::focusInEvent(event);
+    if (camera_) camera_->SetInputActive(true);
 }
 
 void ViewportWidget::leaveEvent(QEvent* event) {

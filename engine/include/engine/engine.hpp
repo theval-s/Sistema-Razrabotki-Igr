@@ -27,6 +27,8 @@ class TaskScheduler;  // include <TaskScheduler.h> to use it
 namespace engine {
 
 class AssetSystem;
+struct SceneDocument;
+struct AutoloadDefinition;
 struct AssetReference;
 
 [[nodiscard]] ENGINE_API std::string_view version() noexcept;
@@ -38,6 +40,8 @@ struct EngineConfig {
     /// Upper bound for a frame's delta time, so a breakpoint or a window drag
     /// doesn't produce a giant simulation step.
     double maxDeltaSeconds = 0.25;
+    double fixedStepSeconds = 1.0 / 60.0;
+    std::uint32_t maxFixedStepsPerFrame = 8;
     /// Task scheduler threads to create in addition to the main thread.
     /// 0 = one per hardware thread, minus the main thread.
     std::uint32_t taskThreads = 0;
@@ -97,7 +101,7 @@ public:
     ENGINE_API void Shutdown();
     [[nodiscard]] ENGINE_API bool IsInitialized() const noexcept;
 
-    /// Runs exactly one frame: all Update()s, then all Render()s.
+    /// Runs one frame: Update/controllers, fixed steps, LateUpdate, Render.
     ENGINE_API void Tick();
     /// Initializes if needed, then Tick()s until RequestExit() is called.
     /// Something (e.g. a platform/window subsystem handling WM_QUIT) must call it.
@@ -109,6 +113,13 @@ public:
     /// While paused FrameContext::deltaSeconds is 0, but Update/Render still run.
     ENGINE_API void SetPaused(bool paused);
     [[nodiscard]] ENGINE_API bool IsPaused() const noexcept;
+    ENGINE_API void SetEditorMode();
+    [[nodiscard]] ENGINE_API bool IsPlaying() const noexcept;
+    [[nodiscard]] ENGINE_API bool PlayCurrentScene(const std::filesystem::path& root,
+        std::span<const AutoloadDefinition> autoloads, std::string& error);
+    ENGINE_API void StopPlay();
+    /// Validate now, replace the scene after callbacks at the end of Tick.
+    [[nodiscard]] ENGINE_API bool RequestOpenLevel(std::string_view name, std::string& error);
 
     // --- Output surface --------------------------------------------------------
     ENGINE_API void SetSurface(const NativeSurface& surface);
@@ -141,6 +152,8 @@ public:
         AssetHandle<TextureAsset> texture, std::string& error);
     /// Transient clone owned by the active scene runtime; empty if none exists.
     [[nodiscard]] ENGINE_API MaterialInstanceHandle GetEntityMaterialOverride(entt::entity entity) const;
+    /// Discards the transient clone so the entity uses its authored material instance again.
+    ENGINE_API void ClearEntityMaterialOverride(entt::entity entity);
     /// Meshes, textures and shaders by name. Kernel state rather than a subsystem: it
     /// exists from construction, is ready as soon as Initialize() has started the
     /// scheduler, and is pumped once per Tick before the subsystems update.
@@ -157,6 +170,8 @@ public:
 
     
 private:
+    void ResetSimulation();
+    void CommitScene(const SceneDocument& document);
     ENGINE_API Subsystem* RegisterSubsystem(entt::id_type type, std::string_view typeName,
                                             std::unique_ptr<Subsystem> subsystem);
     [[nodiscard]] ENGINE_API Subsystem* FindSubsystem(entt::id_type type, std::string_view typeName) const noexcept;
