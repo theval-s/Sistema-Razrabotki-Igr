@@ -9,6 +9,7 @@
 #include <QItemSelectionModel>
 #include <QKeySequence>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPlainTextEdit>
 #include <QScrollBar>
 #include <QSettings>
@@ -18,6 +19,7 @@
 #include <QTableView>
 #include <QTimer>
 #include <QToolBar>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -26,6 +28,7 @@
 #include <vector>
 
 #include <editor/log_model.hpp>
+#include <editor/menu_button.hpp>
 
 namespace editor {
 
@@ -34,8 +37,10 @@ namespace {
 // Often enough to feel live, rarely enough that a burst of messages lands as one batch.
 constexpr int DrainIntervalMs = 50;
 
-const QString HeaderKey = QStringLiteral("log/header");
+// Renamed when the default columns change, so an older saved state doesn't override them.
+const QString HeaderKey = QStringLiteral("log/columns");
 const QString HiddenLevelsKey = QStringLiteral("log/hiddenLevels");
+const QString HiddenSourcesKey = QStringLiteral("log/hiddenSources");
 
 /// A level toggle in the toolbar; it shows or hides all of `levels` together.
 struct LevelGroup {
@@ -141,6 +146,7 @@ LogPanel::~LogPanel() {
         if (!level_actions_[i]->isChecked()) hidden.append(QString::fromLatin1(LevelGroups[i].key));
     }
     settings.setValue(HiddenLevelsKey, hidden);
+    settings.setValue(HiddenSourcesKey, filter_->hiddenSources());
 }
 
 QWidget* LogPanel::buildToolBar() {
@@ -174,6 +180,14 @@ QWidget* LogPanel::buildToolBar() {
     });
     bar->addWidget(search);
 
+    for (const QString& source : QSettings().value(HiddenSourcesKey).toStringList()) {
+        filter_->setSourceShown(source, false);
+    }
+    sources_menu_ = new QMenu(this);
+    bar->addWidget(makeMenuButton(tr("Sources"), sources_menu_));
+    connect(model_, &LogModel::sourcesChanged, this, &LogPanel::refreshSources);
+    refreshSources();
+
     // Right-aligned: what acts on the whole log.
     auto* spacer = new QWidget;
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -193,8 +207,6 @@ void LogPanel::setupHeader() {
     header->resizeSection(LogModel::TimeColumn, metrics.horizontalAdvance(QStringLiteral("00:00:00.000")) + padding);
     header->resizeSection(LogModel::LevelColumn, metrics.horizontalAdvance(QStringLiteral("critical")) + padding);
     header->resizeSection(LogModel::SourceColumn, metrics.horizontalAdvance(QStringLiteral("Physics")) + padding);
-    // Empty until the engine logs through named loggers.
-    header->setSectionHidden(LogModel::SourceColumn, true);
     header->restoreState(QSettings().value(HeaderKey).toByteArray());
 
     // Right-click the header to show or hide columns; the message always stays.
@@ -226,6 +238,27 @@ void LogPanel::refreshCounts() {
         int count = model_->count(group.levels[0]);
         if (group.levels[1] != group.levels[0]) count += model_->count(group.levels[1]);
         level_actions_[i]->setText(QStringLiteral("%1 %2").arg(tr(group.label)).arg(count));
+    }
+}
+
+void LogPanel::refreshSources() {
+    sources_menu_->clear();
+    connect(sources_menu_->addAction(tr("Show All")), &QAction::triggered, this, [this] {
+        for (QAction* action : sources_menu_->actions()) action->setChecked(true);
+        // Also the remembered ones that haven't logged yet.
+        for (const QString& source : filter_->hiddenSources()) filter_->setSourceShown(source, true);
+        follow();
+    });
+    sources_menu_->addSeparator();
+    for (const QString& source : model_->sources()) {
+        // spdlog's default logger has no name.
+        auto* action = sources_menu_->addAction(source.isEmpty() ? tr("(no channel)") : source);
+        action->setCheckable(true);
+        action->setChecked(filter_->isSourceShown(source));
+        connect(action, &QAction::toggled, this, [this, source](const bool checked) {
+            filter_->setSourceShown(source, checked);
+            follow();
+        });
     }
 }
 

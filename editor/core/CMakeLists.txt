@@ -27,6 +27,7 @@ add_library(editor_core SHARED
     src/lua_definitions.cpp
     include/editor/lua_definitions.hpp
     include/editor/editor_context.hpp
+    include/editor/editor_log.hpp
     include/editor/editor_module.hpp
     include/editor/menu_button.hpp
     include/editor/paths.hpp

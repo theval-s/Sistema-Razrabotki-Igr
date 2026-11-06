@@ -16,7 +16,7 @@
 
 #include <DirectXCollision.h>
 #include <SimpleMath.h>
-#include <spdlog/spdlog.h>
+#include <editor/editor_log.hpp>
 
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/engine.hpp>
@@ -136,7 +136,7 @@ void EditActions::duplicateSelected() {
     std::vector<engine::SceneEntityDefinition> definitions;
     if (std::string error;
         !engine::CaptureEntities(scene, engine_.GetSceneAssets(), selection_.entities(), definitions, error)) {
-        spdlog::warn("Could not duplicate: {}", error);
+        editorLog().warn("Could not duplicate: {}", error);
         return;
     }
     const auto copies = engine::InstantiateEntities(definitions, engine_.GetSceneAssets(), scene, true);

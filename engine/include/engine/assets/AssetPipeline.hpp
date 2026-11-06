@@ -8,7 +8,7 @@
 #include <vector>
 
 #include <TaskScheduler.h>
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 #include <engine/rendering/RenderingResourceManager.hpp>
 #include <engine/core/ResourceID.hpp>
@@ -161,7 +161,7 @@ struct LoadJob final : public enki::ITaskSet {
         const auto queueDelaySeconds = std::chrono::duration<double>(start - queuedAt).count();
         // threadnum 0 is the thread that called TaskScheduler::Initialize(), i.e. the main one:
         // a non-zero number here is the proof that the read never blocked the game loop.
-        spdlog::info("Asset '{}': CPU phase ran on worker {} ({} s in the pipe, {} s of work)",
+        log::Assets().info("Asset '{}': CPU phase ran on worker {} ({} s in the pipe, {} s of work)",
                      name, threadnum, queueDelaySeconds, cpuSeconds);
     }
 };

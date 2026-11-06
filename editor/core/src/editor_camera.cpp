@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include <spdlog/spdlog.h>
+#include <editor/editor_log.hpp>
 
 #include <engine/engine.hpp>
 #include <engine/input/InputSubsystem.hpp>
@@ -42,7 +42,7 @@ bool EditorCameraSubsystem::Initialize() {
     input_ = GetEngine().GetSubsystem<engine::InputSubsystem>();
     rendering_ = GetEngine().GetSubsystem<engine::RenderingSubsystem>();
     if (input_ == nullptr || rendering_ == nullptr) {
-        spdlog::error("EditorCameraSubsystem: needs InputSubsystem and RenderingSubsystem registered");
+        editorLog().error("EditorCameraSubsystem: needs InputSubsystem and RenderingSubsystem registered");
         return false;
     }
     auto& bindings = input_->DefineContext("EditorViewport");

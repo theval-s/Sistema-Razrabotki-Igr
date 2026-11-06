@@ -7,7 +7,7 @@
 #include <system_error>
 #include <utility>
 
-#include <spdlog/spdlog.h>
+#include <editor/editor_log.hpp>
 
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
@@ -75,7 +75,7 @@ engine::SceneDocument defaultScene(const engine::AssetCatalog& catalog) {
                                                              {material->metadata.id, material->path}};
         document.entities.push_back(std::move(ground));
     } else {
-        spdlog::warn("New scene: built-in plane or default material missing from the catalog, no ground");
+        editorLog().warn("New scene: built-in plane or default material missing from the catalog, no ground");
     }
     return document;
 }
@@ -148,7 +148,7 @@ bool SceneDocument::open(const std::filesystem::path& file, std::string& error) 
         return false;
     }
     if (!diagnostics.empty()) {
-        spdlog::warn("Opened {} with problems:\n{}", engine::ToUtf8(file), diagnostics);
+        editorLog().warn("Opened {} with problems:\n{}", engine::ToUtf8(file), diagnostics);
     }
     selection_.clear();
     setClean(file);
@@ -174,7 +174,7 @@ bool SceneDocument::create(const std::filesystem::path& file, std::string& error
         return false;
     }
     if (std::string rescan; !engine_.RescanAssetCatalogs(rescan)) {
-        spdlog::warn("Asset catalog: {}", rescan);
+        editorLog().warn("Asset catalog: {}", rescan);
     }
     return open(target, error);
 }
@@ -199,14 +199,14 @@ bool SceneDocument::saveAs(const std::filesystem::path& file, std::string& error
     if (std::error_code ec; !std::filesystem::exists(engine::AssetMetadataPath(target), ec)) {
         // A new file: give it an identity so other assets can refer to it.
         if (engine::AssetPathResolver::ToName(target).empty()) {
-            spdlog::warn("{} is outside the project content: it is saved, but no asset can refer to it",
+            editorLog().warn("{} is outside the project content: it is saved, but no asset can refer to it",
                          engine::ToUtf8(target));
         } else {
             if (!engine::WriteAssetMetadata(target, {engine::NewUuid(), engine::CatalogAssetKind::Scene}, error)) {
                 return false;
             }
             if (std::string rescan; !engine_.RescanAssetCatalogs(rescan)) {
-                spdlog::warn("Asset catalog: {}", rescan);
+                editorLog().warn("Asset catalog: {}", rescan);
             }
         }
     }

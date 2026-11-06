@@ -1,8 +1,10 @@
 #pragma once
 
 #include <QAbstractTableModel>
+#include <QSet>
 #include <QSortFilterProxyModel>
 #include <QString>
+#include <QStringList>
 
 #include <array>
 #include <chrono>
@@ -65,6 +67,8 @@ public:
     [[nodiscard]] std::size_t capacity() const noexcept { return capacity_; }
     /// How many entries of `level` the model holds, shown or not.
     [[nodiscard]] int count(spdlog::level::level_enum level) const;
+    /// Every source seen so far, sorted; clear() keeps them.
+    [[nodiscard]] const QStringList& sources() const noexcept { return sources_; }
 
     void append(std::vector<LogEntry> entries);
     void clear();
@@ -75,14 +79,17 @@ public:
 signals:
     /// After entries were added, dropped or cleared.
     void countsChanged();
+    /// After entries from a new source arrived.
+    void sourcesChanged();
 
 private:
     std::deque<LogEntry> entries_;
     std::size_t capacity_;
     std::array<int, spdlog::level::n_levels> counts_{};
+    QStringList sources_;
 };
 
-/// Hides LogModel rows by level and by text.
+/// Hides LogModel rows by level, by source and by text.
 class LogFilterModel : public QSortFilterProxyModel {
     Q_OBJECT
 
@@ -91,6 +98,10 @@ public:
 
     [[nodiscard]] bool isLevelShown(spdlog::level::level_enum level) const;
     void setLevelShown(spdlog::level::level_enum level, bool shown);
+    /// Sources are shown unless hidden here, including ones not seen yet.
+    [[nodiscard]] bool isSourceShown(const QString& source) const;
+    void setSourceShown(const QString& source, bool shown);
+    [[nodiscard]] QStringList hiddenSources() const { return hidden_sources_.values(); }
     /// Rows whose message or source contains `text`, ignoring case; empty shows all.
     void setSearchText(const QString& text);
 
@@ -99,6 +110,7 @@ protected:
 
 private:
     std::array<bool, spdlog::level::n_levels> shown_;
+    QSet<QString> hidden_sources_;
     QString search_;
 };
 

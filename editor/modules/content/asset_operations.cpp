@@ -16,7 +16,7 @@
 #include <system_error>
 #include <vector>
 
-#include <spdlog/spdlog.h>
+#include <editor/editor_log.hpp>
 
 #include <engine/assets/AssetAuthoring.hpp>
 #include <engine/assets/AssetCatalog.hpp>
@@ -428,9 +428,9 @@ void AssetOperations::adoptNewFiles() {
     std::size_t generated = 0;
     std::string error;
     if (!engine::GenerateMissingAssetMetadata(context_.project().ContentDir(), generated, error)) {
-        spdlog::warn("Could not create metadata for new content files: {}", error);
+        editor::editorLog().warn("Could not create metadata for new content files: {}", error);
     } else if (generated > 0) {
-        spdlog::info("Created metadata for {} new content file(s)", generated);
+        editor::editorLog().info("Created metadata for {} new content file(s)", generated);
     }
     rescan();
 }
@@ -467,7 +467,7 @@ void AssetOperations::report(const QString& command, const QStringList& errors) 
         return;
     }
     for (const QString& error : errors) {
-        spdlog::warn("{}: {}", command.toStdString(), error.toStdString());
+        editor::editorLog().warn("{}: {}", command.toStdString(), error.toStdString());
     }
     QMessageBox::warning(parent_, command, errors.join(QLatin1Char('\n')));
 }

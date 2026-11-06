@@ -9,7 +9,7 @@
 #include <string_view>
 #include <utility>
 
-#include <spdlog/spdlog.h>
+#include <editor/editor_log.hpp>
 
 #include <engine/engine.hpp>
 #include <engine/project/Project.hpp>
@@ -39,7 +39,7 @@ public:
         buildPlayActions();
         buildProjectActions();
         if (std::string error; !editor::refreshLuaDefinitions(context.project(), error)) {
-            spdlog::warn("{}", error);
+            editor::editorLog().warn("{}", error);
         }
     }
 
@@ -126,7 +126,7 @@ private:
                 continue;
             }
             if (!editor::refreshLuaDefinitions(context_->project(), error)) {
-                spdlog::warn("{}", error);
+                editor::editorLog().warn("{}", error);
                 QMessageBox::warning(context_->mainWindow(), QObject::tr("Lua completion"), toQString(error));
             }
             return;

@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 #include "engine/window.hpp"
 
@@ -22,7 +22,7 @@ RenderingContext::~RenderingContext() {
 
 bool RenderingContext::Initialize(const NativeSurface& surface) {
     if (!surface.IsValid()) {
-        spdlog::error("RenderingContext::Initialize: the engine has no valid native surface");
+        log::Render().error("RenderingContext::Initialize: the engine has no valid native surface");
         return false;
     }
     return CreateDeviceAndSwapChain(static_cast<HWND>(surface.windowHandle), surface.width, surface.height);
@@ -34,7 +34,7 @@ bool RenderingContext::Reinitialize(const NativeSurface& surface) const {
     }
     const auto r = swapChain_->ResizeBuffers(0, surface.width, surface.height, DXGI_FORMAT_UNKNOWN, 0);
     if (FAILED(r)) {
-        spdlog::error("Failed to resize swap chain: {:08x}", static_cast<unsigned long>(r));
+        log::Render().error("Failed to resize swap chain: {:08x}", static_cast<unsigned long>(r));
         return false;
     }
     return true;
@@ -75,7 +75,7 @@ bool RenderingContext::CreateDeviceAndSwapChain(const HWND hwnd, const uint32_t 
         nullptr,
         deviceContext_.GetAddressOf());
     if (FAILED(r)) {
-        spdlog::critical("D3D11CreateDeviceAndSwapChain failed: {:08x}", static_cast<unsigned long>(r));
+        log::Render().critical("D3D11CreateDeviceAndSwapChain failed: {:08x}", static_cast<unsigned long>(r));
         return false;
     }
     resourceManager_.Initialize(device_.Get());
@@ -353,7 +353,7 @@ void RenderingContext::Present() const {
 
 void RenderingContext::checkResult(const HRESULT result, const char* message) {
     if (FAILED(result)) {
-        spdlog::critical(message);
+        log::Render().critical(message);
         std::exit(1);
     }
 }

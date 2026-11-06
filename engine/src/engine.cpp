@@ -9,7 +9,7 @@
 #include <vector>
 
 #include <TaskScheduler.h>
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
@@ -120,9 +120,9 @@ Subsystem* Engine::RegisterSubsystem(const entt::id_type type, const std::string
     const auto existing = std::ranges::find(impl_->subsystems, type, &Impl::Entry::type); //or using <algorithm>
     if (existing != impl_->subsystems.end()) {
         if (existing->typeName == typeName) {
-            spdlog::error("Engine: subsystem '{}' is already registered", typeName);
+            log::Engine().error("Subsystem '{}' is already registered", typeName);
         } else {
-            spdlog::error("Engine: type hash collision between subsystems '{}' and '{}'", existing->typeName, typeName);
+            log::Engine().error("Type hash collision between subsystems '{}' and '{}'", existing->typeName, typeName);
         }
         return nullptr;
     }
@@ -134,9 +134,9 @@ Subsystem* Engine::RegisterSubsystem(const entt::id_type type, const std::string
     // walking the list the new entry is simply picked up by its loop instead.
     const bool allOthersInitialized = impl_->initializedCount + 1 == impl_->subsystems.size();
     if (impl_->initialized && allOthersInitialized) {
-        spdlog::info("Initializing subsystem '{}'", added->GetName());
+        log::Engine().info("Initializing subsystem '{}'", added->GetName());
         if (!added->Initialize()) {
-            spdlog::error("Subsystem '{}' failed to initialize", added->GetName());
+            log::Engine().error("Subsystem '{}' failed to initialize", added->GetName());
             impl_->subsystems.pop_back();
             return nullptr;
         }
@@ -157,11 +157,11 @@ bool Engine::Initialize() {
     }
     if (!std::isfinite(impl_->config.fixedStepSeconds) || impl_->config.fixedStepSeconds <= 0 ||
         impl_->config.maxFixedStepsPerFrame == 0) {
-        spdlog::error("Invalid fixed update configuration");
+        log::Engine().error("Invalid fixed update configuration");
         return false;
     }
     impl_->fixedStep.deltaSeconds = impl_->config.fixedStepSeconds;
-    spdlog::info("Engine {} initializing '{}'", version(), impl_->config.applicationName);
+    log::Engine().info("Engine {} initializing '{}'", version(), impl_->config.applicationName);
 
     // Up before any subsystem, so they can already schedule work in Initialize().
     if (impl_->config.taskThreads == 0) {
@@ -171,7 +171,7 @@ bool Engine::Initialize() {
         schedulerConfig.numTaskThreadsToCreate = impl_->config.taskThreads;
         impl_->scheduler.Initialize(schedulerConfig);
     }
-    spdlog::info("Task scheduler running with {} threads", impl_->scheduler.GetNumTaskThreads());
+    log::Engine().info("Task scheduler running with {} threads", impl_->scheduler.GetNumTaskThreads());
 
     // Up before the subsystems: they already request assets from their Initialize().
     impl_->assets->Initialize();
@@ -182,9 +182,9 @@ bool Engine::Initialize() {
     impl_->initialized = true;
     for (; impl_->initializedCount < impl_->subsystems.size(); ++impl_->initializedCount) {
         Subsystem& subsystem = *impl_->subsystems[impl_->initializedCount].subsystem;
-        spdlog::info("Initializing subsystem '{}'", subsystem.GetName());
+        log::Engine().info("Initializing subsystem '{}'", subsystem.GetName());
         if (!subsystem.Initialize()) {
-            spdlog::error("Subsystem '{}' failed to initialize, shutting the engine down", subsystem.GetName());
+            log::Engine().error("Subsystem '{}' failed to initialize, shutting the engine down", subsystem.GetName());
             // Unwind whatever did come up, so a failed start leaves no half-initialized systems.
             Shutdown();
             return false;
@@ -200,7 +200,7 @@ void Engine::Shutdown() {
     if (!impl_->initialized) {
         return;
     }
-    spdlog::info("Engine shutting down");
+    log::Engine().info("Engine shutting down");
     StopPlay();
     ResetSimulation();
 
@@ -225,7 +225,7 @@ bool Engine::IsInitialized() const noexcept {
 
 void Engine::Tick() {
     if (!impl_->initialized) {
-        spdlog::error("Engine::Tick() called before Initialize()");
+        log::Engine().error("Engine::Tick() called before Initialize()");
         return;
     }
 
@@ -266,7 +266,7 @@ void Engine::Tick() {
         const auto file = std::move(*impl_->queuedScene);
         impl_->queuedScene.reset();
         std::string error;
-        if (!LoadScene(file, error) || !error.empty()) spdlog::error("Deferred scene load: {}", error);
+        if (!LoadScene(file, error) || !error.empty()) log::Engine().error("Deferred scene load: {}", error);
     }
     const auto revision = impl_->simulationRevision;
     // A newly committed scene starts accumulating time on the next frame.
@@ -288,14 +288,14 @@ void Engine::Tick() {
                 const auto file = std::move(*impl_->queuedScene);
                 impl_->queuedScene.reset();
                 std::string error;
-                if (!LoadScene(file, error) || !error.empty()) spdlog::error("Deferred scene load: {}", error);
+                if (!LoadScene(file, error) || !error.empty()) log::Engine().error("Deferred scene load: {}", error);
                 if (revision != impl_->simulationRevision) break;
             }
             if (impl_->paused || impl_->exitRequested) break;
         }
         if (impl_->fixedAccumulator >= impl_->config.fixedStepSeconds) {
             impl_->fixedAccumulator = std::fmod(impl_->fixedAccumulator, impl_->config.fixedStepSeconds);
-            spdlog::warn("FixedUpdate catch-up limit reached; discarded simulation backlog");
+            log::Engine().warn("FixedUpdate catch-up limit reached; discarded simulation backlog");
         }
     }
     for (std::size_t i = 0; i < impl_->subsystems.size(); ++i) {
@@ -446,7 +446,7 @@ void Engine::StopPlay() {
 bool Engine::RequestOpenLevel(std::string_view name, std::string& error) {
     auto fail = [&](std::string message) {
         error = std::move(message);
-        spdlog::error("OpenLevel: {}", error);
+        log::Engine().error("OpenLevel: {}", error);
         return false;
     };
     if (!IsPlaying()) return fail("OpenLevel requires a play session");
@@ -538,7 +538,7 @@ bool Engine::LoadScene(const AssetReference& reference, std::string& error) {
         return false;
     }
     if (NormalizeName(reference.path) != NormalizeName(entry->path))
-        spdlog::warn("Scene UUID '{}' moved from '{}' to '{}'", reference.id.ToString(), reference.path, entry->path);
+        log::Engine().warn("Scene UUID '{}' moved from '{}' to '{}'", reference.id.ToString(), reference.path, entry->path);
     return LoadScene(entry->source, error);
 }
 

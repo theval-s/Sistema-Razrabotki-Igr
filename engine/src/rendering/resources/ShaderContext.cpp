@@ -6,7 +6,7 @@
 #include <memory>
 #include <unordered_map>
 #include <utility>
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/core/FileSystem.hpp>
@@ -37,7 +37,7 @@ public:
         path = path.lexically_normal();
         std::string contents, error;
         if (!ReadTextFile(path, contents, error)) {
-            spdlog::error("Cannot include shader file from '{}': {}", ToUtf8(sourcePath_), error);
+            log::Render().error("Cannot include shader file from '{}': {}", ToUtf8(sourcePath_), error);
             return E_FAIL;
         }
         if (contents.size() > std::numeric_limits<UINT>::max()) {
@@ -93,7 +93,7 @@ ShaderVertexLayout ShaderContext::ParseVertexShaderInputs(
     for (UINT i = 0; i < shaderDesc.InputParameters; ++i) {
         D3D11_SIGNATURE_PARAMETER_DESC desc{};
         if (const auto res = reflection->GetInputParameterDesc(i, &desc); FAILED(res)) {
-            spdlog::error("Unexpected error cannot get input parameter desc {}", i);
+            log::Render().error("Unexpected error cannot get input parameter desc {}", i);
             continue;
         }
         if (desc.SystemValueType != D3D_NAME_UNDEFINED) // Skip as it doesn't affect shader signature
@@ -108,7 +108,7 @@ std::optional<CompiledShader> ShaderContext::CompileCpu(const std::filesystem::p
                                                         const ShaderCompileOptions& options) {
     std::string source, error;
     if (!ReadTextFile(fileName, source, error)) {
-        spdlog::error("Missing shader file: {}", error);
+        log::Render().error("Missing shader file: {}", error);
         return std::nullopt;
     }
     return CompileSource(source, fileName, shaderType, options);
@@ -140,10 +140,10 @@ std::optional<CompiledShader> ShaderContext::CompileSource(const std::string_vie
                                          errors.GetAddressOf());
     if (FAILED(res)) {
         if (errors) {
-            spdlog::error("Could not compile shader {}: {}", displayName,
+            log::Render().error("Could not compile shader {}: {}", displayName,
                           static_cast<const char*>(errors->GetBufferPointer()));
         } else {
-            spdlog::error("Could not compile shader {}: {:08x}", displayName, static_cast<unsigned>(res));
+            log::Render().error("Could not compile shader {}: {:08x}", displayName, static_cast<unsigned>(res));
         }
         return std::nullopt;
     }
@@ -154,23 +154,23 @@ std::optional<CompiledShader> ShaderContext::CompileSource(const std::string_vie
         IID_ID3D11ShaderReflection,
         reinterpret_cast<void**>(result.reflection.GetAddressOf()));
     if (FAILED(reflectRes)) {
-        spdlog::error("Could not get shader reflection for shader: {}", displayName);
+        log::Render().error("Could not get shader reflection for shader: {}", displayName);
         return std::nullopt;
     }
 
     if (const auto r = result.reflection->GetDesc(&result.desc); FAILED(r)) {
-        spdlog::error("Could not get shader description for shader: {}", displayName);
+        log::Render().error("Could not get shader description for shader: {}", displayName);
         return std::nullopt;
     }
 
     for (UINT i = 0; i < result.desc.BoundResources; ++i) {
         D3D11_SHADER_INPUT_BIND_DESC bind{};
         if (const auto r = result.reflection->GetResourceBindingDesc(i, &bind); FAILED(r)) {
-            spdlog::error("Could not get resource binding description for shader: {}", displayName);
+            log::Render().error("Could not get resource binding description for shader: {}", displayName);
             continue;
         }
         if (bind.BindCount != 1) {
-            spdlog::error("Array bindings are unsupported: {}", displayName);
+            log::Render().error("Array bindings are unsupported: {}", displayName);
             continue;
         }
         result.bindings.emplace_back(bind.Name, static_cast<uint8_t>(bind.BindPoint),
@@ -200,7 +200,7 @@ std::optional<ShaderContext> ShaderContext::FinalizeOnDevice(const CompiledShade
             result.blob->GetBufferPointer(),
             result.blob->GetBufferSize(),
             nullptr, &vs); FAILED(r)) {
-            spdlog::error("Could not create vertex shader from bytecode: {:08x}", static_cast<unsigned>(r));
+            log::Render().error("Could not create vertex shader from bytecode: {:08x}", static_cast<unsigned>(r));
         }
         result.shader.vertexShader = std::move(vs);
         break;
@@ -211,7 +211,7 @@ std::optional<ShaderContext> ShaderContext::FinalizeOnDevice(const CompiledShade
             result.blob->GetBufferPointer(),
             result.blob->GetBufferSize(),
             nullptr, &ps); FAILED(r)) {
-            spdlog::error("Could not create pixel shader from bytecode: {:08x}", static_cast<unsigned>(r));
+            log::Render().error("Could not create pixel shader from bytecode: {:08x}", static_cast<unsigned>(r));
         }
         result.shader.pixelShader = std::move(ps);
         break;
@@ -222,7 +222,7 @@ std::optional<ShaderContext> ShaderContext::FinalizeOnDevice(const CompiledShade
             result.blob->GetBufferPointer(),
             result.blob->GetBufferSize(),
             nullptr, &gs); FAILED(r)) {
-            spdlog::error("Could not create geometry shader from bytecode: {:08x}", static_cast<unsigned>(r));
+            log::Render().error("Could not create geometry shader from bytecode: {:08x}", static_cast<unsigned>(r));
         }
         result.shader.geometryShader = std::move(gs);
         break;

@@ -16,6 +16,7 @@
 #include <editor/main_window.hpp>
 #include <editor/paths.hpp>
 #include <editor/project_dialog.hpp>
+#include <editor/editor_log.hpp>
 
 namespace {
 
@@ -24,11 +25,11 @@ void addFileLog() {
     const QString path = QDir::toNativeSeparators(QCoreApplication::applicationDirPath() + "/logs/editor.log");
     try {
         // spdlog opens narrow paths with the ANSI code page on Windows, hence local 8-bit.
-        spdlog::default_logger()->sinks().push_back(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+        engine::log::Sinks()->add_sink(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
             path.toLocal8Bit().toStdString(), 5 * 1024 * 1024, 3));
         spdlog::flush_on(spdlog::level::warn);
     } catch (const spdlog::spdlog_ex& e) {
-        spdlog::warn("Could not open log file '{}': {}", path.toStdString(), e.what());
+        editor::editorLog().warn("Could not open log file '{}': {}", path.toStdString(), e.what());
     }
 }
 

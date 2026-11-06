@@ -16,6 +16,7 @@
 #include <engine/project/Project.hpp>
 #include <engine/scripting/LuaRuntime.hpp>
 #include <engine/core/FileSystem.hpp>
+#include <engine/core/Log.hpp>
 #include <engine/core/PathUtils.hpp>
 
 #include <gtest/gtest.h>
@@ -25,6 +26,7 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -175,26 +177,23 @@ TEST(LuaDefinitions, NestedSettingsRetainTheirExistingLibrariesAndRuntimeChoices
     EXPECT_EQ(object.value("runtime").toObject().value("path").toArray()[0].toString(), QStringLiteral("custom/?.lua"));
 }
 
-TEST(AutoloadLogging, LuaUsesTheSharedDefaultLogger) {
-    std::vector<std::string> messages;
-    const auto logger = spdlog::default_logger();
-    const auto previousLevel = logger->level();
+TEST(AutoloadLogging, ScriptOutputReachesTheSharedSinksOnTheGameChannel) {
+    // Engine.dll logs here and the editor adds its sinks here: both must see one instance.
+    std::vector<std::pair<std::string, std::string>> messages;
     auto sink = std::make_shared<spdlog::sinks::callback_sink_mt>([&](const spdlog::details::log_msg& message) {
-        messages.emplace_back(message.payload.data(), message.payload.size());
+        messages.emplace_back(std::string(message.logger_name.data(), message.logger_name.size()),
+                              std::string(message.payload.data(), message.payload.size()));
     });
-    struct RestoreLogger {
-        std::shared_ptr<spdlog::logger> logger;
+    struct RemoveSink {
         std::shared_ptr<spdlog::sinks::sink> sink;
-        spdlog::level::level_enum level;
-        ~RestoreLogger() { std::erase(logger->sinks(), sink); logger->set_level(level); }
-    } restore{logger, sink, previousLevel};
-    logger->sinks().push_back(sink);
-    logger->set_level(spdlog::level::info);
+        ~RemoveSink() { engine::log::Sinks()->remove_sink(sink); }
+    } remove{sink};
+    engine::log::Sinks()->add_sink(sink);
     engine::LuaRuntime runtime;
     std::string error;
     ASSERT_TRUE(runtime.Initialize(error)) << error;
     ASSERT_TRUE(runtime.ExecuteString("Log.info('Hello world')", "logging-test", error)) << error;
-    EXPECT_EQ(std::count(messages.begin(), messages.end(), "[Lua] Hello world"), 1);
+    EXPECT_EQ(std::count(messages.begin(), messages.end(), std::pair<std::string, std::string>("Game", "Hello world")), 1);
 }
 
 TEST(EditorPlayDocument, RuntimeChangesDoNotOverwriteOriginalDirtyStateOrSceneFile) {

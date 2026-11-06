@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <utility>
 
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 
 namespace engine {
@@ -33,7 +33,7 @@ entt::entity Scene::CreateEntityWithId(const std::string_view id, const std::str
                                        const entt::entity parent) {
     const auto parsed = EntityUuid::Parse(id);
     if (!parsed) {
-        spdlog::error("Scene::CreateEntityWithId: invalid UUID '{}'", id);
+        log::Scene().error("Scene::CreateEntityWithId: invalid UUID '{}'", id);
         return entt::null;
     }
     return CreateEntityWithUuid(*parsed, name, parent);
@@ -42,7 +42,7 @@ entt::entity Scene::CreateEntityWithId(const std::string_view id, const std::str
 entt::entity Scene::CreateEntityWithUuid(EntityUuid id, const std::string_view name,
                                          const entt::entity parent) {
     if (ids_.contains(id)) {
-        spdlog::error("Scene::CreateEntityWithUuid: duplicate UUID '{}'", id.ToString());
+        log::Scene().error("Scene::CreateEntityWithUuid: duplicate UUID '{}'", id.ToString());
         return entt::null;
     }
     if (parent != entt::null && !CheckEntity(parent, "CreateEntity")) {
@@ -258,7 +258,7 @@ void Scene::AttachController(entt::entity entity, ControllerDefinition definitio
             inControllerCallback_ = false;
         }
     }
-    if (!error.empty()) spdlog::error("Scene controller on {}: {}", GetId(entity).ToString(), error);
+    if (!error.empty()) log::Scene().error("Scene controller on {}: {}", GetId(entity).ToString(), error);
     ++revision_;
     NotifyChange(ChangeKind::Modified, entity);
     FlushCommands();
@@ -271,10 +271,10 @@ void Scene::DestroyController(entt::entity entity) {
         inControllerCallback_ = true;
         if (it->second.active) {
             try { it->second.instance->OnDisable(); }
-            catch (const std::exception& e) { spdlog::error("Controller disable: {}", e.what()); }
+            catch (const std::exception& e) { log::Scene().error("Controller disable: {}", e.what()); }
         }
         try { it->second.instance->OnDestroy(); }
-        catch (const std::exception& e) { spdlog::error("Controller destroy: {}", e.what()); }
+        catch (const std::exception& e) { log::Scene().error("Controller destroy: {}", e.what()); }
         inControllerCallback_ = false;
     }
     controllers_.erase(it);
@@ -306,7 +306,7 @@ void Scene::SetControllerEnabled(entt::entity entity, bool enabled) {
         try {
             if (enabled) { slot.active = true; slot.instance->OnEnable(); }
             else { slot.active = false; slot.instance->OnDisable(); }
-        } catch (const std::exception& e) { spdlog::error("Controller enable: {}", e.what()); }
+        } catch (const std::exception& e) { log::Scene().error("Controller enable: {}", e.what()); }
         inControllerCallback_ = false;
     }
     ++revision_;
@@ -392,7 +392,7 @@ void Scene::SetControllersActive(bool active) {
             it->second.active = active;
             if (active) it->second.instance->OnEnable();
             else it->second.instance->OnDisable();
-        } catch (const std::exception& e) { spdlog::error("Controller activation: {}", e.what()); }
+        } catch (const std::exception& e) { log::Scene().error("Controller activation: {}", e.what()); }
         inControllerCallback_ = false;
     });
     FlushCommands();
@@ -407,7 +407,7 @@ void Scene::UpdateControllers(double deltaSeconds) {
         auto it = controllers_.find(entity);
         if (it != controllers_.end() && it->second.active) {
             try { it->second.instance->Update(deltaSeconds); }
-            catch (const std::exception& e) { spdlog::error("Controller update: {}", e.what()); }
+            catch (const std::exception& e) { log::Scene().error("Controller update: {}", e.what()); }
         }
     }
     inControllerCallback_ = false;
@@ -542,7 +542,7 @@ Transform& Scene::GetTransform(const entt::entity entity) {
 const Transform& Scene::GetTransform(const entt::entity entity) const {
     if (!CheckEntity(entity, "GetTransform")) {
         //TODO: handle it somehow, maybe throw error event system
-        spdlog::critical("Scene::GetTransform on an invalid entity, exiting");
+        log::Scene().critical("Scene::GetTransform on an invalid entity, exiting");
         std::exit(EXIT_FAILURE);
     }
     return registry_.get<Transform>(entity);
@@ -705,7 +705,7 @@ bool Scene::CheckEntity(const entt::entity entity, const std::string_view caller
     if (IsValid(entity)) {
         return true;
     }
-    spdlog::error("Scene::{}: invalid or destroyed entity {}", caller, entt::to_integral(entity));
+    log::Scene().error("Scene::{}: invalid or destroyed entity {}", caller, entt::to_integral(entity));
     return false;
 }
 

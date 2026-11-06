@@ -55,6 +55,7 @@
 #include <editor/viewport_overlay.hpp>
 #include <editor/viewport_widget.hpp>
 #include <editor/selection.hpp>
+#include <editor/editor_log.hpp>
 
 namespace editor {
 
@@ -144,7 +145,7 @@ MainWindow::~MainWindow() {
     // The viewport outlives the engine (Qt deletes children after our members).
     viewport_->setInput(nullptr);
     // First, so nothing logs into the Log panel once it is gone.
-    std::erase(spdlog::default_logger()->sinks(), log_sink_);
+    engine::log::Sinks()->remove_sink(log_sink_);
     // Modules and panels go before the engine they use.
     modules_.reset();
     context_.reset();
@@ -211,7 +212,7 @@ void MainWindow::startEngine() {
 
     // On failure keep the window up so the Log dock shows why, but don't tick.
     if (!engine_.Initialize()) {
-        spdlog::critical("Engine failed to initialize, see log above");
+        editorLog().critical("Engine failed to initialize, see log above");
         return;
     }
     viewport_->setCamera(camera_);
@@ -228,7 +229,7 @@ void MainWindow::openStartupScene() {
                                            error)) {
             return;
         }
-        spdlog::error("Startup scene '{}': {}", project_.startupScene, error);
+        editorLog().error("Startup scene '{}': {}", project_.startupScene, error);
     }
     setupDefaultScene();
 }
@@ -284,7 +285,7 @@ void MainWindow::adoptStartupScene() {
     engine::Project updated = project_;
     updated.startupScene = name;
     if (std::string error; !context_->updateProject(std::move(updated), error)) {
-        spdlog::warn("Could not remember {} as the startup scene: {}", name, error);
+        editorLog().warn("Could not remember {} as the startup scene: {}", name, error);
     }
 }
 
@@ -450,10 +451,10 @@ void MainWindow::buildLogDock() {
     auto* panel = new LogPanel;
     context_->addPanel(QStringLiteral("LogDock"), tr("Log"), panel, Qt::BottomDockWidgetArea);
 
-    // Hook into spdlog's default logger, which the engine logs to as well. The sink
+    // Every log channel writes to these sinks, the engine's and the editor's. The panel's
     // only buffers, so logging from other threads never touches the panel.
     log_sink_ = panel->sink();
-    spdlog::default_logger()->sinks().push_back(log_sink_);
+    engine::log::Sinks()->add_sink(log_sink_);
 }
 
 void MainWindow::refreshStatus() {

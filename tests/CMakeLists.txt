@@ -46,6 +46,22 @@ if(SRI_BUILD_EDITOR)
         COMMAND_EXPAND_LISTS VERBATIM
     )
     add_test(NAME transform_gizmo_tests COMMAND transform_gizmo_tests)
+
+    add_executable(log_model_tests
+        log_model_tests.cpp
+        ../editor/src/log_model.cpp
+        ../editor/include/editor/log_model.hpp
+    )
+    target_include_directories(log_model_tests PRIVATE ../editor/include)
+    target_link_libraries(log_model_tests PRIVATE GTest::gtest Qt6::Gui spdlog::spdlog)
+    set_project_warnings(log_model_tests)
+    set_target_properties(log_model_tests PROPERTIES FOLDER tests AUTOMOC ON)
+    add_custom_command(TARGET log_model_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:log_model_tests> $<TARGET_FILE_DIR:log_model_tests>
+        COMMAND_EXPAND_LISTS VERBATIM
+    )
+    add_test(NAME log_model_tests COMMAND log_model_tests)
 endif()
 
 add_executable(lua_runtime_tests lua_runtime_tests.cpp autoload_session_tests.cpp play_mode_tests.cpp)

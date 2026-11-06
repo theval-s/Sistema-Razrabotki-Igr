@@ -3,7 +3,7 @@
 
 #include <sol/sol.hpp>
 
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 #include <algorithm>
 #include <array>
@@ -54,7 +54,7 @@ namespace engine {
         // Runtime failures are logged here only. Callers propagate the returned text.
         bool SetError(std::string& error, const std::string& message, bool log = true) {
             error = message;
-            if (log) spdlog::error("[Lua] {}", error);
+            if (log) engine::log::Lua().error("{}", error);
             return false;
         }
 
@@ -315,15 +315,15 @@ namespace engine {
             sol::table log = state.create_named_table("Log");
 
             log.set_function("info", [](const std::string& message) {
-                spdlog::info("[Lua] {}", message);
+                engine::log::Game().info("{}", message);
                 });
 
             log.set_function("warning", [](const std::string& message) {
-                spdlog::warn("[Lua] {}", message);
+                engine::log::Game().warn("{}", message);
                 });
 
             log.set_function("error", [](const std::string& message) {
-                spdlog::error("[Lua] {}", message);
+                engine::log::Game().error("{}", message);
                 });
         }
 
@@ -430,7 +430,7 @@ namespace engine {
             }
             error.clear();
 
-            spdlog::info(
+            log::Lua().info(
                 "Lua Runtime initialized successfully"
             );
 
@@ -467,7 +467,7 @@ namespace engine {
         impl_->state.reset();
         impl_->shuttingDown = false;
 
-        spdlog::info("Lua Runtime shutdown");
+        log::Lua().info("Lua Runtime shutdown");
     }
 
     void LuaRuntime::SetLevelLoader(LevelLoader loader) {
@@ -541,7 +541,7 @@ namespace engine {
                 for (const auto& [name, value] : desc.properties) {
                     const auto definition = defaults.find(name);
                     if (definition == defaults.end() || !CompatibleScriptProperty(definition->second, value))
-                        spdlog::warn("[Lua] {}: unused or incompatible property '{}'", record->Context(), name);
+                        log::Lua().warn("{}: unused or incompatible property '{}'", record->Context(), name);
                 }
                 record->table["Properties"] = properties;
             }

@@ -4,6 +4,7 @@
 #include <engine/core/FrameContext.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
+#include <engine/core/Log.hpp>
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/callback_sink.h>
@@ -27,14 +28,14 @@ namespace {
 struct LogCapture {
     std::vector<std::string> errors;
     std::vector<std::string> messages;
-    std::shared_ptr<spdlog::logger> logger = spdlog::default_logger();
     std::shared_ptr<spdlog::sinks::callback_sink_mt> sink =
         std::make_shared<spdlog::sinks::callback_sink_mt>([this](const spdlog::details::log_msg& message) {
             messages.emplace_back(message.payload.data(), message.payload.size());
             if (message.level == spdlog::level::err) errors.push_back(messages.back());
         });
-    LogCapture() { logger->sinks().push_back(sink); }
-    ~LogCapture() { std::erase(logger->sinks(), sink); }
+    // Every channel: script output (Game) as well as the runtime's errors (Lua).
+    LogCapture() { engine::log::Sinks()->add_sink(sink); }
+    ~LogCapture() { engine::log::Sinks()->remove_sink(sink); }
 };
 
 struct ScriptFixture {
@@ -162,14 +163,14 @@ TEST(ScriptProperties, AppliesIndependentOverridesBeforeStartAndPreservesPrivate
     ASSERT_TRUE(runtime.StartInstance(a, error)) << error;
     ASSERT_TRUE(runtime.UpdateInstance(a, 0.1, error)) << error;
     ASSERT_TRUE(runtime.StartInstance(b, error)) << error;
-    EXPECT_NE(std::find(logs.messages.begin(), logs.messages.end(), "[Lua] First"), logs.messages.end());
-    EXPECT_NE(std::find(logs.messages.begin(), logs.messages.end(), "[Lua] Second"), logs.messages.end());
+    EXPECT_NE(std::find(logs.messages.begin(), logs.messages.end(), "First"), logs.messages.end());
+    EXPECT_NE(std::find(logs.messages.begin(), logs.messages.end(), "Second"), logs.messages.end());
     EXPECT_EQ(first.properties.at("horseName").String(), "First");
     first.properties.erase("horseName"); // The Inspector's Reset operation.
     engine::InstanceId reset;
     ASSERT_TRUE(runtime.CreateInstance(first, reset, error)) << error;
     ASSERT_TRUE(runtime.StartInstance(reset, error)) << error;
-    EXPECT_NE(std::find(logs.messages.begin(), logs.messages.end(), "[Lua] Default"), logs.messages.end());
+    EXPECT_NE(std::find(logs.messages.begin(), logs.messages.end(), "Default"), logs.messages.end());
 }
 
 TEST(LuaTopLevel, InstancesHavePrivateFieldsClosuresAndExactCallbackArguments) {
@@ -708,7 +709,7 @@ TEST(LuaErrors, UnicodeSyntaxErrorPreservesFileLineAndIdentityAndLogsOnce) {
     EXPECT_NE(error.find(desc.entityId), std::string::npos);
     EXPECT_NE(error.find("CreateInstance"), std::string::npos);
     ASSERT_EQ(logs.errors.size(), 1u);
-    EXPECT_EQ(logs.errors[0], "[Lua] " + error);
+    EXPECT_EQ(logs.errors[0], error);
     EXPECT_TRUE(runtime.ExecuteString("assert(1 + 1 == 2)", "still-running", error)) << error;
 }
 
@@ -751,7 +752,7 @@ TEST(LuaErrors, UnicodeUpdateFailureIsLoggedOnceAndOnlyDisablesItsInstance) {
     EXPECT_TRUE(runtime.ExecuteString("assert(stats.good == 3 and stats.badDestroyed == nil)", "check", error)) << error;
     runtime.Shutdown();
     ASSERT_EQ(logs.errors.size(), 1u);
-    EXPECT_EQ(logs.errors[0], "[Lua] " + original);
+    EXPECT_EQ(logs.errors[0], original);
 }
 
 TEST(LuaErrors, CompatibilityFileAndCallbacksUseProtectedCallsAndUtf8ChunkNames) {
@@ -830,7 +831,7 @@ TEST(ScriptSubsystem, EndPlayDestroysHealthyInstancesOnceAndRejectsReusedSlotsFr
     ASSERT_TRUE(subsystem.GetRuntime().StartInstance(fresh, error)) << error;
     subsystem.Shutdown();
     subsystem.Shutdown();
-    EXPECT_EQ(std::count(logs.messages.begin(), logs.messages.end(), "[Lua] session cleanup marker"), 2);
+    EXPECT_EQ(std::count(logs.messages.begin(), logs.messages.end(), "session cleanup marker"), 2);
     EXPECT_TRUE(logs.errors.empty());
 }
 

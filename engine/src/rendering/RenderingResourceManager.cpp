@@ -2,7 +2,7 @@
 
 #include <cstdlib>
 #include <utility>
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/core/PathUtils.hpp>
@@ -94,7 +94,7 @@ ShaderHandle RenderingResourceManager::CompileShader(const std::wstring& fileNam
     auto shader = ShaderContext::CompileShader(device_.Get(), inputLayoutCache_,
                                                 AssetPathResolver::ResolveShader(desc), shaderType, options);
     if (!shader) {
-        spdlog::critical("Failed to compile shader");
+        log::Render().critical("Failed to compile shader");
         std::exit(1);
     }
     return shaders_.Add(std::move(*shader));
@@ -329,7 +329,7 @@ bool RenderingResourceManager::DestroyBuffer(const BufferHandle bufferHandle) {
 void RenderingResourceManager::checkResult(const HRESULT result, const char* message) {
     if (FAILED(result)) {
         // ass error handling, needs a solution
-        spdlog::critical("{} {}", message, result);
+        log::Render().critical("{} {}", message, result);
         std::exit(1);
     }
 }

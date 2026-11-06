@@ -1,6 +1,6 @@
 #include <editor/play_session.hpp>
 
-#include <spdlog/spdlog.h>
+#include <editor/editor_log.hpp>
 
 #include <engine/engine.hpp>
 #include <engine/project/Project.hpp>
@@ -47,7 +47,7 @@ bool PlaySession::play(std::string& error) {
         camera->SetNavigationEnabled(false);
     }
     if (engine_.GetScene().GetActiveCamera() == entt::null) {
-        spdlog::warn("Play: no game camera; using the frozen editor viewpoint");
+        editorLog().warn("Play: no game camera; using the frozen editor viewpoint");
     }
     emit playingChanged(true);
     return true;

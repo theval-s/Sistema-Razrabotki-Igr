@@ -3,7 +3,7 @@
 #include <cstdlib>
 #include <utility>
 
-#include <spdlog/spdlog.h>
+#include <engine/core/Log.hpp>
 #include <wrl/client.h>
 
 #include <engine/rendering/RenderingContext.hpp>
@@ -17,13 +17,13 @@ TextureHandle CreateBackbufferTexture(RenderingResourceManager& resourceManager,
     ComPtr<ID3D11Texture2D> backBuffer;
     HRESULT result = context.GetSwapChain()->GetBuffer(0, IID_PPV_ARGS(backBuffer.GetAddressOf()));
     if (FAILED(result)) {
-        spdlog::error("Failed to get the back-buffer render target");
+        log::Render().error("Failed to get the back-buffer render target");
         return {};
     }
     ComPtr<ID3D11RenderTargetView> backBufferView;
     result = context.GetDevice()->CreateRenderTargetView(backBuffer.Get(), nullptr, backBufferView.GetAddressOf());
     if (FAILED(result)) {
-        spdlog::error("Failed to create the back-buffer render target");
+        log::Render().error("Failed to create the back-buffer render target");
         return {};
     }
     Texture backBufferTexture(std::move(backBufferView));

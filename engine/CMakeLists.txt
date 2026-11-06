@@ -24,6 +24,7 @@ endif()
 
 set(ENGINE_PUBLIC_HEADERS
     include/engine/core/HandleMap.hpp
+    include/engine/core/Log.hpp
     include/engine/core/ResourceID.hpp
     include/engine/core/Uuid.hpp
     include/engine/engine.hpp
@@ -62,6 +63,7 @@ set(ENGINE_PUBLIC_HEADERS
 set(ENGINE_SOURCES
     src/scripting/ScriptProperties.cpp
     src/core/HandleMap.cpp
+    src/core/Log.cpp
     src/core/ResourceID.cpp
     src/core/Uuid.cpp
     src/engine.cpp
