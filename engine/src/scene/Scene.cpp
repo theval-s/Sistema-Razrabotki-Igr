@@ -548,6 +548,34 @@ bool Scene::SetParent(const entt::entity entity, const entt::entity parent) {
     return true;
 }
 
+bool Scene::SetParentKeepingWorld(const entt::entity entity, const entt::entity parent) {
+    if (!CheckEntity(entity, "SetParentKeepingWorld")) {
+        return false;
+    }
+    if (registry_.get<Hierarchy>(entity).parent == parent) {
+        return true;
+    }
+    const DirectX::SimpleMath::Matrix world = GetWorldMatrix(entity);
+    if (!SetParent(entity, parent)) {
+        return false;
+    }
+    // world = local * parentWorld (row vectors).
+    DirectX::SimpleMath::Matrix local = world;
+    if (parent != entt::null) {
+        local *= GetWorldMatrix(parent).Invert();
+    }
+    Transform& transform = registry_.get<Transform>(entity);
+    DirectX::SimpleMath::Vector3 scale;
+    DirectX::SimpleMath::Quaternion rotation;
+    DirectX::SimpleMath::Vector3 position;
+    if (local.Decompose(scale, rotation, position)) {
+        transform = Transform{position, rotation, scale};
+    } else {
+        transform.position = local.Translation();  // a zero scale somewhere: keep at least the place
+    }
+    return true;
+}
+
 std::span<const entt::entity> Scene::GetChildren(const entt::entity entity) const {
     if (!CheckEntity(entity, "GetChildren")) {
         return {};

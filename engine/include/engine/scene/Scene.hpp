@@ -185,6 +185,9 @@ public:
     /// entt::null as parent makes the entity a root. Returns false (and changes
     /// nothing) if that would create a cycle or an entity is invalid.
     bool SetParent(entt::entity entity, entt::entity parent);
+    /// SetParent() that changes the local transform too
+    /// without this entity would teleport when reparenting
+    bool SetParentKeepingWorld(entt::entity entity, entt::entity parent);
     [[nodiscard]] std::span<const entt::entity> GetChildren(entt::entity entity) const;
     [[nodiscard]] std::span<const entt::entity> GetRootEntities() const noexcept;
 
