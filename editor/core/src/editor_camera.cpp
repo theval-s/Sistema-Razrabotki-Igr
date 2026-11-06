@@ -100,6 +100,20 @@ Vector3 EditorCameraSubsystem::GetSpawnPoint() const noexcept {
     return position_ + forward * SpawnDistance;
 }
 
+void EditorCameraSubsystem::Focus(const Vector3& center, const float radius) {
+    // A pending reset would undo the framing on the next Update().
+    if (reset_pending_) {
+        reset_pending_ = false;
+        TakeSceneCamera();
+    }
+    // The narrower of the two fields of view decides.
+    const float aspect = rendering_ != nullptr ? rendering_->GetWorld().camera.aspectRatio : 0.0f;
+    float half_fov = lens_.fovY * 0.5f;
+    if (aspect > 0.0f) half_fov = std::min(half_fov, std::atan(std::tan(half_fov) * aspect));
+    const float distance = std::max(radius / std::sin(half_fov), radius + lens_.nearPlane);
+    position_ = center - GetForward() * distance;
+}
+
 void EditorCameraSubsystem::TakeSceneCamera() {
     const engine::Scene& scene = GetEngine().GetScene();
     const entt::entity camera = scene.GetActiveCamera();
