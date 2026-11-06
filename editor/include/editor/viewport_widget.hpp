@@ -39,8 +39,13 @@ public:
 signals:
     /// Size in physical pixels.
     void surfaceResized(quint32 width, quint32 height);
-    /// Left click in viewport-local logical pixels, before forwarding the mouse button.
-    void pickRequested(QPointF position, bool toggle);
+    // Positions are viewport-local, in logical pixels. Not while the right button turns the
+    // view: the cursor is hidden then, and pinned.
+    /// A button went down, before the engine's input sees it.
+    void mousePressed(QPointF position, Qt::MouseButton button, Qt::KeyboardModifiers modifiers);
+    /// The cursor moved over the viewport, or anywhere while a button is held.
+    void mouseMoved(QPointF position);
+    void mouseReleased(QPointF position, Qt::MouseButton button);
 
 protected:
     bool event(QEvent* event) override;

@@ -5,6 +5,7 @@
 #include <QPointF>
 
 #include <memory>
+#include <optional>
 #include <vector>
 #include <entt/entity/entity.hpp>
 #include <SimpleMath.h>
@@ -17,6 +18,7 @@ class CDockManager;
 }
 
 class QLabel;
+class QMenu;
 class QPlainTextEdit;
 class QTimer;
 
@@ -29,7 +31,9 @@ namespace editor {
 class EditorCameraSubsystem;
 class EditorContext;
 class ModuleLoader;
+class TransformGizmo;
 class ViewportWidget;
+struct ViewportView;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -49,6 +53,8 @@ private slots:
 
 private:
     void buildMenus();
+    /// Move/Rotate/Scale (W/E/R) and Local Axes (X).
+    void buildGizmoActions(QMenu& menu);
     void buildLogDock();
     /// Opens the project's startup scene, or builds an untitled one if it has none.
     void openStartupScene();
@@ -59,6 +65,12 @@ private:
     void adoptStartupScene();
     void restoreLayout();
     void refreshStatus();
+    /// How the viewport sees the scene right now; nothing before the engine runs.
+    [[nodiscard]] std::optional<ViewportView> viewportView() const;
+    /// A left press grabs a gizmo handle, or else picks; a right press cancels a gizmo drag.
+    void viewportPressed(QPointF position, Qt::MouseButton button, Qt::KeyboardModifiers modifiers);
+    void viewportMoved(QPointF position);
+    void viewportReleased(QPointF position, Qt::MouseButton button);
     void pickViewport(QPointF position, bool toggle);
     void appendLog(const QString& level, const QString& text);
     /// Closes the editor and starts a new one on `project_file`: assets are cached by
@@ -69,6 +81,8 @@ private:
     engine::Project project_;
     engine::Engine engine_;
     std::unique_ptr<EditorContext> context_;
+    /// Uses the scene and the selection: destroyed before them.
+    std::unique_ptr<TransformGizmo> gizmo_;
     std::unique_ptr<ModuleLoader> modules_;
     std::shared_ptr<spdlog::sinks::sink> log_sink_;
 

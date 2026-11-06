@@ -18,6 +18,8 @@ add_library(editor_core SHARED
     src/scene_document.cpp
     src/scene_events.cpp
     src/selection.cpp
+    src/transform_gizmo.cpp
+    src/viewport_view.cpp
     include/editor/asset_icons.hpp
     include/editor/asset_picker.hpp
     include/editor/edit_actions.hpp
@@ -32,6 +34,8 @@ add_library(editor_core SHARED
     include/editor/scene_document.hpp
     include/editor/scene_events.hpp
     include/editor/selection.hpp
+    include/editor/transform_gizmo.hpp
+    include/editor/viewport_view.hpp
 )
 
 include(GenerateExportHeader)

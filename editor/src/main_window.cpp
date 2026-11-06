@@ -2,6 +2,7 @@
 #include <editor/main_window.hpp>
 
 #include <QAction>
+#include <QActionGroup>
 #include <QCoreApplication>
 #include <QDir>
 #include <QCloseEvent>
@@ -49,6 +50,7 @@
 #include <editor/play_session.hpp>
 #include <editor/project_dialog.hpp>
 #include <editor/scene_document.hpp>
+#include <editor/transform_gizmo.hpp>
 #include <editor/viewport_overlay.hpp>
 #include <editor/viewport_widget.hpp>
 #include <editor/selection.hpp>
@@ -85,7 +87,9 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     // central widget: always there, never floated, so its HWND (and swap chain) stays put.
     dock_manager_ = new ads::CDockManager(this);
     viewport_ = new ViewportWidget;
-    connect(viewport_, &ViewportWidget::pickRequested, this, &MainWindow::pickViewport);
+    connect(viewport_, &ViewportWidget::mousePressed, this, &MainWindow::viewportPressed);
+    connect(viewport_, &ViewportWidget::mouseMoved, this, &MainWindow::viewportMoved);
+    connect(viewport_, &ViewportWidget::mouseReleased, this, &MainWindow::viewportReleased);
     auto* viewport_dock = new ads::CDockWidget(dock_manager_, tr("Viewport"));
     viewport_dock->setObjectName(QStringLiteral("Viewport"));
     viewport_dock->setWidget(viewport_, ads::CDockWidget::ForceNoScrollArea);
@@ -93,6 +97,7 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
 
     context_ = std::make_unique<EditorContext>(engine_, project_, *this, *dock_manager_);
     context_->editActions().attach(viewport_);
+    gizmo_ = std::make_unique<TransformGizmo>(engine_.GetScene(), context_->selection());
     SceneDocument& document = context_->sceneDocument();
     connect(&document, &SceneDocument::stateChanged, this, [this] {
         refreshTitle();
@@ -106,6 +111,8 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     });
     connect(&context_->playSession(), &PlaySession::playingChanged, this, [this](const bool playing) {
         viewport_->setPlaying(playing);
+        // The running copy isn't the scene being edited.
+        gizmo_->setEnabled(!playing);
         if (playing) viewport_->setFocus();
     });
     refreshTitle();
@@ -199,7 +206,7 @@ void MainWindow::startEngine() {
     engine_.AddSubsystem<engine::PhysicsSubsystem>();
     engine_.AddSubsystem<engine::RenderExtractionSubsystem>();
     camera_ = engine_.AddSubsystem<EditorCameraSubsystem>();
-    engine_.AddSubsystem<ViewportOverlaySubsystem>(context_->selection(), *viewport_);
+    engine_.AddSubsystem<ViewportOverlaySubsystem>(context_->selection(), *gizmo_, *viewport_);
 
     // On failure keep the window up so the Log dock shows why, but don't tick.
     if (!engine_.Initialize()) {
@@ -285,6 +292,44 @@ void MainWindow::tickEngine() {
     refreshStatus();
 }
 
+std::optional<ViewportView> MainWindow::viewportView() const {
+    if (!engine_.IsInitialized() || camera_ == nullptr || viewport_->width() <= 0 || viewport_->height() <= 0) {
+        return std::nullopt;
+    }
+    return ViewportView::fromCamera(engine_.GetSubsystem<engine::RenderingSubsystem>()->GetWorld().camera,
+                                    {static_cast<float>(viewport_->width()), static_cast<float>(viewport_->height())});
+}
+
+void MainWindow::viewportPressed(const QPointF position, const Qt::MouseButton button,
+                                 const Qt::KeyboardModifiers modifiers) {
+    if (button == Qt::RightButton) {
+        gizmo_->cancel();
+        return;
+    }
+    if (button != Qt::LeftButton) return;
+    // The gizmo's handles are in front of everything.
+    if (const auto view = viewportView();
+        view && gizmo_->press(*view, {static_cast<float>(position.x()), static_cast<float>(position.y())})) {
+        return;
+    }
+    pickViewport(position, modifiers & Qt::ControlModifier);
+}
+
+void MainWindow::viewportMoved(const QPointF position) {
+    const auto view = viewportView();
+    if (!view) return;
+    const DirectX::SimpleMath::Vector2 cursor{static_cast<float>(position.x()), static_cast<float>(position.y())};
+    if (gizmo_->dragging()) {
+        gizmo_->drag(*view, cursor);
+    } else {
+        gizmo_->hover(*view, cursor);
+    }
+}
+
+void MainWindow::viewportReleased(QPointF, const Qt::MouseButton button) {
+    if (button == Qt::LeftButton) gizmo_->release();
+}
+
 void MainWindow::pickViewport(const QPointF position, const bool toggle) {
     if (!engine_.IsInitialized() || camera_ == nullptr || viewport_->width() <= 0 || viewport_->height() <= 0) return;
     const auto& camera = engine_.GetSubsystem<engine::RenderingSubsystem>()->GetWorld().camera;
@@ -357,11 +402,47 @@ void MainWindow::buildMenus() {
     edit_menu->addAction(edit.deselectAction());
     edit_menu->addSeparator();
     edit_menu->addAction(edit.focusAction());
+    edit_menu->addSeparator();
+    buildGizmoActions(*edit_menu);
 
     // The menu bar's order. Modules fill Project and Engine, EditorContext::addPanel() fills View.
     for (const QString& title : {tr("&Project"), tr("&Engine"), tr("&View")}) {
         context_->menu(title);
     }
+}
+
+void MainWindow::buildGizmoActions(QMenu& menu) {
+    // Shortcuts only while the viewport has focus, so W/E/R/X still type in fields elsewhere.
+    // While the right button turns the view, the viewport keeps them for the camera.
+    const auto add = [this, &menu](const QString& text, const Qt::Key key) {
+        auto* action = menu.addAction(text);
+        action->setShortcut(QKeySequence(key));
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        action->setCheckable(true);
+        viewport_->addAction(action);
+        // During Play these keys are the game's.
+        connect(&context_->playSession(), &PlaySession::playingChanged, action, &QAction::setDisabled);
+        return action;
+    };
+    auto* modes = new QActionGroup(this);
+    const std::pair<QString, TransformGizmo::Mode> entries[] = {
+        {tr("&Move"), TransformGizmo::Mode::Translate},
+        {tr("&Rotate"), TransformGizmo::Mode::Rotate},
+        {tr("S&cale"), TransformGizmo::Mode::Scale},
+    };
+    const Qt::Key keys[] = {Qt::Key_W, Qt::Key_E, Qt::Key_R};
+    for (std::size_t i = 0; i < std::size(entries); ++i) {
+        const auto mode = entries[i].second;
+        auto* action = add(entries[i].first, keys[i]);
+        action->setActionGroup(modes);
+        action->setChecked(gizmo_->mode() == mode);
+        connect(action, &QAction::triggered, this, [this, mode] { gizmo_->setMode(mode); });
+    }
+    auto* local = add(tr("&Local Axes"), Qt::Key_X);
+    local->setChecked(gizmo_->space() == TransformGizmo::Space::Local);
+    connect(local, &QAction::toggled, this, [this](const bool checked) {
+        gizmo_->setSpace(checked ? TransformGizmo::Space::Local : TransformGizmo::Space::World);
+    });
 }
 
 void MainWindow::buildLogDock() {

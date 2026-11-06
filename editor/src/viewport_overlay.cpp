@@ -15,6 +15,8 @@
 #include <engine/scene/Scene.hpp>
 
 #include <editor/selection.hpp>
+#include <editor/transform_gizmo.hpp>
+#include <editor/viewport_view.hpp>
 
 namespace editor {
 
@@ -66,8 +68,9 @@ void drawLights(engine::DebugDraw& draw, const engine::Scene& scene, const entt:
 
 }  // namespace
 
-ViewportOverlaySubsystem::ViewportOverlaySubsystem(const Selection& selection, const QWidget& viewport)
-    : selection_(selection), viewport_(viewport) {}
+ViewportOverlaySubsystem::ViewportOverlaySubsystem(const Selection& selection, const TransformGizmo& gizmo,
+                                                   const QWidget& viewport)
+    : selection_(selection), gizmo_(gizmo), viewport_(viewport) {}
 
 std::string_view ViewportOverlaySubsystem::GetName() const {
     return "ViewportOverlaySubsystem";
@@ -101,6 +104,11 @@ void ViewportOverlaySubsystem::LateUpdate(const engine::FrameContext&) {
                                                     override ? override : material->instance});
             }
         }
+    }
+    // Last, so it is drawn over the other lines.
+    if (viewport_.width() > 0 && viewport_.height() > 0) {
+        gizmo_.draw(world.debugDraw, ViewportView::fromCamera(world.camera, {static_cast<float>(viewport_.width()),
+                                                                             static_cast<float>(viewport_.height())}));
     }
 }
 
