@@ -110,6 +110,7 @@ void Scene::Clear() {
     pendingGameStates_.clear();
     activeCameraId_.reset();
     directionalLightId_.reset();
+    editorFolders_.clear();
     ++revision_;
     if (--destructionDepth_ == 0) FlushCommands();
 }
@@ -548,6 +549,63 @@ bool Scene::SetParent(const entt::entity entity, const entt::entity parent) {
     return true;
 }
 
+bool Scene::IsValidEditorFolder(const std::string_view path) {
+    if (path.empty()) {
+        return false;
+    }
+    for (std::size_t start = 0;;) {
+        const std::size_t slash = path.find('/', start);
+        if (slash == start || start == path.size()) {
+            return false;  // an empty name: leading, trailing or double slash
+        }
+        if (slash == std::string_view::npos) {
+            return true;
+        }
+        start = slash + 1;
+    }
+}
+
+bool Scene::SetEditorFolder(const entt::entity entity, const std::string_view path) {
+    if (!CheckEntity(entity, "SetEditorFolder")) {
+        return false;
+    }
+    if (!path.empty() && (!IsValidEditorFolder(path) || registry_.get<Hierarchy>(entity).parent != entt::null)) {
+        return false;
+    }
+    if (GetEditorFolder(entity) == path) {
+        return true;
+    }
+    if (path.empty()) {
+        registry_.remove<EditorFolder>(entity);
+    } else {
+        registry_.emplace_or_replace<EditorFolder>(entity, std::string(path));
+    }
+    ++revision_;
+    return true;
+}
+
+const std::string& Scene::GetEditorFolder(const entt::entity entity) const {
+    static const std::string none;
+    if (!CheckEntity(entity, "GetEditorFolder")) {
+        return none;
+    }
+    const auto* folder = registry_.try_get<EditorFolder>(entity);
+    return folder != nullptr ? folder->path : none;
+}
+
+void Scene::SetEditorFolders(std::vector<std::string> folders) {
+    std::vector<std::string> kept;
+    for (std::string& folder : folders) {
+        if (IsValidEditorFolder(folder) && std::ranges::find(kept, folder) == kept.end()) {
+            kept.push_back(std::move(folder));
+        }
+    }
+    if (kept != editorFolders_) {
+        editorFolders_ = std::move(kept);
+        ++revision_;
+    }
+}
+
 bool Scene::SetParentKeepingWorld(const entt::entity entity, const entt::entity parent) {
     if (!CheckEntity(entity, "SetParentKeepingWorld")) {
         return false;
@@ -606,6 +664,9 @@ void Scene::Detach(const entt::entity entity) {
 
 void Scene::Attach(const entt::entity entity, const entt::entity parent) {
     registry_.get<Hierarchy>(entity).parent = parent;
+    if (parent != entt::null) {
+        registry_.remove<EditorFolder>(entity);  // folders only group roots
+    }
     auto& siblings = parent != entt::null ? registry_.get<Hierarchy>(parent).children : roots_;
     siblings.push_back(entity);
 }

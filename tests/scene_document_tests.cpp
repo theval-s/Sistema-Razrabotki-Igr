@@ -554,3 +554,144 @@ TEST(GameDocument, RestoresRegisteredControllerBeforeEnable) {
     host.Shutdown();
     std::filesystem::remove(file);
 }
+
+TEST(SceneDocument, DuplicatedSubtreesGetFreshIdsAndKeepTheirParent) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    const auto group = scene.CreateEntity("Group");
+    const auto lamp = scene.CreateEntity("Lamp", group);
+    scene.AddTag(lamp, "light");
+    scene.GetTransform(lamp).position = {1, 2, 3};
+    scene.AddComponent<engine::PointLight>(lamp, engine::PointLight{{1, 0, 0}, 2.0f, 7.0f});
+    const auto loose = scene.CreateEntity("Loose", group);
+
+    // Lamp is inside Group's subtree, so it's taken once, after its parent.
+    std::vector<engine::SceneEntityDefinition> captured;
+    std::string error;
+    const std::vector<entt::entity> picked{lamp, group};
+    ASSERT_TRUE(engine::CaptureEntities(scene, host.GetSceneAssets(), picked, captured, error)) << error;
+    ASSERT_EQ(captured.size(), 3u);
+    EXPECT_EQ(captured[0].name, "Group");
+
+    const auto copies = engine::InstantiateEntities(captured, host.GetSceneAssets(), scene, true);
+    ASSERT_EQ(copies.size(), 3u);
+    const auto groupCopy = copies[0];
+    const auto lampCopy = copies[1];
+    EXPECT_NE(scene.GetId(groupCopy), scene.GetId(group));
+    EXPECT_TRUE(scene.GetParent(groupCopy) == entt::null);
+    EXPECT_EQ(scene.GetParent(lampCopy), groupCopy);
+    EXPECT_EQ(scene.GetChildren(groupCopy).size(), 2u);
+    EXPECT_EQ(scene.GetName(lampCopy), "Lamp");
+    ASSERT_EQ(scene.GetTags(lampCopy).size(), 1u);
+    EXPECT_EQ(scene.GetTags(lampCopy)[0], "light");
+    EXPECT_EQ(scene.GetTransform(lampCopy).position, (DirectX::SimpleMath::Vector3{1, 2, 3}));
+    const auto* light = scene.TryGetComponent<engine::PointLight>(lampCopy);
+    ASSERT_NE(light, nullptr);
+    EXPECT_EQ(light->range, 7.0f);
+    EXPECT_EQ(scene.GetChildren(group).size(), 2u);  // the original is untouched
+
+    // A subtree whose parent isn't copied goes under the same parent.
+    const std::vector<entt::entity> child{loose};
+    ASSERT_TRUE(engine::CaptureEntities(scene, host.GetSceneAssets(), child, captured, error)) << error;
+    const auto looseCopy = engine::InstantiateEntities(captured, host.GetSceneAssets(), scene, true);
+    ASSERT_EQ(looseCopy.size(), 1u);
+    EXPECT_EQ(scene.GetParent(looseCopy[0]), group);
+}
+
+TEST(SceneDocument, InstantiateWithKeptIdsRestoresDeletedSubtree) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    const auto parent = scene.CreateEntity("Parent");
+    const auto group = scene.CreateEntity("Group", parent);
+    const auto child = scene.CreateEntity("Child", group);
+    const auto groupId = scene.GetId(group);
+    const auto childId = scene.GetId(child);
+
+    std::vector<engine::SceneEntityDefinition> captured;
+    std::string error;
+    const std::vector<entt::entity> picked{group};
+    ASSERT_TRUE(engine::CaptureEntities(scene, host.GetSceneAssets(), picked, captured, error)) << error;
+    scene.DestroyEntity(group);
+    ASSERT_TRUE(scene.FindByUuid(childId) == entt::null);
+
+    const auto restored = engine::InstantiateEntities(captured, host.GetSceneAssets(), scene, false);
+    ASSERT_EQ(restored.size(), 2u);
+    EXPECT_EQ(scene.GetId(restored[0]), groupId);
+    EXPECT_EQ(scene.GetParent(restored[0]), parent);
+    EXPECT_EQ(scene.GetParent(scene.FindByUuid(childId)), restored[0]);
+
+    // Already there: skipped rather than duplicated.
+    const auto again = engine::InstantiateEntities(captured, host.GetSceneAssets(), scene, false);
+    EXPECT_TRUE(again[0] == entt::null);
+    EXPECT_EQ(scene.GetChildren(parent).size(), 1u);
+}
+
+TEST(Scene, SetParentKeepingWorldLeavesEntityInPlace) {
+    using DirectX::SimpleMath::Quaternion;
+    using DirectX::SimpleMath::Vector3;
+    engine::Scene scene;
+    const auto parent = scene.CreateEntity("Parent");
+    scene.GetTransform(parent) = {{10, 0, 0}, Quaternion::CreateFromYawPitchRoll(1.0f, 0, 0), {2, 2, 2}};
+    const auto child = scene.CreateEntity("Child");
+    scene.GetTransform(child).position = {1, 2, 3};
+    const auto expectNear = [](const Vector3& a, const Vector3& b) {
+        EXPECT_NEAR(a.x, b.x, 1e-4f);
+        EXPECT_NEAR(a.y, b.y, 1e-4f);
+        EXPECT_NEAR(a.z, b.z, 1e-4f);
+    };
+
+    ASSERT_TRUE(scene.SetParentKeepingWorld(child, parent));
+    EXPECT_EQ(scene.GetParent(child), parent);
+    expectNear(scene.GetWorldMatrix(child).Translation(), {1, 2, 3});
+    expectNear(scene.GetTransform(child).scale, {0.5f, 0.5f, 0.5f});
+
+    ASSERT_TRUE(scene.SetParentKeepingWorld(child, entt::null));
+    EXPECT_TRUE(scene.GetParent(child) == entt::null);
+    expectNear(scene.GetTransform(child).position, {1, 2, 3});
+    expectNear(scene.GetTransform(child).scale, {1, 1, 1});
+
+    // A cycle is refused and changes nothing.
+    ASSERT_TRUE(scene.SetParentKeepingWorld(child, parent));
+    const auto before = scene.GetTransform(parent).position;
+    EXPECT_FALSE(scene.SetParentKeepingWorld(parent, child));
+    EXPECT_TRUE(scene.GetParent(parent) == entt::null);
+    EXPECT_EQ(scene.GetTransform(parent).position, before);
+}
+
+TEST(SceneDocument, EditorFoldersRoundTripAndOnlyGroupRoots) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    const auto barrel = scene.CreateEntity("Barrel");
+    ASSERT_TRUE(scene.SetEditorFolder(barrel, "Props/Barrels"));
+    const auto lid = scene.CreateEntity("Lid", barrel);
+    EXPECT_FALSE(scene.SetEditorFolder(lid, "Props"));  // not a root
+    EXPECT_FALSE(scene.SetEditorFolder(barrel, "Props//Barrels"));
+    scene.SetEditorFolders({"Empty", "Props/Barrels", "Empty", "/bad"});
+    ASSERT_EQ(scene.GetEditorFolders().size(), 2u);
+
+    engine::SceneDocument captured, parsed;
+    std::string text, error;
+    ASSERT_TRUE(engine::CaptureSceneDocument(scene, host.GetSceneAssets(), captured, error)) << error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(captured, text, error)) << error;
+    ASSERT_TRUE(engine::ParseSceneDocument(text, parsed, error)) << error;
+    engine::Scene restored;
+    engine::PopulateScene(parsed, host.GetSceneAssets(), restored);
+    const auto restoredBarrel = restored.FindFirstByName("Barrel");
+    EXPECT_EQ(restored.GetEditorFolder(restoredBarrel), "Props/Barrels");
+    EXPECT_EQ(restored.GetEditorFolder(restored.FindFirstByName("Lid")), "");
+    ASSERT_EQ(restored.GetEditorFolders().size(), 2u);
+    EXPECT_EQ(restored.GetEditorFolders()[0], "Empty");
+
+    // Getting a parent takes the entity out of its folder.
+    const auto crate = restored.CreateEntity("Crate");
+    ASSERT_TRUE(restored.SetParent(restoredBarrel, crate));
+    EXPECT_EQ(restored.GetEditorFolder(restoredBarrel), "");
+
+    // A folder on a child is rejected when loading.
+    const auto childWithFolder = text.find("\"name\": \"Lid\"");
+    ASSERT_NE(childWithFolder, std::string::npos);
+    std::string invalid = text;
+    invalid.insert(childWithFolder, "\"editorFolder\": \"Props\", ");
+    EXPECT_FALSE(engine::ParseSceneDocument(invalid, parsed, error));
+    EXPECT_NE(error.find("root entities"), std::string::npos) << error;
+}

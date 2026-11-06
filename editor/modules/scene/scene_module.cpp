@@ -3,6 +3,8 @@
 #include <QEvent>
 #include <QMenu>
 #include <QSignalBlocker>
+#include <QStringList>
+#include <QStyle>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -11,6 +13,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -33,29 +36,115 @@
 
 namespace {
 
-/// Lists the scene's entities as a tree, rebuilt whenever the scene's revision changes.
-/// Its selection mirrors the editor's Selection both ways; the current item is the primary.
-/// Dragging the selection onto an item asks for it to become that item's children; between
-/// items, their siblings; onto empty space, roots. The tree never moves items itself.
+QString toQString(const std::string& text) {
+    return QString::fromStdString(text);
+}
+
+/// "A/B/C" -> "A/B"; empty for a top-level folder.
+QString parentFolder(const QString& path) {
+    const qsizetype slash = path.lastIndexOf(QLatin1Char('/'));
+    return slash < 0 ? QString() : path.left(slash);
+}
+
+/// "A/B/C" -> "C".
+QString folderName(const QString& path) {
+    return path.mid(path.lastIndexOf(QLatin1Char('/')) + 1);
+}
+
+/// `name` inside `parent` (empty: top level).
+QString joinFolder(const QString& parent, const QString& name) {
+    return parent.isEmpty() ? name : parent + QLatin1Char('/') + name;
+}
+
+/// Whether `path` is `folder` or inside it.
+bool inFolder(const QString& path, const QString& folder) {
+    return path == folder || path.startsWith(folder + QLatin1Char('/'));
+}
+
+/// Every folder the hierarchy shows: the scene's list, the folders of root entities, and all
+/// their parent folders. Sorted, so parents come before their children.
+QStringList collectFolders(const engine::Scene& scene) {
+    QStringList folders;
+    const auto add = [&folders](QString path) {
+        for (; !path.isEmpty(); path = parentFolder(path)) folders.append(path);
+    };
+    for (const std::string& folder : scene.GetEditorFolders()) add(toQString(folder));
+    for (const entt::entity root : scene.GetRootEntities()) add(toQString(scene.GetEditorFolder(root)));
+    folders.removeDuplicates();
+    folders.sort(Qt::CaseInsensitive);
+    return folders;
+}
+
+/// Lists the scene's folders and entities as a tree, rebuilt whenever the scene's revision changes.
+/// Its entity selection mirrors the editor's Selection both ways; the current item is the primary.
+/// Folders can be selected too, but only in the tree: they aren't entities.
+/// Dropping the selection reports the item that should receive it: the item dropped on, the parent
+/// of the items dropped between, or nullptr for the top level. The tree never moves items itself.
 class HierarchyTree : public QTreeWidget {
 public:
-    /// Called with the new parent (entt::null for the root) when the selection is dropped.
-    using ReparentHandler = std::function<void(entt::entity parent)>;
+    using DropHandler = std::function<void(const QTreeWidgetItem* receiver)>;
+    using RenameHandler = std::function<void(const QString& folder, const QString& name)>;
 
-    HierarchyTree(engine::Scene& scene, editor::Selection& selection, ReparentHandler reparent)
-        : scene_(scene), selection_(selection), reparent_(std::move(reparent)) {
+    HierarchyTree(engine::Scene& scene, editor::Selection& selection, DropHandler drop, RenameHandler rename)
+        : scene_(scene), selection_(selection), drop_(std::move(drop)), rename_(std::move(rename)) {
         setHeaderHidden(true);
         setSelectionMode(QAbstractItemView::ExtendedSelection);
         setDragDropMode(QAbstractItemView::InternalMove);
+        // Only folders are editable, by double-click or F2.
+        setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
         // A click changes the selection before the current item, so both push.
         connect(this, &QTreeWidget::itemSelectionChanged, this, &HierarchyTree::pushSelection);
         connect(this, &QTreeWidget::currentItemChanged, this, &HierarchyTree::pushSelection);
         connect(&selection_, &editor::Selection::changed, this, &HierarchyTree::showSelection);
+        // Rebuilds block signals, so this is only the user renaming a folder.
+        connect(this, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem* item) {
+            if (const QString folder = folderOf(item); !folder.isEmpty()) {
+                rename_(folder, item->text(0).trimmed());
+                QTimer::singleShot(0, this, &HierarchyTree::rebuild);  // also undoes a refused name
+            }
+        });
         // Scene has no change signal, only a revision counter: poll it.
         auto* timer = new QTimer(this);
         connect(timer, &QTimer::timeout, this, &HierarchyTree::refresh);
         timer->start(200);
         rebuild();
+    }
+
+    /// entt::null for folder items and nullptr.
+    static entt::entity entityOf(const QTreeWidgetItem* item) {
+        if (item == nullptr || item->data(0, FolderRole).isValid()) return entt::null;
+        return static_cast<entt::entity>(item->data(0, Qt::UserRole).toUInt());
+    }
+
+    /// The full path of a folder item; empty for entity items and nullptr.
+    static QString folderOf(const QTreeWidgetItem* item) {
+        return item != nullptr ? item->data(0, FolderRole).toString() : QString();
+    }
+
+    /// The selected folders that aren't inside another selected one.
+    [[nodiscard]] QStringList selectedFolders() const {
+        QStringList folders;
+        for (const QTreeWidgetItem* item : selectedItems()) {
+            if (const QString folder = folderOf(item); !folder.isEmpty()) folders.append(folder);
+        }
+        QStringList outermost;
+        for (const QString& folder : folders) {
+            if (std::ranges::none_of(folders, [&](const QString& other) {
+                    return other != folder && inFolder(folder, other);
+                })) {
+                outermost.append(folder);
+            }
+        }
+        return outermost;
+    }
+
+    /// Rebuilds now and starts editing the name of `folder`, e.g. right after creating it.
+    void editFolder(const QString& folder) {
+        rebuild();
+        if (const auto it = folders_.find(folder); it != folders_.end()) {
+            setCurrentItem(it->second);
+            editItem(it->second);
+        }
     }
 
 protected:
@@ -64,12 +153,12 @@ protected:
             event->ignore();
             return;
         }
-        entt::entity parent = entt::null;
+        const QTreeWidgetItem* receiver = nullptr;
         if (const QTreeWidgetItem* target = itemAt(event->position().toPoint())) {
             switch (dropIndicatorPosition()) {
-            case OnItem: parent = entityOf(target); break;
+            case OnItem: receiver = target; break;
             case AboveItem:
-            case BelowItem: parent = entityOf(target->parent()); break;
+            case BelowItem: receiver = target->parent(); break;
             case OnViewport: break;
             }
         }
@@ -77,14 +166,13 @@ protected:
         // changes instead, and the tree follows it.
         event->setDropAction(Qt::CopyAction);
         event->accept();
-        reparent_(parent);
+        drop_(receiver);
         QTimer::singleShot(0, this, &HierarchyTree::refresh);
     }
 
 private:
-    static entt::entity entityOf(const QTreeWidgetItem* item) {
-        return item != nullptr ? static_cast<entt::entity>(item->data(0, Qt::UserRole).toUInt()) : entt::null;
-    }
+    /// Set on folder items only: their full path.
+    static constexpr int FolderRole = Qt::UserRole + 1;
 
     void refresh() {
         if (scene_.GetRevision() != shown_revision_) {
@@ -98,8 +186,18 @@ private:
         const QSignalBlocker blocker(this);
         clear();
         items_.clear();
+        folders_.clear();
+        // Folders first, so at every level they're listed above the entities.
+        for (const QString& folder : collectFolders(scene_)) {
+            folderItem(folder);
+        }
         for (const entt::entity root : scene_.GetRootEntities()) {
-            addTopLevelItem(makeItem(root));
+            const std::string& folder = scene_.GetEditorFolder(root);
+            if (folder.empty()) {
+                addTopLevelItem(makeItem(root));
+            } else {
+                folderItem(toQString(folder))->addChild(makeItem(root));
+            }
         }
         expandAll();
         showSelection();
@@ -110,11 +208,11 @@ private:
         std::vector<entt::entity> entities;
         QTreeWidgetItem* current = currentItem();
         for (const QTreeWidgetItem* item : selectedItems()) {
-            if (item != current) {
+            if (item != current && entityOf(item) != entt::null) {
                 entities.push_back(entityOf(item));
             }
         }
-        if (current != nullptr && current->isSelected()) {
+        if (current != nullptr && current->isSelected() && entityOf(current) != entt::null) {
             entities.push_back(entityOf(current));
         }
         pushing_ = true;
@@ -145,12 +243,30 @@ private:
     }
 
     QTreeWidgetItem* makeItem(const entt::entity entity) {
-        auto* item = new QTreeWidgetItem({QString::fromStdString(scene_.GetName(entity))});
+        auto* item = new QTreeWidgetItem({toQString(scene_.GetName(entity))});
         item->setData(0, Qt::UserRole, entt::to_integral(entity));
         items_.emplace(entity, item);
         for (const entt::entity child : scene_.GetChildren(entity)) {
             item->addChild(makeItem(child));
         }
+        return item;
+    }
+
+    /// The item of `folder`, created with its parent folders if needed.
+    QTreeWidgetItem* folderItem(const QString& folder) {
+        if (const auto it = folders_.find(folder); it != folders_.end()) {
+            return it->second;
+        }
+        auto* item = new QTreeWidgetItem({folderName(folder)});
+        item->setData(0, FolderRole, folder);
+        item->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
+        item->setFlags(item->flags() | Qt::ItemIsEditable);
+        if (const QString parent = parentFolder(folder); parent.isEmpty()) {
+            addTopLevelItem(item);
+        } else {
+            folderItem(parent)->addChild(item);
+        }
+        folders_.emplace(folder, item);
         return item;
     }
 
@@ -161,23 +277,28 @@ private:
 
     engine::Scene& scene_;
     editor::Selection& selection_;
-    ReparentHandler reparent_;
-    /// Every item of the tree, by entity. Owned by the tree.
+    DropHandler drop_;
+    RenameHandler rename_;
+    /// Every item of the tree, by entity or folder path. Owned by the tree.
     std::unordered_map<entt::entity, QTreeWidgetItem*> items_;
+    std::unordered_map<QString, QTreeWidgetItem*> folders_;
     std::uint64_t shown_revision_ = ~std::uint64_t{0};
     /// Set while the tree's own selection is being pushed, so it isn't shown back.
     bool pushing_ = false;
 };
 
 /// The hierarchy tree, with an Add button floating in its bottom-right corner. Right-clicking the
-/// tree opens the same menu, plus Focus, Duplicate, Unparent and Delete when it was on an entity. New entities go in
-/// front of the viewport camera, at the root, and become the selection. Reparenting keeps entities where they are in
-/// the world.
+/// tree opens the same menu, plus Focus, Duplicate, Unparent and Delete when it was on an entity, or
+/// Rename and Delete Folder on a folder. New entities go in front of the viewport camera, at the
+/// root, and become the selection. Reparenting keeps entities where they are in the world.
+/// Folders are editor-only groups of root entities (Scene::SetEditorFolder); dropping an entity
+/// into one makes it a root again.
 class HierarchyPanel : public QWidget {
 public:
     explicit HierarchyPanel(editor::EditorContext& context) : context_(context) {
-        tree_ = new HierarchyTree(context.scene(), context.selection(),
-                                  [this](const entt::entity parent) { reparentSelected(parent); });
+        tree_ = new HierarchyTree(
+            context.scene(), context.selection(), [this](const QTreeWidgetItem* receiver) { drop(receiver); },
+            [this](const QString& folder, const QString& name) { renameFolder(folder, name); });
         auto* layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->addWidget(tree_);
@@ -185,15 +306,22 @@ public:
         auto* menu = new QMenu(this);
         menu->addAction(QObject::tr("Empty Entity"), this, [this] { addEmpty(); });
         menu->addAction(QObject::tr("Cube"), this, [this] { addCube(); });
+        menu->addSeparator();
+        menu->addAction(QObject::tr("Folder"), this, [this] { addFolder(); });
 
         const editor::EditActions& edit = context.editActions();
         edit.attach(this);
 
-        // Pressing the right button on an entity has already selected it, as with the left one.
+        // Pressing the right button on an item has already selected it, as with the left one.
         tree_->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(tree_, &QWidget::customContextMenuRequested, this, [this, menu, &edit](const QPoint& position) {
             QMenu context_menu;
-            if (tree_->itemAt(position) != nullptr) {
+            QTreeWidgetItem* item = tree_->itemAt(position);
+            if (const QString folder = HierarchyTree::folderOf(item); !folder.isEmpty()) {
+                context_menu.addAction(QObject::tr("Rename"), this, [this, item] { tree_->editItem(item); });
+                context_menu.addAction(QObject::tr("Delete Folder"), this, [this] { deleteSelectedFolders(); });
+                context_menu.addSeparator();
+            } else if (item != nullptr) {
                 context_menu.addAction(edit.focusAction());
                 context_menu.addAction(edit.duplicateAction());
                 if (std::ranges::any_of(movableSelection(), [this](const entt::entity entity) {
@@ -271,6 +399,101 @@ private:
         for (const entt::entity entity : movableSelection()) {
             // Refused when `parent` is the entity itself or one of its children: nothing to do.
             scene.SetParentKeepingWorld(entity, parent);
+        }
+    }
+
+    /// The selection dropped on `receiver`: an entity (become its children), a folder (go into it)
+    /// or nullptr (the top level). Selected folders only go into folders or the top level.
+    void drop(const QTreeWidgetItem* receiver) {
+        const entt::entity parent = HierarchyTree::entityOf(receiver);
+        if (parent != entt::null) {
+            reparentSelected(parent);
+            return;
+        }
+        const QString folder = HierarchyTree::folderOf(receiver);
+        for (const QString& moved : tree_->selectedFolders()) {
+            if (!folder.isEmpty() && inFolder(folder, moved)) continue;  // into itself
+            moveFolder(moved, joinFolder(folder, folderName(moved)));
+        }
+        engine::Scene& scene = context_.scene();
+        for (const entt::entity entity : movableSelection()) {
+            scene.SetParentKeepingWorld(entity, entt::null);
+            scene.SetEditorFolder(entity, folder.toStdString());
+        }
+    }
+
+    /// Replaces the scene's folder list; the hierarchy shows any folder still used by an entity anyway.
+    void setFolders(const QStringList& folders) {
+        std::vector<std::string> paths;
+        for (const QString& folder : folders) paths.push_back(folder.toStdString());
+        context_.scene().SetEditorFolders(std::move(paths));
+    }
+
+    /// Creates "New Folder" inside the folder the tree's current item is (the top level if none),
+    /// and starts editing its name.
+    void addFolder() {
+        const QString parent = HierarchyTree::folderOf(tree_->currentItem());
+        QStringList folders = collectFolders(context_.scene());
+        QString folder = joinFolder(parent, QObject::tr("New Folder"));
+        for (int number = 1; folders.contains(folder); ++number) {
+            folder = joinFolder(parent, QObject::tr("New Folder (%1)").arg(number));
+        }
+        folders.append(folder);
+        setFolders(folders);
+        tree_->editFolder(folder);
+    }
+
+    void renameFolder(const QString& folder, const QString& name) {
+        if (name == folderName(folder)) return;
+        if (name.isEmpty() || name.contains(QLatin1Char('/'))) {
+            context_.showStatus(QObject::tr("A folder name can't be empty or contain '/'"), 5000);
+            return;
+        }
+        const QString renamed = joinFolder(parentFolder(folder), name);
+        if (collectFolders(context_.scene()).contains(renamed)) {
+            context_.showStatus(QObject::tr("There is already a folder named %1 here").arg(name), 5000);
+            return;
+        }
+        moveFolder(folder, renamed);
+    }
+
+    /// Renames `from` to `to`, with the folders and entities inside it.
+    void moveFolder(const QString& from, const QString& to) {
+        if (from == to) return;
+        const auto moved = [&](const QString& path) { return inFolder(path, from) ? to + path.mid(from.size()) : path; };
+        QStringList folders;
+        for (const QString& folder : collectFolders(context_.scene())) folders.append(moved(folder));
+        folders.removeDuplicates();  // moving into a folder that has one of the same name merges them
+        setFolders(folders);
+        relocateEntities(moved);
+    }
+
+    /// Removes the selected folders. What they held moves up into their parent folder.
+    void deleteSelectedFolders() {
+        for (const QString& deleted : tree_->selectedFolders()) {
+            const QString parent = parentFolder(deleted);
+            const auto moved = [&](const QString& path) {
+                if (!inFolder(path, deleted)) return path;
+                return path == deleted ? parent : joinFolder(parent, path.mid(deleted.size() + 1));
+            };
+            QStringList folders;
+            for (const QString& folder : collectFolders(context_.scene())) {
+                if (folder != deleted) folders.append(moved(folder));
+            }
+            folders.removeDuplicates();
+            setFolders(folders);
+            relocateEntities(moved);
+        }
+    }
+
+    /// Gives each root entity in a folder the folder `moved` maps it to.
+    void relocateEntities(const std::function<QString(const QString&)>& moved) {
+        engine::Scene& scene = context_.scene();
+        // A copy: SetEditorFolder doesn't change the roots, but stay safe.
+        const std::vector<entt::entity> roots(scene.GetRootEntities().begin(), scene.GetRootEntities().end());
+        for (const entt::entity root : roots) {
+            const QString folder = toQString(scene.GetEditorFolder(root));
+            if (!folder.isEmpty()) scene.SetEditorFolder(root, moved(folder).toStdString());
         }
     }
 

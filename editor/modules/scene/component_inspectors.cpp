@@ -697,5 +697,5 @@ std::span<const ComponentInspector> componentInspectors() {
 
 bool isHiddenComponent(const entt::id_type type) {
     return type == entt::type_hash<engine::Name>::value() || type == entt::type_hash<engine::EntityId>::value() ||
-           type == entt::type_hash<engine::Hierarchy>::value();
+           type == entt::type_hash<engine::Hierarchy>::value() || type == entt::type_hash<engine::EditorFolder>::value();
 }

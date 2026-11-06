@@ -103,6 +103,19 @@ public:
     [[nodiscard]] entt::entity GetActiveCamera() const;
     void SetDirectionalLight(entt::entity entity);
     [[nodiscard]] entt::entity GetDirectionalLight() const;
+
+    // --- Editor folders ------------------------------------------------------------
+    // Grouping for the editor's hierarchy, saved with the scene and ignored at runtime.
+
+    /// "A/B": nonempty folder names separated by single slashes.
+    [[nodiscard]] static bool IsValidEditorFolder(std::string_view path);
+    /// Puts a entity into a folder
+    bool SetEditorFolder(entt::entity entity, std::string_view path);
+    /// Empty when the entity isn't in a folder.
+    [[nodiscard]] const std::string& GetEditorFolder(entt::entity entity) const;
+    /// Folders that exist even with no entity in them. Invalid paths and repeats are dropped.
+    void SetEditorFolders(std::vector<std::string> folders);
+    [[nodiscard]] std::span<const std::string> GetEditorFolders() const noexcept { return editorFolders_; }
     [[nodiscard]] bool HasUnsupportedComponents() const noexcept { return !unsupported_.empty(); }
     [[nodiscard]] bool HasUnsupportedComponents(entt::entity entity) const noexcept { return unsupported_.contains(entity); }
 
@@ -200,7 +213,7 @@ private:
     template <class T>
     static constexpr bool IsRequiredComponent = std::is_same_v<T, Name> || std::is_same_v<T, Transform> ||
                                                  std::is_same_v<T, Hierarchy> || std::is_same_v<T, EntityId> ||
-                                                 std::is_same_v<T, Tags>;
+                                                 std::is_same_v<T, Tags> || std::is_same_v<T, EditorFolder>;
     template <class T>
     static constexpr bool IsSerializableComponent = std::is_same_v<T, MeshRenderer> ||
         std::is_same_v<T, Camera> || std::is_same_v<T, DirectionalLight> ||
@@ -247,6 +260,7 @@ private:
     std::size_t destructionDepth_ = 0;
     std::optional<EntityUuid> activeCameraId_;
     std::optional<EntityUuid> directionalLightId_;
+    std::vector<std::string> editorFolders_;
     std::vector<entt::entity> roots_;
     std::uint64_t revision_ = 0;
 };

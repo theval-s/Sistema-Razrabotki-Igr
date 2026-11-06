@@ -27,6 +27,8 @@ struct SceneEntityDefinition {
     std::string name;
     std::vector<std::string> tags;
     std::optional<EntityUuid> parent;
+    // Editor-only grouping (Scene::SetEditorFolder); empty for none. Roots only.
+    std::string editorFolder;
     Transform transform;
     struct Mesh {
         AssetReference mesh;
@@ -49,6 +51,8 @@ struct SceneDocument {
     std::vector<SceneEntityDefinition> entities;
     std::optional<EntityUuid> activeCamera;
     std::optional<EntityUuid> directionalLight;
+    // Editor folders that exist even when empty (Scene::SetEditorFolders).
+    std::vector<std::string> editorFolders;
 };
 
 // Structural validation includes UUID syntax, unique entity IDs, hierarchy
