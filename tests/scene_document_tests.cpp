@@ -695,3 +695,44 @@ TEST(SceneDocument, EditorFoldersRoundTripAndOnlyGroupRoots) {
     EXPECT_FALSE(engine::ParseSceneDocument(invalid, parsed, error));
     EXPECT_NE(error.find("root entities"), std::string::npos) << error;
 }
+
+TEST(Scene, ChangeObserversSeeEveryEditMadeThroughTheScene) {
+    engine::Scene scene;
+    using Kind = engine::Scene::ChangeKind;
+    std::vector<std::pair<Kind, entt::entity>> changes;
+    const auto token = scene.AddChangeObserver([&](Kind kind, entt::entity entity) { changes.emplace_back(kind, entity); });
+    const auto take = [&changes] { return std::exchange(changes, {}); };
+    using Changes = std::vector<std::pair<Kind, entt::entity>>;
+
+    const auto parent = scene.CreateEntity("Parent");
+    const auto child = scene.CreateEntity("Child");
+    EXPECT_EQ(take(), (Changes{{Kind::Created, parent}, {Kind::Created, child}}));
+
+    scene.SetName(child, "Renamed");
+    scene.SetName(child, "Renamed");  // no change, no report
+    scene.AddTag(child, "a");
+    scene.AddTag(child, "a");
+    EXPECT_EQ(take(), (Changes{{Kind::Modified, child}, {Kind::Modified, child}}));
+
+    ASSERT_TRUE(scene.SetEditorFolder(child, "Props"));
+    ASSERT_TRUE(scene.SetParent(child, parent));
+    scene.SetEditorFolders({"Empty"});
+    EXPECT_EQ(take(), (Changes{{Kind::Hierarchy, child}, {Kind::Hierarchy, child}, {Kind::Settings, entt::null}}));
+
+    auto transform = scene.GetTransform(child);
+    transform.position.x = 2.0f;
+    scene.SetTransform(child, transform);
+    scene.GetTransform(child).position.y = 3.0f;  // runtime-style write: not reported
+    ASSERT_NE(scene.AddComponent<engine::PointLight>(child), nullptr);
+    EXPECT_TRUE(scene.Modify<engine::PointLight>(child, [](engine::PointLight& light) { light.range = 4.0f; }));
+    EXPECT_FALSE(scene.Modify<engine::SpotLight>(child, [](engine::SpotLight&) { FAIL(); }));
+    EXPECT_TRUE(scene.RemoveComponent<engine::PointLight>(child));
+    EXPECT_EQ(take(), (Changes(4, {Kind::Modified, child})));
+
+    scene.DestroyEntity(parent);  // children first
+    EXPECT_EQ(take(), (Changes{{Kind::Destroyed, child}, {Kind::Destroyed, parent}}));
+
+    scene.RemoveChangeObserver(token);
+    scene.CreateEntity("Unseen");
+    EXPECT_TRUE(changes.empty());
+}

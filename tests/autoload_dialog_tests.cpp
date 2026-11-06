@@ -1,5 +1,6 @@
 #include "autoload_dialog.hpp"
 #include <editor/scene_document.hpp>
+#include <editor/scene_events.hpp>
 #include <editor/selection.hpp>
 #include <editor/lua_definitions.hpp>
 
@@ -199,8 +200,9 @@ TEST(AutoloadLogging, LuaUsesTheSharedDefaultLogger) {
 TEST(EditorPlayDocument, RuntimeChangesDoNotOverwriteOriginalDirtyStateOrSceneFile) {
     engine::Engine engine;
     engine::Project project;
-    editor::Selection selection(engine.GetScene());
-    editor::SceneDocument document(engine, project, selection);
+    editor::SceneEvents events(engine.GetScene());
+    editor::Selection selection(engine.GetScene(), events);
+    editor::SceneDocument document(engine, project, selection, events);
     document.markClean();
     document.beginRuntime();
     engine.GetScene().CreateEntity("Runtime spawn");
