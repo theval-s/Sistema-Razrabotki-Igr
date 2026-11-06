@@ -24,6 +24,7 @@
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/core/FrameContext.hpp>
+#include <engine/rendering/DebugDraw.hpp>
 #include "PhysicsValidation.hpp"
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -541,7 +542,8 @@ bool PhysicsSubsystem::Teleport(entt::entity entity, Vector3 position, Quaternio
     body->rotation = pose.rotation;
     error.clear(); return true;
 }
-bool PhysicsSubsystem::AppendColliderDebugLines(entt::entity entity, std::vector<Vector3>& endpoints, std::string& error) {
+bool PhysicsSubsystem::DrawCollider(entt::entity entity, DebugDraw& draw, const DirectX::SimpleMath::Color& color,
+                                    std::string& error) {
     error.clear();
     if (!impl_) { error = "physics is not initialized"; return false; }
     if (entity == entt::null) { impl_->ClearPreview(); return true; }
@@ -588,9 +590,9 @@ bool PhysicsSubsystem::AppendColliderDebugLines(entt::entity entity, std::vector
     }
     error = impl_->previewError;
     if (!error.empty()) return false;
-    endpoints.reserve(endpoints.size() + impl_->previewLines.size());
-    for (const auto point : impl_->previewLines)
-        endpoints.push_back(Vector3::Transform(point, pose.rotation) + pose.position);
+    for (std::size_t i = 0; i + 1 < impl_->previewLines.size(); i += 2)
+        draw.Line(Vector3::Transform(impl_->previewLines[i], pose.rotation) + pose.position,
+                  Vector3::Transform(impl_->previewLines[i + 1], pose.rotation) + pose.position, color);
     return true;
 }
 std::size_t PhysicsSubsystem::GetBodyCount() const { return impl_ ? impl_->bodies.size() : 0; }

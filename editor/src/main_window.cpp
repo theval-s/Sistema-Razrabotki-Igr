@@ -44,57 +44,18 @@
 #include <editor/edit_actions.hpp>
 #include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
-#include <editor/light_lines.hpp>
 #include <editor/module_loader.hpp>
 #include <editor/paths.hpp>
 #include <editor/play_session.hpp>
 #include <editor/project_dialog.hpp>
 #include <editor/scene_document.hpp>
+#include <editor/viewport_overlay.hpp>
 #include <editor/viewport_widget.hpp>
 #include <editor/selection.hpp>
 
 namespace editor {
 
 namespace {
-
-// Runs after scene extraction and the editor camera, before RenderingSubsystem::Render.
-class SelectionRenderSubsystem final : public engine::Subsystem {
-public:
-    explicit SelectionRenderSubsystem(const Selection& selection) : selection_(selection) {}
-    std::string_view GetName() const override { return "SelectionRenderSubsystem"; }
-    void LateUpdate(const engine::FrameContext&) override {
-        auto& world = GetEngine().GetSubsystem<engine::RenderingSubsystem>()->GetWorld();
-        world.selectedSceneItems.clear();
-        world.editorLines.clear();
-        auto& assets = GetEngine().GetSceneAssets();
-        const auto& scene = GetEngine().GetScene();
-        if (auto* physics = GetEngine().GetSubsystem<engine::PhysicsSubsystem>()) {
-            std::string ignored;
-            // The inspector edits the primary entity. Preview also works in Edit,
-            // without registering simulation bodies or advancing the fixed clock.
-            (void)physics->AppendColliderDebugLines(selection_.primary(), world.editorLines, ignored);
-        }
-        for (const auto entity : selection_.entities()) {
-            if (!scene.IsValid(entity)) continue;
-            lightLines(world.editorLines, scene, entity);
-            if (const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity)) {
-                const auto mesh = assets.Peek(renderer->mesh);
-                const auto material = assets.Peek(renderer->materialInstance);
-                if (mesh && material) {
-                    const auto override = GetEngine().GetEntityMaterialOverride(entity);
-                    world.selectedSceneItems.push_back({scene.GetWorldMatrix(entity), mesh->mesh,
-                                                        override ? override : material->instance});
-                }
-            }
-        }
-    }
-    void Shutdown() override {
-        GetEngine().GetSubsystem<engine::RenderingSubsystem>()->GetWorld().selectedSceneItems.clear();
-        GetEngine().GetSubsystem<engine::RenderingSubsystem>()->GetWorld().editorLines.clear();
-    }
-private:
-    const Selection& selection_;
-};
 
 QString toQString(const std::string_view text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -238,7 +199,7 @@ void MainWindow::startEngine() {
     engine_.AddSubsystem<engine::PhysicsSubsystem>();
     engine_.AddSubsystem<engine::RenderExtractionSubsystem>();
     camera_ = engine_.AddSubsystem<EditorCameraSubsystem>();
-    engine_.AddSubsystem<SelectionRenderSubsystem>(context_->selection());
+    engine_.AddSubsystem<ViewportOverlaySubsystem>(context_->selection(), *viewport_);
 
     // On failure keep the window up so the Log dock shows why, but don't tick.
     if (!engine_.Initialize()) {
