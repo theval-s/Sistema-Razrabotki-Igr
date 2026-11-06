@@ -8,17 +8,20 @@
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QKeySequence>
-#include <QMenu>
+#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSplitter>
 #include <QStringList>
+#include <QStyle>
 #include <QTableView>
 #include <QTimer>
+#include <QToolBar>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <array>
 #include <utility>
 #include <vector>
 
@@ -32,15 +35,39 @@ namespace {
 constexpr int DrainIntervalMs = 50;
 
 const QString HeaderKey = QStringLiteral("log/header");
+const QString HiddenLevelsKey = QStringLiteral("log/hiddenLevels");
+
+/// A level toggle in the toolbar; it shows or hides all of `levels` together.
+struct LevelGroup {
+    const char* key;  // in QSettings
+    const char* label;
+    QStyle::StandardPixmap icon;
+    std::array<spdlog::level::level_enum, 2> levels;
+};
+
+constexpr std::array LevelGroups{
+    LevelGroup{"info", QT_TRANSLATE_NOOP("editor::LogPanel", "Info"), QStyle::SP_MessageBoxInformation,
+               {spdlog::level::info, spdlog::level::info}},
+    LevelGroup{"warning", QT_TRANSLATE_NOOP("editor::LogPanel", "Warnings"), QStyle::SP_MessageBoxWarning,
+               {spdlog::level::warn, spdlog::level::warn}},
+    LevelGroup{"error", QT_TRANSLATE_NOOP("editor::LogPanel", "Errors"), QStyle::SP_MessageBoxCritical,
+               {spdlog::level::err, spdlog::level::critical}},
+};
 
 }  // namespace
 
 LogPanel::LogPanel(QWidget* parent)
-    : QWidget(parent), sink_(std::make_shared<LogSink>()), model_(new LogModel(10000, this)) {
+    : QWidget(parent),
+      sink_(std::make_shared<LogSink>()),
+      model_(new LogModel(10000, this)),
+      filter_(new LogFilterModel(this)) {
+    // Debug output is for the console and the log file; the panel has no toggle for it.
+    sink_->set_level(spdlog::level::info);
+    filter_->setSourceModel(model_);
     const QFont fixed = QFontDatabase::systemFont(QFontDatabase::FixedFont);
 
     view_ = new QTableView;
-    view_->setModel(model_);
+    view_->setModel(filter_);
     view_->setFont(fixed);
     view_->setSelectionBehavior(QAbstractItemView::SelectRows);
     view_->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -59,6 +86,17 @@ LogPanel::LogPanel(QWidget* parent)
     details_->setFont(fixed);
     details_->hide();
 
+    clear_ = new QAction(style()->standardIcon(QStyle::SP_DialogResetButton), tr("C&lear"), this);
+    connect(clear_, &QAction::triggered, this, [this] {
+        model_->clear();
+        details_->hide();
+    });
+    follow_ = new QAction(style()->standardIcon(QStyle::SP_ArrowDown), tr("Auto-scroll"), this);
+    follow_->setCheckable(true);
+    follow_->setChecked(true);
+    follow_->setToolTip(tr("Keep the newest entry in view"));
+    connect(follow_, &QAction::toggled, this, &LogPanel::follow);
+
     auto* splitter = new QSplitter(Qt::Vertical);
     splitter->addWidget(view_);
     splitter->addWidget(details_);
@@ -67,6 +105,8 @@ LogPanel::LogPanel(QWidget* parent)
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    layout->addWidget(buildToolBar());
     layout->addWidget(splitter);
 
     auto* copy = new QAction(tr("&Copy"), view_);
@@ -74,15 +114,19 @@ LogPanel::LogPanel(QWidget* parent)
     copy->setShortcutContext(Qt::WidgetShortcut);
     connect(copy, &QAction::triggered, this, &LogPanel::copySelected);
     view_->addAction(copy);
-    auto* clear = new QAction(tr("C&lear"), view_);
-    connect(clear, &QAction::triggered, this, [this] {
-        model_->clear();
-        details_->hide();
-    });
-    view_->addAction(clear);
+    view_->addAction(clear_);
 
     connect(view_->selectionModel(), &QItemSelectionModel::selectionChanged, this, &LogPanel::showSelected);
     connect(view_->selectionModel(), &QItemSelectionModel::currentChanged, this, &LogPanel::showSelected);
+
+    // Only the user's scrolling switches auto-scroll: new rows and filtering move the
+    // scroll bar too. The slider position is already updated when this fires; the value isn't.
+    QScrollBar* scroll = view_->verticalScrollBar();
+    connect(scroll, &QAbstractSlider::actionTriggered, this,
+            [this, scroll] { follow_->setChecked(scroll->sliderPosition() == scroll->maximum()); });
+
+    connect(model_, &LogModel::countsChanged, this, &LogPanel::refreshCounts);
+    refreshCounts();
 
     auto* timer = new QTimer(this);
     connect(timer, &QTimer::timeout, this, &LogPanel::drain);
@@ -90,7 +134,53 @@ LogPanel::LogPanel(QWidget* parent)
 }
 
 LogPanel::~LogPanel() {
-    QSettings().setValue(HeaderKey, view_->horizontalHeader()->saveState());
+    QSettings settings;
+    settings.setValue(HeaderKey, view_->horizontalHeader()->saveState());
+    QStringList hidden;
+    for (std::size_t i = 0; i < LevelGroups.size(); ++i) {
+        if (!level_actions_[i]->isChecked()) hidden.append(QString::fromLatin1(LevelGroups[i].key));
+    }
+    settings.setValue(HiddenLevelsKey, hidden);
+}
+
+QWidget* LogPanel::buildToolBar() {
+    auto* bar = new QToolBar;
+    bar->setIconSize({16, 16});
+    bar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+
+    const QStringList hidden = QSettings().value(HiddenLevelsKey).toStringList();
+    for (const LevelGroup& group : LevelGroups) {
+        auto* action = bar->addAction(style()->standardIcon(group.icon), tr(group.label));
+        action->setCheckable(true);
+        const bool shown = !hidden.contains(QString::fromLatin1(group.key));
+        action->setChecked(shown);
+        action->setToolTip(tr("Show %1").arg(tr(group.label).toLower()));
+        for (const spdlog::level::level_enum level : group.levels) filter_->setLevelShown(level, shown);
+        connect(action, &QAction::toggled, this, [this, &group](const bool checked) {
+            for (const spdlog::level::level_enum level : group.levels) filter_->setLevelShown(level, checked);
+            follow();
+        });
+        level_actions_.push_back(action);
+    }
+    bar->addSeparator();
+
+    auto* search = new QLineEdit;
+    search->setPlaceholderText(tr("Search"));
+    search->setClearButtonEnabled(true);
+    search->setMaximumWidth(260);
+    connect(search, &QLineEdit::textChanged, this, [this](const QString& text) {
+        filter_->setSearchText(text);
+        follow();
+    });
+    bar->addWidget(search);
+
+    // Right-aligned: what acts on the whole log.
+    auto* spacer = new QWidget;
+    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    bar->addWidget(spacer);
+    bar->addAction(follow_);
+    bar->addAction(clear_);
+    return bar;
 }
 
 void LogPanel::setupHeader() {
@@ -122,10 +212,21 @@ void LogPanel::setupHeader() {
 void LogPanel::drain() {
     std::vector<LogEntry> entries = sink_->takePending();
     if (entries.empty()) return;
-    const QScrollBar* scroll = view_->verticalScrollBar();
-    const bool follow = scroll->value() == scroll->maximum();
     model_->append(std::move(entries));
-    if (follow) view_->scrollToBottom();
+    follow();
+}
+
+void LogPanel::follow() {
+    if (follow_->isChecked()) view_->scrollToBottom();
+}
+
+void LogPanel::refreshCounts() {
+    for (std::size_t i = 0; i < LevelGroups.size(); ++i) {
+        const LevelGroup& group = LevelGroups[i];
+        int count = model_->count(group.levels[0]);
+        if (group.levels[1] != group.levels[0]) count += model_->count(group.levels[1]);
+        level_actions_[i]->setText(QStringLiteral("%1 %2").arg(tr(group.label)).arg(count));
+    }
 }
 
 void LogPanel::showSelected() {
@@ -145,7 +246,7 @@ void LogPanel::copySelected() const {
     std::ranges::sort(rows, {}, &QModelIndex::row);
     QStringList lines;
     lines.reserve(rows.size());
-    for (const QModelIndex& row : rows) lines.append(LogModel::format(model_->entry(row.row())));
+    for (const QModelIndex& row : rows) lines.append(LogModel::format(model_->entry(filter_->mapToSource(row).row())));
     QGuiApplication::clipboard()->setText(lines.join(u'\n'));
 }
 

@@ -3,18 +3,22 @@
 #include <QWidget>
 
 #include <memory>
+#include <vector>
 
+class QAction;
 class QPlainTextEdit;
 class QTableView;
 
 namespace editor {
 
+class LogFilterModel;
 class LogModel;
 class LogSink;
 
-/// Shows what was logged to sink(), colored by level. The newest entries scroll into view
-/// unless the list was scrolled up; selecting one shows its whole text below. The column
-/// widths, order and visibility are remembered.
+/// Shows what was logged to sink(), colored by level, with a toolbar to filter by level and
+/// text. While auto-scroll is on the newest entries scroll into view; scrolling up turns it
+/// off and scrolling back to the bottom on again. Selecting an entry shows its whole text
+/// below. The shown levels and the column widths, order and visibility are remembered.
 class LogPanel : public QWidget {
     Q_OBJECT
 
@@ -26,16 +30,25 @@ public:
     [[nodiscard]] const std::shared_ptr<LogSink>& sink() const noexcept { return sink_; }
 
 private:
+    QWidget* buildToolBar();
+    void setupHeader();
     /// Moves what the sink collected into the list.
     void drain();
+    /// Scrolls to the newest entry if auto-scroll is on.
+    void follow();
+    void refreshCounts();
     void showSelected();
     void copySelected() const;
-    void setupHeader();
 
     std::shared_ptr<LogSink> sink_;
     LogModel* model_ = nullptr;
+    LogFilterModel* filter_ = nullptr;
     QTableView* view_ = nullptr;
     QPlainTextEdit* details_ = nullptr;
+    QAction* clear_ = nullptr;
+    QAction* follow_ = nullptr;
+    /// One per level group, in the toolbar's order.
+    std::vector<QAction*> level_actions_;
 };
 
 }  // namespace editor

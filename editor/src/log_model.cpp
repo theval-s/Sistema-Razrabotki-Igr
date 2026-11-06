@@ -116,6 +116,10 @@ const LogEntry& LogModel::entry(const int row) const {
     return entries_[static_cast<std::size_t>(row)];
 }
 
+int LogModel::count(const spdlog::level::level_enum level) const {
+    return counts_[static_cast<std::size_t>(level)];
+}
+
 void LogModel::append(std::vector<LogEntry> entries) {
     if (entries.empty()) return;
     // A batch bigger than the whole log only keeps its tail.
@@ -126,24 +130,58 @@ void LogModel::append(std::vector<LogEntry> entries) {
     const std::size_t overflow = entries_.size() + incoming > capacity_ ? entries_.size() + incoming - capacity_ : 0;
     if (overflow > 0) {
         beginRemoveRows({}, 0, static_cast<int>(overflow) - 1);
+        for (std::size_t i = 0; i < overflow; ++i) --counts_[static_cast<std::size_t>(entries_[i].level)];
         entries_.erase(entries_.begin(), entries_.begin() + static_cast<std::ptrdiff_t>(overflow));
         endRemoveRows();
     }
     const int row = static_cast<int>(entries_.size());
     beginInsertRows({}, row, row + static_cast<int>(incoming) - 1);
+    for (auto it = first; it != entries.end(); ++it) ++counts_[static_cast<std::size_t>(it->level)];
     entries_.insert(entries_.end(), std::make_move_iterator(first), std::make_move_iterator(entries.end()));
     endInsertRows();
+    emit countsChanged();
 }
 
 void LogModel::clear() {
     if (entries_.empty()) return;
     beginResetModel();
     entries_.clear();
+    counts_ = {};
     endResetModel();
+    emit countsChanged();
 }
 
 QString LogModel::format(const LogEntry& entry) {
     return QStringLiteral("%1 [%2] %3").arg(timeText(entry.time), levelName(entry.level), entry.text);
+}
+
+LogFilterModel::LogFilterModel(QObject* parent) : QSortFilterProxyModel(parent) {
+    shown_.fill(true);
+}
+
+bool LogFilterModel::isLevelShown(const spdlog::level::level_enum level) const {
+    return shown_[static_cast<std::size_t>(level)];
+}
+
+void LogFilterModel::setLevelShown(const spdlog::level::level_enum level, const bool shown) {
+    if (isLevelShown(level) == shown) return;
+    shown_[static_cast<std::size_t>(level)] = shown;
+    invalidateFilter();
+}
+
+void LogFilterModel::setSearchText(const QString& text) {
+    if (search_ == text) return;
+    search_ = text;
+    invalidateFilter();
+}
+
+bool LogFilterModel::filterAcceptsRow(const int source_row, const QModelIndex& source_parent) const {
+    const QModelIndex index = sourceModel()->index(source_row, 0, source_parent);
+    const auto level = static_cast<spdlog::level::level_enum>(index.data(LogModel::LevelRole).toInt());
+    if (!isLevelShown(level)) return false;
+    if (search_.isEmpty()) return true;
+    return index.data(LogModel::TextRole).toString().contains(search_, Qt::CaseInsensitive) ||
+           index.data(LogModel::SourceRole).toString().contains(search_, Qt::CaseInsensitive);
 }
 
 }  // namespace editor

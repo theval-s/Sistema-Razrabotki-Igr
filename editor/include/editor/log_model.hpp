@@ -1,8 +1,10 @@
 #pragma once
 
 #include <QAbstractTableModel>
+#include <QSortFilterProxyModel>
 #include <QString>
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <deque>
@@ -61,6 +63,8 @@ public:
 
     [[nodiscard]] const LogEntry& entry(int row) const;
     [[nodiscard]] std::size_t capacity() const noexcept { return capacity_; }
+    /// How many entries of `level` the model holds, shown or not.
+    [[nodiscard]] int count(spdlog::level::level_enum level) const;
 
     void append(std::vector<LogEntry> entries);
     void clear();
@@ -68,9 +72,34 @@ public:
     /// "12:01:33.120 [warning] text", the whole text, for copying.
     [[nodiscard]] static QString format(const LogEntry& entry);
 
+signals:
+    /// After entries were added, dropped or cleared.
+    void countsChanged();
+
 private:
     std::deque<LogEntry> entries_;
     std::size_t capacity_;
+    std::array<int, spdlog::level::n_levels> counts_{};
+};
+
+/// Hides LogModel rows by level and by text.
+class LogFilterModel : public QSortFilterProxyModel {
+    Q_OBJECT
+
+public:
+    explicit LogFilterModel(QObject* parent = nullptr);
+
+    [[nodiscard]] bool isLevelShown(spdlog::level::level_enum level) const;
+    void setLevelShown(spdlog::level::level_enum level, bool shown);
+    /// Rows whose message or source contains `text`, ignoring case; empty shows all.
+    void setSearchText(const QString& text);
+
+protected:
+    [[nodiscard]] bool filterAcceptsRow(int source_row, const QModelIndex& source_parent) const override;
+
+private:
+    std::array<bool, spdlog::level::n_levels> shown_;
+    QString search_;
 };
 
 }  // namespace editor
