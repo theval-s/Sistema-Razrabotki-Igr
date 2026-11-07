@@ -158,7 +158,12 @@ namespace engine {
                     return false;
                 }
 
-                result = StateValue(number);
+                // Keep Lua integers as int64 so native Unsigned()/Integer() reads work.
+                object.push();
+                const bool integer = lua_isinteger(object.lua_state(), -1);
+                const auto integerValue = lua_tointeger(object.lua_state(), -1);
+                lua_pop(object.lua_state(), 1);
+                result = integer ? StateValue(static_cast<std::int64_t>(integerValue)) : StateValue(number);
                 return true;
             }
 
@@ -406,24 +411,32 @@ namespace engine {
 
                         if (position.valid() &&
                             position.get_type() != sol::type::nil) {
+                            if (!position.is<DirectX::SimpleMath::Vector3>())
+                                throw std::runtime_error("options.position must be a Vector3");
                             config.position =
                                 position.as<DirectX::SimpleMath::Vector3>();
                         }
 
                         if (rotation.valid() &&
                             rotation.get_type() != sol::type::nil) {
+                            if (!rotation.is<DirectX::SimpleMath::Quaternion>())
+                                throw std::runtime_error("options.rotation must be a Quaternion");
                             config.rotation =
                                 rotation.as<DirectX::SimpleMath::Quaternion>();
                         }
 
                         if (scale.valid() &&
                             scale.get_type() != sol::type::nil) {
+                            if (!scale.is<DirectX::SimpleMath::Vector3>())
+                                throw std::runtime_error("options.scale must be a Vector3");
                             config.scale =
                                 scale.as<DirectX::SimpleMath::Vector3>();
                         }
 
                         if (parent.valid() &&
                             parent.get_type() != sol::type::nil) {
+                            if (!parent.is<LuaEntityHandle>())
+                                throw std::runtime_error("options.parent must be an Entity");
                             config.parent = parent.as<LuaEntityHandle>();
 
                             if (!config.parent.IsValid()) {
