@@ -8,5 +8,6 @@ struct ScriptComponent {
     AssetReference script;
     bool enabled = true;
     ScriptPropertyMap properties;
+    bool operator==(const ScriptComponent&) const = default;
 };
 }

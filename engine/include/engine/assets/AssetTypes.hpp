@@ -20,6 +20,7 @@ namespace engine {
 struct Aabb {
     DirectX::SimpleMath::Vector3 min{};
     DirectX::SimpleMath::Vector3 max{};
+    bool operator==(const Aabb&) const = default;
 };
 
 /// Imported mesh-local positions and CCW triangles, retained for physics cooking.

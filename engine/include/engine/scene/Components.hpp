@@ -27,6 +27,7 @@ struct GamePersistence {
     bool transform = false;
     bool controllerState = false;
     bool scriptState = false;
+    bool operator==(const GamePersistence&) const = default;
 };
 
 struct EntityId {

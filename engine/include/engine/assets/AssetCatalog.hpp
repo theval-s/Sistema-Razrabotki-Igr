@@ -16,6 +16,7 @@ namespace engine {
 struct AssetReference {
     AssetUuid id;
     std::string path; // diagnostic hint only; never used as a fallback lookup key
+    bool operator==(const AssetReference&) const = default;
 };
 
 enum class CatalogAssetKind { Mesh, Texture, Shader, Material, MaterialInstance, Scene, Script };

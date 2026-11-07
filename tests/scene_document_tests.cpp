@@ -736,3 +736,87 @@ TEST(Scene, ChangeObserversSeeEveryEditMadeThroughTheScene) {
     scene.CreateEntity("Unseen");
     EXPECT_TRUE(changes.empty());
 }
+
+TEST(SceneDocument, ApplyingDefinitionsRestoresEntitiesInPlace) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    auto& assets = host.GetSceneAssets();
+    const auto lamp = scene.CreateEntity("Lamp");
+    scene.AddTag(lamp, "light");
+    ASSERT_TRUE(scene.SetEditorFolder(lamp, "Props"));
+    scene.AddComponent<engine::PointLight>(lamp, engine::PointLight{{1, 0, 0}, 2.0f, 7.0f});
+    const auto child = scene.CreateEntity("Bulb", lamp);
+    std::vector<engine::SceneEntityDefinition> saved(2);
+    std::string error;
+    ASSERT_TRUE(engine::CaptureEntity(scene, assets, lamp, saved[0], error)) << error;
+    ASSERT_TRUE(engine::CaptureEntity(scene, assets, child, saved[1], error)) << error;
+
+    scene.SetName(lamp, "Renamed");
+    scene.RemoveTag(lamp, "light");
+    scene.AddTag(lamp, "other");
+    scene.SetEditorFolder(lamp, "");
+    scene.SetTransform(lamp, {{5, 0, 0}});
+    scene.RemoveComponent<engine::PointLight>(lamp);
+    scene.AddComponent<engine::SpotLight>(lamp);
+    scene.DestroyEntity(child);
+
+    const auto applied = engine::ApplyEntityDefinitions(saved, assets, scene);
+    ASSERT_EQ(applied.size(), 2u);
+    EXPECT_EQ(applied[0], lamp);  // kept its handle
+    EXPECT_EQ(scene.GetParent(applied[1]), lamp);
+    EXPECT_EQ(scene.GetId(applied[1]), saved[1].id);
+    for (std::size_t i = 0; i < saved.size(); ++i) {
+        engine::SceneEntityDefinition now;
+        ASSERT_TRUE(engine::CaptureEntity(scene, assets, applied[i], now, error)) << error;
+        EXPECT_TRUE(now == saved[i]) << i;
+    }
+
+    // Nothing differs, so nothing is changed.
+    int changes = 0;
+    const auto token = scene.AddChangeObserver([&changes](engine::Scene::ChangeKind, entt::entity) { ++changes; });
+    engine::ApplyEntityDefinitions(saved, assets, scene);
+    EXPECT_EQ(changes, 0);
+    scene.RemoveChangeObserver(token);
+}
+
+TEST(SceneDocument, ApplyingDefinitionsSwapsParentAndChild) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    const auto a = scene.CreateEntity("A");
+    const auto b = scene.CreateEntity("B", a);
+    std::vector<engine::SceneEntityDefinition> saved(2);
+    std::string error;
+    ASSERT_TRUE(engine::CaptureEntity(scene, host.GetSceneAssets(), a, saved[0], error)) << error;
+    ASSERT_TRUE(engine::CaptureEntity(scene, host.GetSceneAssets(), b, saved[1], error)) << error;
+
+    ASSERT_TRUE(scene.SetParent(b, entt::null));
+    ASSERT_TRUE(scene.SetParent(a, b));
+    // B first: setting its parent while A is still under it would be a cycle.
+    const std::vector<engine::SceneEntityDefinition> reversed{saved[1], saved[0]};
+    engine::ApplyEntityDefinitions(reversed, host.GetSceneAssets(), scene);
+    EXPECT_TRUE(scene.GetParent(a) == entt::null);
+    EXPECT_EQ(scene.GetParent(b), a);
+}
+
+TEST(SceneDocument, SceneSettingsFollowTheirEntities) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    const auto sun = scene.CreateEntity("Sun");
+    scene.AddComponent<engine::DirectionalLight>(sun);
+    scene.SetDirectionalLight(sun);
+    scene.SetEditorFolders({"Empty"});
+    const auto saved = engine::CaptureSceneSettings(scene);
+    ASSERT_TRUE(saved.directionalLight.has_value());
+
+    std::vector<engine::SceneEntityDefinition> definitions(1);
+    std::string error;
+    ASSERT_TRUE(engine::CaptureEntity(scene, host.GetSceneAssets(), sun, definitions[0], error)) << error;
+    scene.DestroyEntity(sun);
+    scene.SetEditorFolders({});
+    EXPECT_TRUE(scene.GetDirectionalLight() == entt::null);
+
+    engine::ApplyEntityDefinitions(definitions, host.GetSceneAssets(), scene);
+    engine::ApplySceneSettings(saved, scene);
+    EXPECT_TRUE(engine::CaptureSceneSettings(scene) == saved);
+    EXPECT_EQ(scene.GetId(scene.GetDirectionalLight()), *saved.directionalLight);
+}

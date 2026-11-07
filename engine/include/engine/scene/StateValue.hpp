@@ -29,6 +29,8 @@ struct StateValue {
     StateValue(Array v) : value(std::move(v)) {}
     StateValue(Object v) : value(std::move(v)) {}
 
+    bool operator==(const StateValue&) const = default;
+
     [[nodiscard]] const StateValue* Find(std::string_view key) const {
         const auto* object = std::get_if<Object>(&value);
         if (!object) return nullptr;
