@@ -99,7 +99,7 @@ bool ScriptSubsystem::BeginPlay(const std::filesystem::path& root,
         // OnStart is included in cleanup, using the runtime's existing faulted-instance policy.
         autoloadInstances_.reserve(resolved.size());
         runtime_.Shutdown();
-        if (!runtime_.Initialize(absolute, error)) return false;
+        if (!runtime_.Initialize(absolute, GetEngine(), error)) return false;
         root_ = absolute;
         for (const auto& definition : resolved) {
             InstanceId instance;
@@ -239,7 +239,7 @@ void ScriptSubsystem::ReconcileSceneScripts() {
         }
         record.lifetime = std::make_shared<int>(0);
         ScriptInstanceDesc desc{entry->source, record.asset, scene_->GetId(entity).ToString()};
-        desc.owner = ScriptEntityHandle{scene_, entity, record.lifetime};
+        desc.owner = LuaEntityHandle::FromScriptOwner(*scene_, entity, record.lifetime);
         desc.properties = component.properties;
         std::string error;
         record.created = runtime_.CreateInstance(desc, record.instance, error);

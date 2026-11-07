@@ -99,6 +99,9 @@ public:
     /// Returns a subscription token; remove observers before their captured state dies.
     [[nodiscard]] std::size_t AddLifecycleObserver(LifecycleHandler handler);
     void RemoveLifecycleObserver(std::size_t token);
+    /// Returns a token that expires when this Scene is destroyed.
+    /// Does not extend the lifetime of Scene.
+    [[nodiscard]] std::weak_ptr<void> GetLifetimeToken() const noexcept { return lifetime_;}
 
     // --- Change notifications --------------------------------------------------------
     // Every change made through Scene's API is reported, for editor.
@@ -309,6 +312,8 @@ private:
     std::vector<std::string> editorFolders_;
     std::vector<entt::entity> roots_;
     std::uint64_t revision_ = 0;
+    // Lifetime tracking
+    std::shared_ptr<void> lifetime_ = std::make_shared<int>(0);
 };
 
 }  // namespace engine

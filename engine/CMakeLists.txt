@@ -58,6 +58,10 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/scripting/ScriptProperties.hpp
     include/engine/scripting/AutoloadDefinition.hpp
     include/engine/scripting/ScriptSubsystem.hpp
+    include/engine/scripting/LuaBindings.hpp
+    include/engine/scripting/LuaBindingsContext.hpp
+    include/engine/scripting/LuaEntityHandle.hpp
+    include/engine/scripting/LuaSceneBindings.hpp
 )
 
 set(ENGINE_SOURCES
@@ -93,6 +97,9 @@ set(ENGINE_SOURCES
     src/scripting/LuaRuntime.cpp
     src/scripting/AutoloadDefinition.cpp
     src/scripting/ScriptSubsystem.cpp
+    src/scripting/LuaBindings.cpp
+    src/scripting/LuaEntityHandle.cpp
+    src/scripting/LuaSceneBindings.cpp
 )
 
 set(ENGINE_SHADERS

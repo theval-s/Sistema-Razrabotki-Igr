@@ -5,6 +5,7 @@
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/scripting/ScriptProperties.hpp>
 #include <engine/physics/PhysicsEvents.hpp>
+#include <engine/scripting/LuaEntityHandle.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -19,18 +20,9 @@
 
 namespace engine {
 
+    class Engine;
     class Scene;
     class ScriptSubsystem;
-
-    struct ENGINE_API ScriptEntityHandle {
-        Scene* scene = nullptr;
-        entt::entity entity = entt::null;
-        std::weak_ptr<void> lifetime;
-
-        [[nodiscard]] bool IsValid() const;
-        [[nodiscard]] DirectX::SimpleMath::Vector3 GetPosition() const;
-        void SetPosition(DirectX::SimpleMath::Vector3 position) const;
-    };
 
     /// Transient handle: a HandleMap slot and generation, plus the runtime session it belongs to.
     /// Never serialized.
@@ -72,6 +64,7 @@ namespace engine {
         LuaRuntime& operator=(LuaRuntime&&) = delete;
 
         bool Initialize(std::string& error);
+        bool Initialize(const std::filesystem::path& root, Engine& engine, std::string& error);
 
         /// Pins require to this absolute project content root for the session.
         bool Initialize(const std::filesystem::path& root, std::string& error);

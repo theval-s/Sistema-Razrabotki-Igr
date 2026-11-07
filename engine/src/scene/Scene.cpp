@@ -21,7 +21,10 @@ Scene::Scene() {
     static_cast<void>(registry_.storage<Collider>());
     static_cast<void>(registry_.storage<GamePersistence>());
 }
-Scene::~Scene() { Clear(); }
+Scene::~Scene() { 
+    lifetime_.reset();
+    Clear(); 
+}
 
 // --- Entities -------------------------------------------------------------------
 
