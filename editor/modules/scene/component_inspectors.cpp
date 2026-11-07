@@ -41,6 +41,7 @@
 #include <editor/asset_picker.hpp>
 #include <editor/editor_context.hpp>
 #include <editor/scene_document.hpp>
+#include <editor/scene_history.hpp>
 
 #include "property_form.hpp"
 
@@ -118,7 +119,7 @@ void buildTags(PropertyForm& form, editor::EditorContext& context, const entt::e
     engine::Scene& scene = context.scene();
     auto* edit = new QLineEdit;
     edit->setPlaceholderText(QObject::tr("tag, another tag"));
-    QObject::connect(edit, &QLineEdit::editingFinished, edit, [&scene, entity, edit] {
+    QObject::connect(edit, &QLineEdit::editingFinished, edit, [&context, &scene, entity, edit] {
         if (!scene.IsValid(entity)) {
             return;
         }
@@ -131,14 +132,16 @@ void buildTags(PropertyForm& form, editor::EditorContext& context, const entt::e
         // A copy: removing tags changes what GetTags() points at.
         const auto current = scene.GetTags(entity);
         const std::vector<std::string> had(current.begin(), current.end());
-        for (const std::string& tag : had) {
-            if (std::find(wanted.begin(), wanted.end(), tag) == wanted.end()) {
-                scene.RemoveTag(entity, tag);
+        context.history().edit(QObject::tr("Change Tags"), [&] {
+            for (const std::string& tag : had) {
+                if (std::find(wanted.begin(), wanted.end(), tag) == wanted.end()) {
+                    scene.RemoveTag(entity, tag);
+                }
             }
-        }
-        for (const std::string& tag : wanted) {
-            scene.AddTag(entity, tag);  // ignores ones it has
-        }
+            for (const std::string& tag : wanted) {
+                scene.AddTag(entity, tag);  // ignores ones it has
+            }
+        });
     });
     form.addRow(QObject::tr("Tags"), edit, [&scene, entity, edit] {
         if (edit->hasFocus() || !scene.IsValid(entity)) {
@@ -180,21 +183,23 @@ void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt
 
     // Only the user's choices get here: refresh picks quietly.
     QObject::connect(picker, &QComboBox::currentIndexChanged, picker,
-                     [&scene, &engine, entity, picker, kind, reference, handle, request] {
+                     [&context, &scene, &engine, entity, label, picker, kind, reference, handle, request] {
                          const auto* renderer = std::as_const(scene).TryGetComponent<engine::MeshRenderer>(entity);
                          const std::optional<engine::AssetReference> chosen = picker->reference();
                          if (renderer == nullptr || !chosen || chosen->id == (renderer->*reference).id) {
                              return;
                          }
-                         // Asynchronous, like adding the component: the entity isn't drawn until it's loaded.
-                         const auto loaded = (engine.GetSceneAssets().*request)(*chosen);
-                         scene.Modify<engine::MeshRenderer>(entity, [&](engine::MeshRenderer& changed) {
-                             changed.*handle = loaded;
-                             changed.*reference = *chosen;
+                         context.history().edit(QObject::tr("Change %1").arg(label), [&] {
+                             // Asynchronous, like adding the component: the entity isn't drawn until it's loaded.
+                             const auto loaded = (engine.GetSceneAssets().*request)(*chosen);
+                             scene.Modify<engine::MeshRenderer>(entity, [&](engine::MeshRenderer& changed) {
+                                 changed.*handle = loaded;
+                                 changed.*reference = *chosen;
+                             });
+                             if (kind == engine::CatalogAssetKind::MaterialInstance) {
+                                 engine.ClearEntityMaterialOverride(entity);
+                             }
                          });
-                         if (kind == engine::CatalogAssetKind::MaterialInstance) {
-                             engine.ClearEntityMaterialOverride(entity);
-                         }
                      });
 
     // What the picker last showed, so it's only touched when the slot changes elsewhere.
@@ -281,16 +286,20 @@ void buildRigidBody(PropertyForm& form, editor::EditorContext& context, const en
     motion->addItem(QObject::tr("Dynamic"), static_cast<int>(engine::MotionType::Dynamic));
     motion->addItem(QObject::tr("Kinematic"), static_cast<int>(engine::MotionType::Kinematic));
     motion->setToolTip(QObject::tr("Dynamic bodies need no parent. Moving mesh bodies always use a convex hull."));
-    QObject::connect(motion, &QComboBox::activated, motion, [&scene, entity, motion](int index) {
+    QObject::connect(motion, &QComboBox::activated, motion, [&context, &scene, entity, motion](int index) {
         const auto* body = std::as_const(scene).TryGetComponent<engine::RigidBody>(entity);
         if (!body) return;
         const auto type = static_cast<engine::MotionType>(motion->itemData(index).toInt());
         if (type == engine::MotionType::Dynamic && scene.GetParent(entity) != entt::null) return;
         const auto* collider = std::as_const(scene).TryGetComponent<engine::Collider>(entity);
-        if (type != engine::MotionType::Static && collider && collider->shape == engine::ColliderShape::TriangleMesh)
-            scene.Modify<engine::Collider>(entity, [](engine::Collider& changed) { changed.shape = engine::ColliderShape::ConvexMesh; });
-        if (body->motionType != type)
-            scene.Modify<engine::RigidBody>(entity, [type](engine::RigidBody& changed) { changed.motionType = type; });
+        const bool convex = type != engine::MotionType::Static && collider && collider->shape == engine::ColliderShape::TriangleMesh;
+        const bool changed = body->motionType != type;
+        context.history().edit(QObject::tr("Change Motion type"), [&] {
+            if (convex)
+                scene.Modify<engine::Collider>(entity, [](engine::Collider& edited) { edited.shape = engine::ColliderShape::ConvexMesh; });
+            if (changed)
+                scene.Modify<engine::RigidBody>(entity, [type](engine::RigidBody& edited) { edited.motionType = type; });
+        });
     });
     form.addRow(QObject::tr("Motion type"), motion, [&scene, entity, motion] {
         const auto* body = scene.TryGetComponent<engine::RigidBody>(entity);
@@ -314,7 +323,9 @@ void buildCollider(PropertyForm& form, editor::EditorContext& context, const ent
     using Shape = engine::ColliderShape;
     auto& scene = context.scene();
     const auto component = [&scene, entity] { return std::as_const(scene).TryGetComponent<engine::Collider>(entity); };
-    const auto modify = [&scene, entity](auto&& edit) { scene.Modify<engine::Collider>(entity, edit); };
+    const auto modify = [&context, entity](const QString& text, auto&& edit) {
+        context.history().edit(text, [&] { context.scene().Modify<engine::Collider>(entity, edit); });
+    };
     const auto mesh = [&context, &scene, entity] {
         const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity);
         return renderer ? context.engine().GetSceneAssets().Peek(renderer->mesh) : entt::resource<engine::MeshAsset>{};
@@ -334,7 +345,7 @@ void buildCollider(PropertyForm& form, editor::EditorContext& context, const ent
             if (!scene.HasComponent<engine::MeshRenderer>(entity)) return;
             if (body->motionType == engine::MotionType::Static && collider->shape != Shape::ConvexMesh) chosen = Shape::TriangleMesh;
         }
-        modify([chosen](engine::Collider& changed) { changed.shape = chosen; });
+        modify(QObject::tr("Change Shape"), [chosen](engine::Collider& changed) { changed.shape = chosen; });
     });
     form.addRow(QObject::tr("Shape"), shape, [&scene, entity, component, shape] {
         const auto* collider = component();
@@ -360,7 +371,8 @@ void buildCollider(PropertyForm& form, editor::EditorContext& context, const ent
         const auto* body = std::as_const(scene).TryGetComponent<engine::RigidBody>(entity);
         if (!collider || !body || collider->shape < Shape::ConvexMesh) return;
         if (!checked && body->motionType != engine::MotionType::Static) return;
-        modify([checked](engine::Collider& changed) { changed.shape = checked ? Shape::ConvexMesh : Shape::TriangleMesh; });
+        modify(QObject::tr("Change Convex"),
+               [checked](engine::Collider& changed) { changed.shape = checked ? Shape::ConvexMesh : Shape::TriangleMesh; });
     });
     form.addRow(convexPanel, [&scene, entity, component, convex, convexPanel] {
         const auto* collider = component();
@@ -404,7 +416,7 @@ void buildCollider(PropertyForm& form, editor::EditorContext& context, const ent
     QObject::connect(fit, &QPushButton::clicked, fit, [modify, mesh] {
         const auto asset = mesh();
         if (!asset) return;
-        modify([&asset](engine::Collider& collider) {
+        modify(QObject::tr("Fit Collider to Mesh"), [&asset](engine::Collider& collider) {
             const Vector3 half = (asset->bounds.max - asset->bounds.min) * 0.5f;
             collider.center = (asset->bounds.min + asset->bounds.max) * 0.5f;
             collider.halfExtents = Vector3::Max(half, Vector3(0.001f));
@@ -418,7 +430,7 @@ void buildCollider(PropertyForm& form, editor::EditorContext& context, const ent
         const auto asset = mesh();
         if (!body || !asset || !asset->geometry) return;
         const bool moving = body->motionType != engine::MotionType::Static;
-        modify([moving](engine::Collider& collider) {
+        modify(QObject::tr("Collider from Mesh"), [moving](engine::Collider& collider) {
             collider.shape = moving || collider.shape == Shape::ConvexMesh ? Shape::ConvexMesh : Shape::TriangleMesh;
             collider.center = {};
         });
@@ -456,18 +468,25 @@ void addScriptProperty(QFormLayout& layout, editor::EditorContext& context, cons
     line->setContentsMargins(0, 0, 0, 0);
     auto* reset = new QPushButton(QObject::tr("Reset"));
     reset->setEnabled(overridden);
-    QObject::connect(reset, &QPushButton::clicked, reset, [&scene, entity, name, invalidate] {
-        scene.Modify<engine::ScriptComponent>(entity, [&name](engine::ScriptComponent& component) {
-            component.properties.erase(name);
+    const QString label = QString::fromStdString(name);
+    QObject::connect(reset, &QPushButton::clicked, reset, [&context, &scene, entity, name, label, invalidate] {
+        context.history().edit(QObject::tr("Reset %1").arg(label), [&] {
+            scene.Modify<engine::ScriptComponent>(entity, [&name](engine::ScriptComponent& component) {
+                component.properties.erase(name);
+            });
         });
         invalidate();
     });
-    const auto store = [&scene, entity, name, reset](engine::StateValue changed) {
-        if (scene.Modify<engine::ScriptComponent>(entity, [&](engine::ScriptComponent& component) {
+    // Text applies on each key: those merge into one step.
+    const QString key = QString::fromStdString("script/" + scene.GetId(entity).ToString() + "/" + name);
+    const auto store = [&context, &scene, entity, name, label, key, reset](engine::StateValue changed) {
+        bool stored = false;
+        context.history().edit(QObject::tr("Change %1").arg(label), [&] {
+            stored = scene.Modify<engine::ScriptComponent>(entity, [&](engine::ScriptComponent& component) {
                 component.properties[name] = std::move(changed);
-            })) {
-            reset->setEnabled(true);
-        }
+            });
+        }, key);
+        if (stored) reset->setEnabled(true);
     };
 
     if (value == nullptr) {
@@ -589,7 +608,7 @@ void buildScript(PropertyForm& form, editor::EditorContext& context, entt::entit
     form.addBool(QObject::tr("Enabled"), field(scene, entity, &engine::ScriptComponent::enabled));
     auto* picker = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Script, QObject::tr("None"));
     picker->setMinimumContentsLength(12);  // as in addAssetSlot: a wider row widens every component's form
-    QObject::connect(picker, &QComboBox::currentIndexChanged, picker, [&scene, entity, picker](const int index) {
+    QObject::connect(picker, &QComboBox::currentIndexChanged, picker, [&context, &scene, entity, picker](const int index) {
         const auto* component = std::as_const(scene).TryGetComponent<engine::ScriptComponent>(entity);
         // -1 means nothing is chosen
         if (component == nullptr || index < 0) {
@@ -600,9 +619,11 @@ void buildScript(PropertyForm& form, editor::EditorContext& context, entt::entit
         if (chosen.id == component->script.id) {
             return;
         }
-        scene.Modify<engine::ScriptComponent>(entity, [&chosen](engine::ScriptComponent& changed) {
-            changed.script = chosen;
-            changed.properties.clear();
+        context.history().edit(QObject::tr("Change Script"), [&] {
+            scene.Modify<engine::ScriptComponent>(entity, [&chosen](engine::ScriptComponent& changed) {
+                changed.script = chosen;
+                changed.properties.clear();
+            });
         });
     });
     form.addRow(QObject::tr("Script"), picker, [&scene, entity, picker] {

@@ -29,6 +29,7 @@ struct Camera {
     float fovY = 1.04719755f;  // 60 degrees
     float nearPlane = 0.1f;
     float farPlane = 100.0f;
+    bool operator==(const Camera&) const = default;
 };
 
 /// Sun-like light shining along the entity's local -Z (Vector3::Forward); its position
@@ -36,6 +37,7 @@ struct Camera {
 struct DirectionalLight {
     DirectX::SimpleMath::Vector3 color{1.0f, 1.0f, 1.0f};
     float intensity = 1.0f;
+    bool operator==(const DirectionalLight&) const = default;
 };
 
 /// Omnidirectional light centered at the entity's world position.
@@ -43,6 +45,7 @@ struct PointLight {
     DirectX::SimpleMath::Vector3 color{1.0f, 1.0f, 1.0f};
     float intensity = 1.0f;
     float range = 5.0f;
+    bool operator==(const PointLight&) const = default;
 };
 
 /// Cone of light centered at the entity's world position, pointing along its
@@ -53,6 +56,7 @@ struct SpotLight {
     float range = 10.0f;
     float innerHalfAngle = 0.2617994f;
     float outerHalfAngle = 0.44879895f;
+    bool operator==(const SpotLight&) const = default;
 };
 
 /// Asset names of the primitives shipped in engine/primitives (copied next to the executable).

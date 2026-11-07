@@ -6,7 +6,10 @@
 #include <engine/engine_export.hpp>
 
 namespace engine {
-struct Bounds { Aabb local; };
+struct Bounds {
+    Aabb local;
+    bool operator==(const Bounds&) const = default;
+};
 struct RayHit { entt::entity entity; float distance; };
 class Scene;
 class AssetSystem;

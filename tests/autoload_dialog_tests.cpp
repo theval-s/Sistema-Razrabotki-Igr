@@ -1,6 +1,7 @@
 #include "autoload_dialog.hpp"
 #include <editor/scene_document.hpp>
 #include <editor/scene_events.hpp>
+#include <editor/scene_history.hpp>
 #include <editor/selection.hpp>
 #include <editor/lua_definitions.hpp>
 
@@ -201,7 +202,8 @@ TEST(EditorPlayDocument, RuntimeChangesDoNotOverwriteOriginalDirtyStateOrSceneFi
     engine::Project project;
     editor::SceneEvents events(engine.GetScene());
     editor::Selection selection(engine.GetScene(), events);
-    editor::SceneDocument document(engine, project, selection, events);
+    editor::SceneHistory history(engine, selection, events);
+    editor::SceneDocument document(engine, project, selection, history);
     document.markClean();
     document.beginRuntime();
     engine.GetScene().CreateEntity("Runtime spawn");
@@ -211,7 +213,7 @@ TEST(EditorPlayDocument, RuntimeChangesDoNotOverwriteOriginalDirtyStateOrSceneFi
     EXPECT_FALSE(std::filesystem::exists("must-not-write.scene.json"));
     document.endRuntime();
     EXPECT_FALSE(document.isDirty());
-    document.markDirty();
+    engine.GetScene().CreateEntity("Edited outside the history");
     document.beginRuntime();
     engine.GetScene().Clear();
     document.endRuntime();

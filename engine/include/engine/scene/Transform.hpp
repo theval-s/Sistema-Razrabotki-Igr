@@ -15,6 +15,8 @@ struct Transform {
         return Matrix::CreateScale(scale) * Matrix::CreateFromQuaternion(rotation) *
                Matrix::CreateTranslation(position);
     }
+
+    bool operator==(const Transform&) const = default;
 };
 
 }  // namespace engine

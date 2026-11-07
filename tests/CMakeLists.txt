@@ -47,6 +47,17 @@ if(SRI_BUILD_EDITOR)
     )
     add_test(NAME transform_gizmo_tests COMMAND transform_gizmo_tests)
 
+    add_executable(scene_history_tests scene_history_tests.cpp)
+    target_link_libraries(scene_history_tests PRIVATE editor_core Engine::Engine GTest::gtest_main Qt6::Widgets)
+    set_project_warnings(scene_history_tests)
+    set_target_properties(scene_history_tests PROPERTIES FOLDER tests)
+    add_custom_command(TARGET scene_history_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:scene_history_tests> $<TARGET_FILE_DIR:scene_history_tests>
+        COMMAND_EXPAND_LISTS VERBATIM
+    )
+    add_test(NAME scene_history_tests COMMAND scene_history_tests)
+
     add_executable(log_model_tests
         log_model_tests.cpp
         ../editor/src/log_model.cpp

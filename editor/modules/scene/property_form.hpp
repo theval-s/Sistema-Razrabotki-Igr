@@ -31,7 +31,12 @@ public:
         double maximum = 1.0e6;
     };
 
+    /// Runs each edit a field makes, e.g. as an undoable step. Nested forms use their outer form's.
+    using Recorder = std::function<void(const QString& label, const std::function<void()>& change)>;
+
     explicit PropertyForm(QWidget* parent = nullptr);
+
+    void setRecorder(Recorder recorder) { recorder_ = std::move(recorder); }
 
     void addFloat(const QString& label, Binding<float> value, NumberFormat format = {});
     /// Stored in radians, edited in degrees: `format` is in degrees.
@@ -65,7 +70,14 @@ private:
     /// ignoreWheelUnlessFocused() for `widget` and its children that are number fields or combo boxes.
     static void guardWheels(QWidget* widget);
     void addScaledFloat(const QString& label, Binding<float> value, NumberFormat format, double scale);
+    /// `set` going through the recorder.
+    template <class T>
+    std::function<void(const T&)> recorded(const QString& label, std::function<void(const T&)> set) {
+        return [this, label, set = std::move(set)](const T& value) { record(label, [&] { set(value); }); };
+    }
+    void record(const QString& label, const std::function<void()>& change) const;
 
     QFormLayout* layout_;
     std::vector<std::function<void()>> refreshers_;
+    Recorder recorder_;
 };

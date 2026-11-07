@@ -18,7 +18,7 @@
 #include <engine/scene/SceneDocument.hpp>
 
 #include <editor/paths.hpp>
-#include <editor/scene_events.hpp>
+#include <editor/scene_history.hpp>
 #include <editor/selection.hpp>
 
 namespace editor {
@@ -83,10 +83,9 @@ engine::SceneDocument defaultScene(const engine::AssetCatalog& catalog) {
 }  // namespace
 
 SceneDocument::SceneDocument(engine::Engine& engine, const engine::Project& project, Selection& selection,
-                             SceneEvents& events, QObject* parent)
-    : QObject(parent), engine_(engine), project_(project), selection_(selection), events_(events),
-      clean_revision_(events.revision()) {
-    connect(&events_, &SceneEvents::changed, this, &SceneDocument::checkState);
+                             SceneHistory& history, QObject* parent)
+    : QObject(parent), engine_(engine), project_(project), selection_(selection), history_(history) {
+    connect(&history_, &SceneHistory::cleanChanged, this, &SceneDocument::checkState);
 }
 
 const std::filesystem::path& SceneDocument::filePath() const noexcept {
@@ -104,14 +103,9 @@ QString SceneDocument::displayName() const {
     return name;
 }
 
-bool SceneDocument::isDirty() const noexcept {
+bool SceneDocument::isDirty() const {
     if (runtime_) return runtime_dirty_;
-    return marked_dirty_ || events_.revision() != clean_revision_;
-}
-
-void SceneDocument::markDirty() {
-    marked_dirty_ = true;
-    checkState();
+    return !history_.isClean();
 }
 
 void SceneDocument::markClean() {
@@ -121,13 +115,13 @@ void SceneDocument::markClean() {
 
 void SceneDocument::beginRuntime() {
     runtime_dirty_ = isDirty();
+    history_.setEnabled(false);
     runtime_ = true;
 }
 
 void SceneDocument::endRuntime() {
     runtime_ = false;
-    clean_revision_ = events_.revision();
-    marked_dirty_ = runtime_dirty_;
+    history_.setEnabled(true);
     checkState();
 }
 
@@ -151,6 +145,7 @@ bool SceneDocument::open(const std::filesystem::path& file, std::string& error) 
         editorLog().warn("Opened {} with problems:\n{}", engine::ToUtf8(file), diagnostics);
     }
     selection_.clear();
+    history_.clear();
     setClean(file);
     emit opened();
     error.clear();
@@ -292,8 +287,7 @@ bool SceneDocument::createInteractive(QWidget* parent, const std::filesystem::pa
 
 void SceneDocument::setClean(const std::filesystem::path& file) {
     file_ = file;
-    clean_revision_ = events_.revision();
-    marked_dirty_ = false;
+    history_.setClean();
     checkState();
 }
 

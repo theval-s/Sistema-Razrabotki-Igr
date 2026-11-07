@@ -18,6 +18,7 @@ struct ControllerDefinition {
     int version = 1;
     bool enabled = true;
     StateValue data; // authored JSON-compatible value, retained if unavailable
+    bool operator==(const ControllerDefinition&) const = default;
 };
 
 class Controller {

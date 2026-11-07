@@ -34,6 +34,7 @@ class EditorCameraSubsystem;
 class PlaySession;
 class SceneDocument;
 class SceneEvents;
+class SceneHistory;
 
 /// What the editor hands to its modules: the engine, the project, the scene being edited, the
 /// selection and the places a module may add UI to. Owned by MainWindow; outlives every module and is
@@ -59,6 +60,8 @@ public:
     [[nodiscard]] SceneEvents& sceneEvents() noexcept;
     /// What the user has selected in the scene. Panels follow and change it through here.
     [[nodiscard]] Selection& selection() noexcept;
+    /// Undo/redo: make every edit to the scene through it, so it can be undone.
+    [[nodiscard]] SceneHistory& history() noexcept;
     /// The scene file being edited: open, create and save scenes through it.
     [[nodiscard]] SceneDocument& sceneDocument() noexcept;
     /// Play mode: start and stop it, or follow it, through here.
@@ -102,6 +105,7 @@ private:
     std::vector<Panel> panels_;
     std::unique_ptr<SceneEvents> scene_events_;  // before everything that follows the scene
     Selection selection_;
+    std::unique_ptr<SceneHistory> history_;
     std::unique_ptr<SceneDocument> scene_document_;
     std::unique_ptr<PlaySession> play_session_;
     std::unique_ptr<EditActions> edit_actions_;

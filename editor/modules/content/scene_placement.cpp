@@ -15,6 +15,7 @@
 #include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
 #include <editor/paths.hpp>
+#include <editor/scene_history.hpp>
 #include <editor/selection.hpp>
 
 #include "asset_operations.hpp"
@@ -87,6 +88,7 @@ int addToScene(editor::EditorContext& context, const QStringList& paths) {
     const Vector3 right = camera != nullptr ? camera->GetRight() : Vector3::Right;
     engine::Scene& scene = context.scene();
     std::vector<entt::entity> added;
+    context.history().begin(meshes.size() == 1 ? QObject::tr("Place Mesh") : QObject::tr("Place Meshes"));
     for (std::size_t i = 0; i < meshes.size(); ++i) {
         const engine::CatalogEntry& mesh = *meshes[i];
         const engine::CatalogEntry* material = materialFor(catalog, mesh);
@@ -108,6 +110,7 @@ int addToScene(editor::EditorContext& context, const QStringList& paths) {
         added.push_back(entity);
     }
     context.selection().setEntities(added);
+    context.history().end();
     return static_cast<int>(added.size());
 }
 

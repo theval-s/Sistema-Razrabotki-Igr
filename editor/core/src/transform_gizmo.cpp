@@ -8,6 +8,7 @@
 #include <engine/rendering/DebugDraw.hpp>
 #include <engine/scene/Scene.hpp>
 
+#include <editor/scene_history.hpp>
 #include <editor/selection.hpp>
 
 namespace editor {
@@ -119,8 +120,8 @@ bool facesViewer(const Vector3& point, const Vector3& pivot, const Vector3& toCa
 
 }  // namespace
 
-TransformGizmo::TransformGizmo(engine::Scene& scene, const Selection& selection)
-    : scene_(scene), selection_(selection) {}
+TransformGizmo::TransformGizmo(engine::Scene& scene, const Selection& selection, SceneHistory* history)
+    : scene_(scene), selection_(selection), history_(history) {}
 
 void TransformGizmo::setMode(const Mode mode) {
     release();
@@ -363,6 +364,10 @@ bool TransformGizmo::press(const ViewportView& view, const Vector2 cursor) {
     if (started.targets.empty()) return false;
     hovered_ = started.handle;
     drag_ = std::move(started);
+    if (history_ != nullptr) {
+        history_->begin(mode_ == Mode::Translate ? QObject::tr("Move") : mode_ == Mode::Rotate ? QObject::tr("Rotate")
+                                                                                              : QObject::tr("Scale"));
+    }
     return true;
 }
 
@@ -433,7 +438,9 @@ void TransformGizmo::drag(const ViewportView& view, const Vector2 cursor) {
 }
 
 void TransformGizmo::release() {
+    if (!drag_) return;
     drag_.reset();
+    if (history_ != nullptr) history_->end();
 }
 
 void TransformGizmo::cancel() {
@@ -442,6 +449,7 @@ void TransformGizmo::cancel() {
         if (scene_.IsValid(target.entity)) scene_.SetTransform(target.entity, target.local);
     }
     drag_.reset();
+    if (history_ != nullptr) history_->cancel();
 }
 
 }  // namespace editor

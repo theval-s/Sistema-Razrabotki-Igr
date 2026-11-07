@@ -33,6 +33,7 @@ struct SceneEntityDefinition {
     struct Mesh {
         AssetReference mesh;
         AssetReference materialInstance;
+        bool operator==(const Mesh&) const = default;
     };
     std::optional<Mesh> renderer;
     std::optional<Camera> camera;
@@ -45,6 +46,15 @@ struct SceneEntityDefinition {
     std::optional<Collider> collider;
     std::optional<GamePersistence> persistence;
     std::optional<ScriptComponent> script;
+    bool operator==(const SceneEntityDefinition&) const = default;
+};
+
+// The scene-level part of a SceneDocument.
+struct SceneSettings {
+    std::optional<EntityUuid> activeCamera;
+    std::optional<EntityUuid> directionalLight;
+    std::vector<std::string> editorFolders;
+    bool operator==(const SceneSettings&) const = default;
 };
 
 struct SceneDocument {
@@ -74,6 +84,16 @@ ENGINE_API void PopulateScene(const SceneDocument& document, AssetSystem& assets
 [[nodiscard]] ENGINE_API bool CaptureEntities(const Scene& scene, const AssetSystem& assets,
                                               std::span<const entt::entity> entities,
                                               std::vector<SceneEntityDefinition>& result, std::string& error);
+// One entity without its children or codec-less components; fails for a renderer without file-backed assets.
+[[nodiscard]] ENGINE_API bool CaptureEntity(const Scene& scene, const AssetSystem& assets, entt::entity entity,
+                                            SceneEntityDefinition& result, std::string& error);
+// Makes the entities they name (by UUID) match them in place, creating missing ones; returns them in order.
+ENGINE_API std::vector<entt::entity> ApplyEntityDefinitions(std::span<const SceneEntityDefinition> definitions,
+                                                            AssetSystem& assets, Scene& scene);
+[[nodiscard]] ENGINE_API SceneSettings CaptureSceneSettings(const Scene& scene);
+// Only what differs is changed. References to missing entities are cleared.
+ENGINE_API void ApplySceneSettings(const SceneSettings& settings, Scene& scene);
+
 // Creates entities from CaptureEntities() in a live scene. With `freshIds` each one gets a new
 // UUID and parents inside the set follow along; otherwise the UUIDs are kept, and an entity
 // whose UUID is already in use is skipped. A parent outside the set is looked up in

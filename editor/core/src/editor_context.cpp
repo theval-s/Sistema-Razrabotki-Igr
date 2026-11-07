@@ -21,6 +21,7 @@
 #include <editor/play_session.hpp>
 #include <editor/scene_document.hpp>
 #include <editor/scene_events.hpp>
+#include <editor/scene_history.hpp>
 
 namespace editor {
 
@@ -47,9 +48,10 @@ EditorContext::EditorContext(engine::Engine& engine, engine::Project& project, Q
                              ads::CDockManager& dock_manager)
     : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager),
       scene_events_(std::make_unique<SceneEvents>(engine.GetScene())), selection_(engine.GetScene(), *scene_events_),
-      scene_document_(std::make_unique<SceneDocument>(engine, project, selection_, *scene_events_)),
+      history_(std::make_unique<SceneHistory>(engine, selection_, *scene_events_)),
+      scene_document_(std::make_unique<SceneDocument>(engine, project, selection_, *history_)),
       play_session_(std::make_unique<PlaySession>(engine, project, selection_, *scene_document_)),
-      edit_actions_(std::make_unique<EditActions>(engine, selection_, *play_session_)) {}
+      edit_actions_(std::make_unique<EditActions>(engine, selection_, *history_, *play_session_)) {}
 
 EditorContext::~EditorContext() {
     // Panels would otherwise die with the dock manager, after the engine they show.
@@ -86,6 +88,10 @@ SceneEvents& EditorContext::sceneEvents() noexcept {
 
 Selection& EditorContext::selection() noexcept {
     return selection_;
+}
+
+SceneHistory& EditorContext::history() noexcept {
+    return *history_;
 }
 
 SceneDocument& EditorContext::sceneDocument() noexcept {

@@ -17,6 +17,7 @@ add_library(editor_core SHARED
     src/play_session.cpp
     src/scene_document.cpp
     src/scene_events.cpp
+    src/scene_history.cpp
     src/selection.cpp
     src/transform_gizmo.cpp
     src/viewport_view.cpp
@@ -34,6 +35,7 @@ add_library(editor_core SHARED
     include/editor/play_session.hpp
     include/editor/scene_document.hpp
     include/editor/scene_events.hpp
+    include/editor/scene_history.hpp
     include/editor/selection.hpp
     include/editor/transform_gizmo.hpp
     include/editor/viewport_view.hpp
