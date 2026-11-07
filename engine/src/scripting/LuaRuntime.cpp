@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cmath>
 #include <cwchar>
+#include <deque>
 #include <exception>
 #include <limits>
 #include <memory>
@@ -22,24 +23,23 @@
 #include <utility>
 #include <vector>
 
+#include <engine/scripting/LuaBindings.hpp>
+#include <engine/scripting/LuaGameplayBindings.hpp>
+#include <engine/scripting/LuaSaveGameBindings.hpp>
+#include <engine/scripting/LuaEntityHandle.hpp>
+#include <engine/scripting/LuaSceneBindings.hpp>
+#include <engine/scripting/LuaStateValue.hpp>
+#include <engine/engine.hpp>
+
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/HandleMap.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/scene/Scene.hpp>
 
 namespace engine {
-    bool ScriptEntityHandle::IsValid() const {
-        return !lifetime.expired() && scene && scene->IsValid(entity);
-    }
-    DirectX::SimpleMath::Vector3 ScriptEntityHandle::GetPosition() const {
-        if (!IsValid()) throw std::runtime_error("Entity handle is no longer valid");
-        return scene->GetTransform(entity).position;
-    }
-    void ScriptEntityHandle::SetPosition(DirectX::SimpleMath::Vector3 position) const {
-        if (!IsValid()) throw std::runtime_error("Entity handle is no longer valid");
-        if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z))
-            throw std::runtime_error("Position must be finite");
-        scene->GetTransform(entity).position = position;
+
+    Scene* LuaBindingsContext::GetScene() const noexcept {
+        return engine ? &engine->GetScene() : nullptr;
     }
 
     namespace {
@@ -63,7 +63,8 @@ namespace engine {
         std::string Describe(const Context& context) {
             if constexpr (std::is_invocable_v<const Context&>) {
                 return std::string(context());
-            } else {
+            }
+            else {
                 return std::string(context);
             }
         }
@@ -89,19 +90,21 @@ namespace engine {
 
         template <typename Context, typename... Args>
         bool ProtectedCall(const sol::protected_function& callback, std::string& error,
-                           const Context& context, Args&&... args) {
+            const Context& context, Args&&... args) {
             try {
                 sol::protected_function_result result = callback(std::forward<Args>(args)...);
                 return CheckResult(result, error, context);
-            } catch (const std::exception& exception) {
+            }
+            catch (const std::exception& exception) {
                 return SetError(error, Describe(context) + ": " + exception.what());
-            } catch (...) {
+            }
+            catch (...) {
                 return SetError(error, Describe(context) + ": unknown C++ callback exception");
             }
         }
 
         std::uint64_t AllocateSession() {
-            static std::atomic<std::uint64_t> next{1};
+            static std::atomic<std::uint64_t> next{ 1 };
             auto token = next.load(std::memory_order_relaxed);
             while (token != std::numeric_limits<std::uint64_t>::max()) {
                 if (next.compare_exchange_weak(token, token + 1, std::memory_order_relaxed)) return token;
@@ -152,13 +155,16 @@ namespace engine {
             ScriptInstanceDesc desc;
             sol::environment environment;
             sol::table table;
-            std::optional<sol::protected_function> start, update, destroy;
+            std::optional<sol::protected_function> start, update, fixedUpdate, destroy, save, load;
+            int saveVersion = 1;
+            bool active = false;
             std::array<std::optional<sol::protected_function>, physicsCallbackNames.size()> physicsCallbacks;
             bool started = false;
             bool environmentCallbacks = false;
             bool faulted = false;
             bool destroying = false;
             std::string failure;
+
 
             std::string Context() const {
                 const std::string owner = desc.autoloadName.empty()
@@ -172,18 +178,21 @@ namespace engine {
                 return SetError(error, failure);
             }
             bool Invoke(const std::optional<sol::protected_function>& callback,
-                        std::string_view name, std::string& error, std::optional<double> delta = {}) {
+                std::string_view name, std::string& error, std::optional<double> delta = {}) {
                 if (faulted) return SetError(error, failure, false);
                 if (!callback) {
                     error.clear();
                     return true;
                 }
+                if (active) return SetError(error, "Reentrant script receiver", false);
+                active = true;
+                struct ActiveScope { bool& active; ~ActiveScope() { active = false; } } activeScope{active};
                 const auto context = [this, name] { return Context() + " [callback=" + std::string(name) + "]"; };
                 const bool clean = environmentCallbacks
                     ? (delta ? ProtectedCall(*callback, error, context, *delta)
-                             : ProtectedCall(*callback, error, context))
+                        : ProtectedCall(*callback, error, context))
                     : (delta ? ProtectedCall(*callback, error, context, table, *delta)
-                             : ProtectedCall(*callback, error, context, table));
+                        : ProtectedCall(*callback, error, context, table));
                 if (!clean) {
                     faulted = true;
                     failure = error;
@@ -207,8 +216,49 @@ namespace engine {
         std::unordered_map<std::string, Module> modules;
         std::vector<std::string> loadingModules;
         std::filesystem::path moduleRoot;
+        LuaBindingsContext bindingsContext;
+        std::deque<std::function<void()>> deferredSceneCommands;
         std::uint64_t session = 0;
         bool shuttingDown = false;
+        unsigned callbackDepth = 0;
+        bool flushingSceneCommands = false;
+        std::unordered_map<Scene*, std::weak_ptr<void>> callbackScenes;
+
+        struct Scope {
+            Impl& runtime;
+            std::vector<Scene*> scenes;
+            explicit Scope(Impl& runtime, Scene* owner = nullptr) : runtime(runtime) {
+                ++runtime.callbackDepth;
+                for (const auto& [scene, lifetime] : runtime.callbackScenes)
+                    if (!lifetime.expired()) scenes.push_back(scene);
+                if (auto* scene = runtime.bindingsContext.GetScene(); scene &&
+                    std::find(scenes.begin(), scenes.end(), scene) == scenes.end()) scenes.push_back(scene);
+                if (owner && std::find(scenes.begin(), scenes.end(), owner) == scenes.end()) scenes.push_back(owner);
+                for (auto* scene : scenes) {
+                    runtime.callbackScenes[scene] = scene->GetLifetimeToken();
+                    scene->BeginExternalCallback();
+                }
+            }
+            ~Scope() {
+                for (auto* scene : scenes) scene->EndExternalCallback();
+                --runtime.callbackDepth;
+            }
+        };
+
+        Instance* FindOwner(const LuaEntityHandle& entity) {
+            if (!entity.IsValid() || shuttingDown) return nullptr;
+            const auto* attachment = entity.GetScene()->TryGetComponent<ScriptComponent>(entity.Resolve());
+            if (!attachment || !attachment->enabled) return nullptr;
+            for (auto handle : instances.Handles()) {
+                auto* record = instances.Get(handle).get();
+                if (record->desc.owner && record->desc.owner->IsValid() &&
+                    record->desc.owner->GetScene() == entity.GetScene() &&
+                    record->desc.owner->Resolve() == entity.Resolve() &&
+                    record->desc.assetId == attachment->script.id &&
+                    record->started && !record->faulted && !record->destroying) return record;
+            }
+            return nullptr;
+        }
 
         [[nodiscard]] InstanceId Id(const Instances::Handle handle) const {
             InstanceId id;
@@ -254,7 +304,7 @@ namespace engine {
                 std::filesystem::path sourcePath;
                 auto file = moduleRoot / relative;
                 file += ".lua";
-                for (const auto& candidate : {file, moduleRoot / relative / "init.lua"}) {
+                for (const auto& candidate : { file, moduleRoot / relative / "init.lua" }) {
                     const auto canonical = std::filesystem::weakly_canonical(candidate);
                     if (!IsUnderRoot(canonical, moduleRoot)) {
                         error = "require path escapes project content root: " + ToUtf8(candidate);
@@ -276,7 +326,7 @@ namespace engine {
                 struct LoadingScope {
                     std::vector<std::string>& stack;
                     ~LoadingScope() { stack.pop_back(); }
-                } loadingScope{loadingModules};
+                } loadingScope{ loadingModules };
 
                 sol::environment environment(*state, sol::create, state->globals());
                 environment["_G"] = environment;
@@ -296,13 +346,15 @@ namespace engine {
                 }
                 value = result.return_count() == 0 || result.get_type() == sol::type::nil
                     ? sol::make_object(*state, true) : result.get<sol::object>();
-                modules.emplace(key, Module{value, std::move(environment)});
+                modules.emplace(key, Module{ value, std::move(environment) });
                 error.clear();
                 return true;
-            } catch (const std::exception& exception) {
+            }
+            catch (const std::exception& exception) {
                 error = "require '" + std::string(name) + "': " + exception.what();
                 return false;
-            } catch (...) {
+            }
+            catch (...) {
                 error = "require: unknown module loading error";
                 return false;
             }
@@ -341,6 +393,23 @@ namespace engine {
         return Initialize({}, error);
     }
 
+    bool LuaRuntime::Initialize(const std::filesystem::path& root, Engine& engine, std::string& error) {
+        // An active runtime must not silently switch the Engine it is bound to.
+        if (IsInitialized())
+            return Initialize(root, error);
+
+        impl_->bindingsContext.engine = &engine;
+
+        if (!Initialize(root, error)) {
+            impl_->bindingsContext.engine = nullptr;
+            impl_->bindingsContext.enqueueSceneCommand = {};
+            impl_->deferredSceneCommands.clear();
+            return false;
+        }
+
+        return true;
+    }
+
     bool LuaRuntime::Initialize(const std::filesystem::path& root, std::string& error) {
         std::filesystem::path canonicalRoot;
         try {
@@ -357,7 +426,8 @@ namespace engine {
                 error.clear();
                 return true;
             }
-        } catch (const std::exception& exception) {
+        }
+        catch (const std::exception& exception) {
             return SetError(error, exception.what());
         }
         try {
@@ -383,16 +453,36 @@ namespace engine {
             using Vector3 = DirectX::SimpleMath::Vector3;
             impl_->state->new_usertype<Vector3>("Vector3", sol::constructors<Vector3(), Vector3(float, float, float)>(),
                 "x", &Vector3::x, "y", &Vector3::y, "z", &Vector3::z);
-            impl_->state->new_usertype<ScriptEntityHandle>("Entity", sol::no_constructor,
-                "IsValid", &ScriptEntityHandle::IsValid, "GetPosition", &ScriptEntityHandle::GetPosition,
-                "SetPosition", &ScriptEntityHandle::SetPosition);
             sol::table scene = impl_->state->create_named_table("Scene");
             scene.set_function("OpenLevel", [runtime = impl_.get()](const std::string& name) {
                 std::string error;
                 const bool ok = runtime->levelLoader && runtime->levelLoader(name, error);
                 if (!runtime->levelLoader) error = "Scene.OpenLevel is unavailable outside a game session";
                 return std::make_tuple(ok, error);
+                });
+
+            // Register Entity and the rest of the scene-facing Lua API. The Scene
+            // table must exist first because RegisterSceneBindings() extends it.
+            impl_->bindingsContext.enqueueSceneCommand = [this](std::function<void()> command) {
+                if (!command) return;
+                if (auto* scene = impl_->bindingsContext.GetScene()) {
+                    impl_->callbackScenes[scene] = scene->GetLifetimeToken();
+                    scene->EnqueueExternalCommand(std::move(command));
+                } else {
+                    // Engine-less hosts have no current Scene queue to own this command.
+                    impl_->deferredSceneCommands.push_back(std::move(command));
+                }
+            };
+            RegisterLuaBindings(*impl_->state, impl_->bindingsContext);
+            RegisterGameplayBindings(*impl_->state, impl_->bindingsContext);
+            RegisterSaveGameBindings(*impl_->state, impl_->bindingsContext);
+            sol::table entity = (*impl_->state)["Entity"];
+            entity.set_function("HasScript", [this](const LuaEntityHandle& handle) { return HasScript(handle); });
+            entity.set_function("HasScriptMethod", [this](const LuaEntityHandle& handle, const std::string& name) {
+                return HasScriptMethod(handle, name);
             });
+            entity.set_function("CallScript", [this](const LuaEntityHandle& handle, const std::string& name,
+                sol::variadic_args args, sol::this_state state) { return CallScript(handle, name, args, state); });
 
             // Do not open package: no native searchers, loadlib, or mutable search paths.
             const sol::object loader = sol::make_object(*impl_->state,
@@ -400,10 +490,10 @@ namespace engine {
                     sol::object value = sol::make_object(*runtime->state, sol::nil);
                     std::string failure;
                     if (name.get_type() != sol::type::string) {
-                        return {std::move(value), "require expects a string module name"};
+                        return { std::move(value), "require expects a string module name" };
                     }
                     (void)runtime->Require(name.as<std::string>(), value, failure);
-                    return {std::move(value), std::move(failure)};
+                    return { std::move(value), std::move(failure) };
                 });
             // Raise from Lua, after all C++ loader locals have unwound normally.
             sol::load_result wrapper = impl_->state->load(R"(
@@ -444,8 +534,16 @@ namespace engine {
     }
 
     void LuaRuntime::Shutdown() noexcept {
-        if (!impl_->state || impl_->shuttingDown) return;
+        if (!impl_) return;
+        if (!impl_->state) {
+            impl_->deferredSceneCommands.clear();
+            impl_->bindingsContext.engine = nullptr;
+            impl_->bindingsContext.enqueueSceneCommand = {};
+            return;
+        }
+        if (impl_->shuttingDown) return;
         impl_->shuttingDown = true;
+        DiscardSceneCommands();
         // Destroy callbacks run while the state and the instance's table are still alive. Newest
         // first; CreateInstance refuses while shutting down, so this sees every instance.
         const auto handles = impl_->instances.Handles();
@@ -453,16 +551,21 @@ namespace engine {
             try {
                 std::string error;
                 (void)DestroyInstance(impl_->Id(*it), error);
-            } catch (...) {
+            }
+            catch (...) {
                 // Shutdown must release every Lua reference even if diagnostics fail.
                 impl_->instances.Remove(*it);
             }
         }
         impl_->instances = {};  // All callbacks, tables and environments die before state.
+        DiscardSceneCommands();
         impl_->modules.clear();
         impl_->autoloads = sol::table{};
         impl_->loadingModules.clear();
         impl_->moduleRoot.clear();
+        impl_->deferredSceneCommands.clear();
+        impl_->bindingsContext.engine = nullptr;
+        impl_->bindingsContext.enqueueSceneCommand = {};
         impl_->session = 0;
         impl_->state.reset();
         impl_->shuttingDown = false;
@@ -474,6 +577,192 @@ namespace engine {
         impl_->levelLoader = std::move(loader);
     }
 
+    void LuaRuntime::FlushSceneCommands() {
+        if (impl_->callbackDepth || impl_->flushingSceneCommands || impl_->shuttingDown) return;
+        impl_->flushingSceneCommands = true;
+        struct Reset { bool& flag; ~Reset() { flag = false; } } reset{impl_->flushingSceneCommands};
+        // Scene-bound commands share Scene's FIFO with native destruction/removal.
+        // Only engine-less commands use the fallback runtime queue.
+        do {
+            while (!impl_->deferredSceneCommands.empty()) {
+                auto command = std::move(impl_->deferredSceneCommands.front());
+                impl_->deferredSceneCommands.pop_front();
+                command();
+            }
+            const auto scenes = impl_->callbackScenes;
+            for (const auto& [scene, lifetime] : scenes)
+                if (!lifetime.expired()) scene->FlushExternalCommands();
+        } while (!impl_->deferredSceneCommands.empty());
+    }
+
+    void LuaRuntime::DiscardSceneCommands() noexcept {
+        impl_->deferredSceneCommands.clear();
+        for (const auto& [scene, lifetime] : impl_->callbackScenes)
+            if (!lifetime.expired()) scene->DiscardExternalCommands();
+        impl_->callbackScenes.clear();
+    }
+
+    namespace {
+        bool ReservedMethod(std::string_view name) {
+            if (name.empty() || name == "OnStart" || name == "OnUpdate" || name == "OnFixedUpdate" ||
+                name == "OnDestroy" || name == "OnSaveGame" || name == "OnLoadGame" || name == "SaveVersion") return true;
+            return std::find(physicsCallbackNames.begin(), physicsCallbackNames.end(), name) != physicsCallbackNames.end();
+        }
+    }
+
+    bool LuaRuntime::HasScript(const LuaEntityHandle& entity) const {
+        return IsInitialized() && impl_->FindOwner(entity) != nullptr;
+    }
+
+    bool LuaRuntime::HasScriptMethod(const LuaEntityHandle& entity, const std::string& method) const {
+        if (!IsInitialized() || ReservedMethod(method)) return false;
+        auto* record = impl_->FindOwner(entity);
+        if (!record || record->active) return false;
+        Impl::Scope scope(*impl_, entity.GetScene());
+        record->active = true;
+        struct Reset { bool& flag; ~Reset() { flag = false; } } reset{record->active};
+        try {
+            const sol::object value = record->environmentCallbacks
+                ? record->table.raw_get<sol::object>(method) : record->table.get<sol::object>(method);
+            return value.get_type() == sol::type::function;
+        } catch (...) { return false; }
+    }
+
+    sol::variadic_results LuaRuntime::CallScript(const LuaEntityHandle& entity, const std::string& method,
+        sol::variadic_args args, sol::this_state state) {
+        sol::state_view lua(state);
+        const auto failure = [&](const std::string& message) {
+            sol::variadic_results values;
+            values.push_back(sol::make_object(lua, false));
+            values.push_back(sol::make_object(lua, message));
+            return values;
+        };
+        if (!IsInitialized() || ReservedMethod(method)) return failure("Invalid or reserved script method");
+        auto* record = impl_->FindOwner(entity);
+        if (!record) return failure("Invalid, unstarted, faulted or destroying script receiver");
+        if (record->active) return failure("Reentrant script receiver");
+        Impl::Scope scope(*impl_, entity.GetScene());
+        record->active = true;
+        struct Reset { bool& flag; ~Reset() { flag = false; } } reset{record->active};
+        try {
+            sol::object object = record->environmentCallbacks
+                ? record->table.raw_get<sol::object>(method) : record->table.get<sol::object>(method);
+            if (object.get_type() != sol::type::function) return failure("Script method not found: " + method);
+            sol::protected_function callback = object.as<sol::protected_function>();
+            sol::protected_function_result result = record->environmentCallbacks ? callback(args) : callback(record->table, args);
+            std::string error;
+            if (!CheckResult(result, error, record->Context() + " [method=" + method + "]")) {
+                record->faulted = true;
+                record->failure = error;
+                return failure(error);
+            }
+            sol::variadic_results values;
+            values.push_back(sol::make_object(lua, true));
+            for (int i = 0; i < result.return_count(); ++i) values.push_back(result.get<sol::object>(i));
+            return values;
+        } catch (const std::exception& exception) {
+            record->faulted = true;
+            SetError(record->failure, record->Context() + " [method=" + method + "]: " + exception.what());
+            return failure(record->failure);
+        } catch (...) {
+            record->faulted = true;
+            SetError(record->failure, record->Context() + " [method=" + method + "]: unknown callback exception");
+            return failure(record->failure);
+        }
+    }
+
+    bool LuaRuntime::HasPersistenceHooks(InstanceId instance) const {
+        if (!IsInitialized() || instance.session_ != impl_->session) return false;
+        auto* record = impl_->Find(instance);
+        return record && record->save && record->load;
+    }
+
+    bool LuaRuntime::ValidateSaveVersion(InstanceId instance, int savedVersion, std::string& error) const {
+        if (!HasPersistenceHooks(instance)) return SetError(error, "Script persistence hooks are unavailable", false);
+        const auto* record = impl_->Find(instance);
+        if (record->faulted || record->destroying) return SetError(error, "Script persistence receiver is faulted/destroying", false);
+        if (savedVersion < 1 || savedVersion > record->saveVersion)
+            return SetError(error, "Saved script version must be between 1 and the current SaveVersion", false);
+        error.clear();
+        return true;
+    }
+
+    bool LuaRuntime::ValidateAssetSaveVersion(AssetUuid asset, int version, std::string& error) const {
+        if (IsInitialized()) {
+            for (const auto handle : impl_->instances.Handles()) {
+                const auto& record = impl_->instances.Get(handle);
+                if (record->desc.assetId == asset && !ValidateSaveVersion(impl_->Id(handle), version, error))
+                    return false;
+            }
+        }
+        error.clear();
+        return true;
+    }
+
+    bool LuaRuntime::CaptureSaveState(InstanceId instance, int& version, StateValue& data, std::string& error) {
+        if (!HasPersistenceHooks(instance)) return SetError(error, "Script persistence hooks are unavailable", false);
+        auto* record = impl_->Find(instance);
+        if (record->faulted || record->destroying) return SetError(error, "Script persistence receiver is faulted/destroying", false);
+        if (record->active) return SetError(error, "Reentrant script persistence hook", false);
+        Impl::Scope scope(*impl_, record->desc.owner ? record->desc.owner->GetScene() : nullptr);
+        record->active = true;
+        struct Reset { bool& flag; ~Reset() { flag = false; } } reset{record->active};
+        try {
+            sol::protected_function_result result = record->environmentCallbacks ? (*record->save)() : (*record->save)(record->table);
+            if (!CheckResult(result, error, record->Context() + " [callback=OnSaveGame]")) return false;
+            if (result.return_count() != 1 || result.get_type() != sol::type::table)
+                return SetError(error, "OnSaveGame must return exactly one table", false);
+            StateValue captured;
+            if (!LuaToStateValue(result.get<sol::object>(), captured, error)) return false;
+            version = record->saveVersion;
+            data = std::move(captured);
+            error.clear();
+            return true;
+        } catch (const std::exception& exception) { return SetError(error, record->Context() + ": " + exception.what(), false); }
+        catch (...) { return SetError(error, "Unknown OnSaveGame exception", false); }
+    }
+
+    bool LuaRuntime::RestoreSaveState(InstanceId instance, int savedVersion, const StateValue& data, std::string& error) {
+        if (!ValidateSaveVersion(instance, savedVersion, error)) return false;
+        auto* record = impl_->Find(instance);
+        if (record->active) return SetError(error, "Reentrant script persistence hook", false);
+        if (!std::holds_alternative<StateValue::Object>(data.value) && !std::holds_alternative<StateValue::Array>(data.value))
+            return SetError(error, "Saved script state must be a table", false);
+        Impl::Scope scope(*impl_, record->desc.owner ? record->desc.owner->GetScene() : nullptr);
+        record->active = true;
+        struct Reset { bool& flag; ~Reset() { flag = false; } } reset{record->active};
+        try {
+            sol::object object = StateValueToLua(*impl_->state, data);
+            const auto context = record->Context() + " [callback=OnLoadGame]";
+            return record->environmentCallbacks ? ProtectedCall(*record->load, error, context, object, savedVersion)
+                : ProtectedCall(*record->load, error, context, record->table, object, savedVersion);
+        } catch (const std::exception& exception) { return SetError(error, record->Context() + ": " + exception.what(), false); }
+        catch (...) { return SetError(error, "Unknown OnLoadGame exception", false); }
+    }
+
+    bool LuaRuntime::FixedUpdateInstance(InstanceId instance, double deltaSeconds, std::string& error) {
+        if (!IsInitialized() || instance.session_ != impl_->session || impl_->shuttingDown)
+            return SetError(error, "Invalid or stale script session", false);
+        auto* record = impl_->Find(instance);
+        if (!record || !record->started || record->destroying) return SetError(error, "Invalid fixed-update receiver", false);
+        if (!std::isfinite(deltaSeconds) || deltaSeconds < 0) return SetError(error, "Invalid script time step", false);
+        Impl::Scope scope(*impl_, record->desc.owner ? record->desc.owner->GetScene() : nullptr);
+        return record->Invoke(record->fixedUpdate, "OnFixedUpdate", error, deltaSeconds);
+    }
+
+    bool LuaRuntime::FixedUpdateInstances(double deltaSeconds, std::string& error) {
+        const auto handles = impl_->instances.Handles();
+        std::string firstError;
+        for (auto handle : handles) {
+            auto* record = impl_->Find(impl_->Id(handle));
+            if (!record || !record->started || record->faulted || record->destroying) continue;
+            std::string failure;
+            if (!FixedUpdateInstance(impl_->Id(handle), deltaSeconds, failure) && firstError.empty()) firstError = std::move(failure);
+        }
+        error = std::move(firstError);
+        return error.empty();
+    }
+
     bool LuaRuntime::IsInitialized() const noexcept {
         return impl_ && static_cast<bool>(impl_->state);
     }
@@ -483,6 +772,7 @@ namespace engine {
             SetError(error, "Lua Runtime is not initialized");
             return false;
         }
+        Impl::Scope scope(*impl_, desc.owner ? desc.owner->GetScene() : nullptr);
         auto record = std::make_unique<Impl::Instance>();
         record->desc = desc;
         if (!desc.assetId.IsValid() || !desc.source.is_absolute()) {
@@ -523,9 +813,11 @@ namespace engine {
             if (result.return_count() == 0) {
                 record->environmentCallbacks = true;
                 record->table = record->environment;
-            } else if (result.return_count() == 1 && result.get_type() == sol::type::table) {
+            }
+            else if (result.return_count() == 1 && result.get_type() == sol::type::table) {
                 record->table = result.get<sol::table>();
-            } else {
+            }
+            else {
                 return record->Fail(error, "script must return nothing (top-level format) or one instance table");
             }
             if (!defaults.empty() || !desc.properties.empty()) {
@@ -546,8 +838,10 @@ namespace engine {
                 record->table["Properties"] = properties;
             }
             for (const auto& [name, callback] : {
-                std::pair{"OnStart", &record->start}, std::pair{"OnUpdate", &record->update},
-                std::pair{"OnDestroy", &record->destroy}}) {
+                std::pair{ "OnStart", &record->start }, std::pair{ "OnUpdate", &record->update },
+                std::pair{ "OnFixedUpdate", &record->fixedUpdate },
+                std::pair{ "OnSaveGame", &record->save }, std::pair{ "OnLoadGame", &record->load },
+                std::pair{ "OnDestroy", &record->destroy } }) {
                 sol::object value = record->environmentCallbacks
                     ? record->table.raw_get<sol::object>(name) : record->table.get<sol::object>(name);
                 if (value.get_type() == sol::type::nil) continue;
@@ -565,17 +859,30 @@ namespace engine {
                     return record->Fail(error, std::string(name) + " must be a function or nil");
                 record->physicsCallbacks[i] = value.as<sol::protected_function>();
             }
+            if (record->save.has_value() != record->load.has_value())
+                return record->Fail(error, "OnSaveGame and OnLoadGame must be provided together");
+            sol::object version = record->environmentCallbacks
+                ? record->table.raw_get<sol::object>("SaveVersion") : record->table.get<sol::object>("SaveVersion");
+            if (version.get_type() != sol::type::nil) {
+                if (version.get_type() != sol::type::number) return record->Fail(error, "SaveVersion must be a positive integer");
+                const double number = version.as<double>();
+                if (!std::isfinite(number) || number < 1 || number > std::numeric_limits<int>::max() || std::floor(number) != number)
+                    return record->Fail(error, "SaveVersion must be a positive integer");
+                record->saveVersion = static_cast<int>(number);
+            }
             // Publish the actual instance before OnStart, retaining its private locals/closures.
             if (!desc.autoloadName.empty()) impl_->autoloads.raw_set(desc.autoloadName, record->table);
             try {
                 instance = impl_->Id(impl_->instances.Add(std::move(record)));
-            } catch (...) {
+            }
+            catch (...) {
                 if (!desc.autoloadName.empty()) impl_->autoloads.raw_set(desc.autoloadName, sol::nil);
                 throw;
             }
             error.clear();
             return true;
-        } catch (const std::exception& exception) {
+        }
+        catch (const std::exception& exception) {
             return record->Fail(error, exception.what());
         }
     }
@@ -589,6 +896,7 @@ namespace engine {
             return SetError(error, "Invalid or stale script instance", false);
         }
         auto& record = *found;
+        Impl::Scope scope(*impl_, record.desc.owner ? record.desc.owner->GetScene() : nullptr);
         if (record.faulted) return SetError(error, record.failure, false);
         if (record.destroying) return SetError(error, "Cannot start a destroying instance", false);
         if (record.started) {
@@ -603,6 +911,7 @@ namespace engine {
         error.clear();
         if (!IsInitialized() || instance.session_ != impl_->session || impl_->shuttingDown) return true;
         auto* record = impl_->Find(instance);
+        Impl::Scope scope(*impl_, record && record->desc.owner ? record->desc.owner->GetScene() : nullptr);
         if (!record || !record->started || record->faulted || record->destroying ||
             !record->desc.owner || !record->desc.owner->IsValid()) return true;
         constexpr auto sleep = static_cast<std::size_t>(PhysicsContactKind::TriggerStay) + 1;
@@ -611,25 +920,37 @@ namespace engine {
     }
 
     bool LuaRuntime::NotifyPhysicsContact(InstanceId instance, const PhysicsContactEvent& event,
-                                          entt::entity other, std::string& error) {
+        entt::entity other, std::string& error) {
         error.clear();
         if (!IsInitialized() || instance.session_ != impl_->session || impl_->shuttingDown) return true;
         auto* record = impl_->Find(instance);
+        Impl::Scope scope(*impl_, record && record->desc.owner ? record->desc.owner->GetScene() : nullptr);
         if (!record || !record->started || record->faulted || record->destroying || !record->desc.owner) return true;
         const auto index = static_cast<std::size_t>(event.kind);
         if (index > static_cast<std::size_t>(PhysicsContactKind::TriggerStay) || !record->physicsCallbacks[index]) return true;
         const auto& owner = *record->desc.owner;
-        if (!owner.IsValid()) return true;
+        Scene* ownerScene = owner.GetScene();
+        if (!ownerScene) return true;
+        const entt::entity ownerEntity = owner.Resolve();
+
         sol::object otherEntity = sol::make_object(*impl_->state, sol::nil);
-        if (owner.scene->IsValid(other))
-            otherEntity = sol::make_object(*impl_->state, ScriptEntityHandle{owner.scene, other, owner.lifetime});
+        if (ownerScene->IsValid(other)) {
+            otherEntity = sol::make_object(
+                *impl_->state,
+                LuaEntityHandle::FromScene(*ownerScene, other)
+            );
+        }
+
         sol::table contact = impl_->state->create_table();
         contact["point"] = event.point;
-        contact["normal"] = owner.entity == event.first ? -event.normal : event.normal;
+        contact["normal"] = ownerEntity == event.first ? -event.normal : event.normal;
         contact["stepIndex"] = event.stepIndex;
         contact["otherId"] = entt::to_integral(other);
         const auto context = [&] { return record->Context() + " [callback=" + physicsCallbackNames[index] + "]"; };
         const auto& callback = *record->physicsCallbacks[index];
+        if (record->active) return SetError(error, "Reentrant script receiver", false);
+        record->active = true;
+        struct ActiveScope { bool& active; ~ActiveScope() { active = false; } } activeScope{record->active};
         const bool clean = record->environmentCallbacks
             ? ProtectedCall(callback, error, context, otherEntity, contact)
             : ProtectedCall(callback, error, context, record->table, otherEntity, contact);
@@ -641,6 +962,7 @@ namespace engine {
     }
 
     bool LuaRuntime::UpdateInstance(InstanceId instance, double deltaSeconds, std::string& error) {
+        Impl::Scope scope(*impl_);
         if (!IsInitialized() || instance.session_ != impl_->session || impl_->shuttingDown) {
             return SetError(error, "Invalid or stale script session", false);
         }
@@ -649,6 +971,7 @@ namespace engine {
             return SetError(error, "Invalid or stale script instance", false);
         }
         auto& record = *found;
+        Impl::Scope ownerScope(*impl_, record.desc.owner ? record.desc.owner->GetScene() : nullptr);
         if (record.faulted) return SetError(error, record.failure, false);
         if (!record.started || record.destroying) {
             return SetError(error, "Cannot update an unstarted/destroying instance", false);
@@ -671,6 +994,8 @@ namespace engine {
             return true;
         }
         auto& record = *found;
+        if (record.active) return SetError(error, "Cannot destroy an active script instance", false);
+        Impl::Scope scope(*impl_, record.desc.owner ? record.desc.owner->GetScene() : nullptr);
         record.destroying = true;
         const bool clean = !record.started || record.faulted || record.Invoke(record.destroy, "OnDestroy", error);
         if (!record.desc.autoloadName.empty()) impl_->autoloads.raw_set(record.desc.autoloadName, sol::nil);
@@ -692,7 +1017,8 @@ namespace engine {
                 try {
                     std::string error;
                     (void)DestroyInstance(impl_->Id(handle), error);
-                } catch (...) {
+                }
+                catch (...) {
                     // Keep cleanup progressing even if diagnostic allocation fails.
                     impl_->instances.Remove(handle);
                 }
@@ -711,7 +1037,7 @@ namespace engine {
         std::erase_if(updating, [this](const Impl::Instances::Handle handle) {
             const auto& record = impl_->instances.Get(handle);
             return !record->started || record->faulted || record->destroying;
-        });
+            });
         std::string firstError;
         for (const auto handle : updating) {
             std::string failure;
@@ -733,6 +1059,7 @@ namespace engine {
             return false;
         }
 
+        Impl::Scope scope(*impl_);
         try {
             sol::load_result loaded = impl_->state->load(
                 std::string(source),
@@ -767,7 +1094,8 @@ namespace engine {
                 return SetError(error, message);
             }
             return ExecuteString(source, "@" + ToUtf8(path), error);
-        } catch (const std::exception& exception) {
+        }
+        catch (const std::exception& exception) {
             return SetError(error, "ExecuteFile " + ToUtf8(path) + ": " + exception.what());
         }
     }
@@ -781,6 +1109,7 @@ namespace engine {
             return false;
         }
 
+        Impl::Scope scope(*impl_);
         try {
             sol::object object = impl_->state->get<sol::object>(std::string(functionName));
             if (object.get_type() != sol::type::function) {
@@ -788,7 +1117,8 @@ namespace engine {
             }
             const sol::protected_function function = object.as<sol::protected_function>();
             return ProtectedCall(function, error, functionName);
-        } catch (const std::exception& exception) {
+        }
+        catch (const std::exception& exception) {
             return SetError(error, std::string(functionName) + ": " + exception.what());
         }
     }
@@ -802,6 +1132,7 @@ namespace engine {
             return false;
         }
 
+        Impl::Scope scope(*impl_);
         try {
             sol::object object = impl_->state->get<sol::object>("Update");
             if (object.get_type() != sol::type::function) {
@@ -810,7 +1141,8 @@ namespace engine {
             }
             const sol::protected_function update = object.as<sol::protected_function>();
             return ProtectedCall(update, error, "Update", deltaSeconds);
-        } catch (const std::exception& exception) {
+        }
+        catch (const std::exception& exception) {
             return SetError(error, std::string("Update: ") + exception.what());
         }
     }

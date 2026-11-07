@@ -64,6 +64,15 @@ public:
     /// Controllers attached during UpdateControllers first update on the next call.
     void DestroyEntity(entt::entity entity);
     void Clear();
+    /// External callbacks nest. End never flushes: the caller must release all
+    /// callback results/instance references before explicitly flushing.
+    void BeginExternalCallback() noexcept { ++externalCallbackDepth_; externalCommandsPending_ = true; }
+    void EndExternalCallback() noexcept { if (externalCallbackDepth_) --externalCallbackDepth_; }
+    /// Appends to the same FIFO as native deferred mutations. Never executes
+    /// immediately; commands appended by teardown callbacks run after older ones.
+    void EnqueueExternalCommand(std::function<void()> command);
+    void FlushExternalCommands();
+    void DiscardExternalCommands() noexcept;
 
     [[nodiscard]] bool IsValid(entt::entity entity) const;
     /// Returns the default (zero) UUID for an invalid entity; check IsValid(entity)
@@ -99,6 +108,9 @@ public:
     /// Returns a subscription token; remove observers before their captured state dies.
     [[nodiscard]] std::size_t AddLifecycleObserver(LifecycleHandler handler);
     void RemoveLifecycleObserver(std::size_t token);
+    /// Returns a token that expires when this Scene is destroyed.
+    /// Does not extend the lifetime of Scene.
+    [[nodiscard]] std::weak_ptr<void> GetLifetimeToken() const noexcept { return lifetime_;}
 
     // --- Change notifications --------------------------------------------------------
     // Every change made through Scene's API is reported, for editor.
@@ -167,6 +179,10 @@ public:
     bool RemoveComponent(entt::entity entity) {
         static_assert(!IsRequiredComponent<T>, "required components are managed by Scene");
         if (!IsValid(entity) || !registry_.all_of<T>(entity)) return false;
+        if (externalCallbackDepth_ != 0) {
+            EnqueueExternalCommand([this, entity] { RemoveComponent<T>(entity); });
+            return true;
+        }
         NotifyLifecycle(LifecycleEvent::ComponentRemoving, entity, entt::type_hash<T>::value());
         registry_.remove<T>(entity);
         if constexpr (!IsSerializableComponent<T>) {
@@ -279,11 +295,12 @@ private:
     };
 
     struct Command {
-        enum class Kind { DestroyEntity, Clear, AttachController, RemoveController, SetControllerEnabled, SetControllersActive };
+        enum class Kind { DestroyEntity, Clear, AttachController, RemoveController, SetControllerEnabled, SetControllersActive, External };
         Kind kind;
         entt::entity entity = entt::null;
         ControllerDefinition definition;
         bool active = false;
+        std::function<void()> external;
     };
 
     entt::registry registry_;
@@ -296,6 +313,8 @@ private:
     // flushes at its safe point. Commands appended while flushing run last.
     std::deque<Command> commands_;
     bool flushingCommands_ = false;
+    std::size_t externalCallbackDepth_ = 0;
+    bool externalCommandsPending_ = false;
     std::unordered_map<std::size_t, LifecycleHandler> lifecycleObservers_;
     std::size_t nextLifecycleObserver_ = 0;
     std::unordered_map<std::size_t, ChangeHandler> changeObservers_;
@@ -309,6 +328,8 @@ private:
     std::vector<std::string> editorFolders_;
     std::vector<entt::entity> roots_;
     std::uint64_t revision_ = 0;
+    // Lifetime tracking
+    std::shared_ptr<void> lifetime_ = std::make_shared<int>(0);
 };
 
 }  // namespace engine

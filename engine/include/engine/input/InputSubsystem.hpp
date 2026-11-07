@@ -63,6 +63,7 @@ public:
         [[nodiscard]] bool Released(std::string_view action) const;
         [[nodiscard]] float Axis1D(std::string_view axis) const;
         [[nodiscard]] DirectX::SimpleMath::Vector2 Axis2D(std::string_view axis) const;
+        [[nodiscard]] DirectX::SimpleMath::Vector2 MousePosition() const;
         [[nodiscard]] DirectX::SimpleMath::Vector2 MouseDelta() const;
         [[nodiscard]] float WheelDelta() const;
     private:
@@ -91,6 +92,9 @@ public:
     void OnMouseButton(MouseButton button, bool down);
     /// Relative movement in pixels since the previous call (+x right, +y down).
     void OnMouseMove(float dx, float dy);
+    /// Absolute client/viewport position in render-surface pixels (+x right, +y down).
+    /// Hosts feed this only while focused; it does not contribute to relative motion.
+    void OnMousePosition(float x, float y);
     /// In wheel notches, positive away from the user.
     void OnMouseWheel(float notches);
     /// Releases every key and button, e.g. when the window loses focus and would
@@ -103,6 +107,8 @@ public:
     }
 
     // --- Readers: state of the current frame ------------------------------------
+    /// Last absolute position, retained across frames; zero after reset/focus loss.
+    [[nodiscard]] DirectX::SimpleMath::Vector2 GetMousePosition() const { return current_.mousePosition; }
     [[nodiscard]] bool IsDown(Key key) const { return current_.keysDown.test(Index(key)); }
     /// Went down since the previous frame (also true for a tap that already went up).
     [[nodiscard]] bool WasPressed(Key key) const { return current_.keysPressed.test(Index(key)); }
@@ -122,6 +128,7 @@ private:
         std::bitset<PhysicalKeyCount> physicalDown, physicalPressed, physicalReleased;
         std::bitset<MouseButtonCount> buttonsDown, buttonsPressed, buttonsReleased;
         DirectX::SimpleMath::Vector2 mouseDelta{};
+        DirectX::SimpleMath::Vector2 mousePosition{};
         float wheelDelta = 0.0f;
     };
 

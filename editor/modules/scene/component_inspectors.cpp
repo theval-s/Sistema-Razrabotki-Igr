@@ -442,6 +442,8 @@ void buildGamePersistence(PropertyForm& form, editor::EditorContext& context, co
     form.addBool(QObject::tr("Save transform"), field(scene, entity, &engine::GamePersistence::transform));
     form.addBool(QObject::tr("Save controller state"),
                  field(scene, entity, &engine::GamePersistence::controllerState));
+    form.addBool(QObject::tr("Save script state"),
+                 field(scene, entity, &engine::GamePersistence::scriptState));
 }
 
 /// One row of a Script's Properties

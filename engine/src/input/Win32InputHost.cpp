@@ -74,7 +74,14 @@ void Win32InputHost::Update(const FrameContext&) {
         DispatchMessageW(&message);
     }
 
-    if (!IsWindow(window_) || GetForegroundWindow() != window_) return;
+    if (!IsWindow(window_) || GetForegroundWindow() != window_) {
+        // Focus notifications can be sent directly to the window procedure rather
+        // than queued. The polling path must also invalidate stale mouse input.
+        input_->OnFocusLost();
+        SetRelativeMouseMode(false);
+        hasCursorPosition_ = false;
+        return;
+    }
     if (relativeMouse_) {
         RECT client{};
         GetClientRect(window_, &client);
@@ -82,12 +89,18 @@ void Win32InputHost::Update(const FrameContext&) {
         ClientToScreen(window_, &center);
         POINT cursor{};
         if (GetCursorPos(&cursor)) {
+            POINT position = cursor;
+            if (ScreenToClient(window_, &position))
+                input_->OnMousePosition(static_cast<float>(position.x), static_cast<float>(position.y));
             input_->OnMouseMove(static_cast<float>(cursor.x - center.x), static_cast<float>(cursor.y - center.y));
             SetCursorPos(center.x, center.y);
         }
     } else {
         POINT cursor{};
         if (GetCursorPos(&cursor)) {
+            POINT position = cursor;
+            if (ScreenToClient(window_, &position))
+                input_->OnMousePosition(static_cast<float>(position.x), static_cast<float>(position.y));
             if (hasCursorPosition_)
                 input_->OnMouseMove(static_cast<float>(cursor.x - lastCursor_.x),
                                     static_cast<float>(cursor.y - lastCursor_.y));

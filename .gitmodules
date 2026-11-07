@@ -1,6 +1,7 @@
 [submodule "external/vcpkg"]
 	path = external/vcpkg
 	url = https://github.com/microsoft/vcpkg
+	shallow = false
 [submodule "external/Qt-Advanced-Docking-System"]
 	path = external/Qt-Advanced-Docking-System
 	url = https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System

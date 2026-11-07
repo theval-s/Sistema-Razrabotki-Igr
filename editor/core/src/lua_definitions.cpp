@@ -24,10 +24,48 @@ function Log.warning(message) end
 ---@param message string
 function Log.error(message) end
 
+---@class Vector2
+---@field x number
+---@field y number
+---@operator add(Vector2): Vector2
+---@operator sub(Vector2): Vector2
+---@operator unm: Vector2
+---@operator mul(number): Vector2
+---@operator div(number): Vector2
+Vector2 = {}
+---@overload fun(): Vector2
+---@param x number
+---@param y number
+---@return Vector2
+function Vector2.new(x, y) end
+---@return number
+function Vector2:Length() end
+---@return number
+function Vector2:LengthSquared() end
+---Returns a normalized copy; rejects zero/nonfinite values. Does not mutate self.
+---@return Vector2
+function Vector2:Normalize() end
+---@return Vector2
+function Vector2:Normalized() end
+---@param other Vector2
+---@return number
+function Vector2:Dot(other) end
+---@param other Vector2
+---@param t number
+---@return Vector2
+function Vector2:Lerp(other, t) end
+
+---Vectors support equality, addition, subtraction, unary minus, scalar multiplication
+---in either order, and division by a finite nonzero scalar.
 ---@class Vector3
 ---@field x number
 ---@field y number
 ---@field z number
+---@operator add(Vector3): Vector3
+---@operator sub(Vector3): Vector3
+---@operator unm: Vector3
+---@operator mul(number): Vector3
+---@operator div(number): Vector3
 Vector3 = {}
 ---@overload fun(): Vector3
 ---@param x number
@@ -35,17 +73,235 @@ Vector3 = {}
 ---@param z number
 ---@return Vector3
 function Vector3.new(x, y, z) end
+---@return number
+function Vector3:Length() end
+---@return number
+function Vector3:LengthSquared() end
+---Returns a normalized copy; rejects zero/nonfinite values. Does not mutate self.
+---@return Vector3
+function Vector3:Normalize() end
+---@return Vector3
+function Vector3:Normalized() end
+---@param other Vector3
+---@return number
+function Vector3:Dot(other) end
+---@param other Vector3
+---@return Vector3
+function Vector3:Cross(other) end
+---@param other Vector3
+---@param t number
+---@return Vector3
+function Vector3:Lerp(other, t) end
 
----@class Entity
+---@class Quaternion
+---@field x number
+---@field y number
+---@field z number
+---@field w number
+---@operator mul(Quaternion): Quaternion
+---@operator mul(Vector3): Vector3
+Quaternion = {}
+---@overload fun(): Quaternion
+---@param x number
+---@param y number
+---@param z number
+---@param w number
+---@return Quaternion
+function Quaternion.new(x, y, z, w) end
+---@return Quaternion
+function Quaternion.Identity() end
+---Angles are radians.
+---@param pitch number
+---@param yaw number
+---@param roll number
+---@return Quaternion
+function Quaternion.Euler(pitch, yaw, roll) end
+---@param yaw number
+---@param pitch number
+---@param roll number
+---@return Quaternion
+function Quaternion.YawPitchRoll(yaw, pitch, roll) end
+---@param axis Vector3 Finite, nonzero; normalized internally.
+---@param radians number
+---@return Quaternion
+function Quaternion.AxisAngle(axis, radians) end
+---@return number
+function Quaternion:Length() end
+---Returns a normalized copy; rejects zero/nonfinite values.
+---@return Quaternion
+function Quaternion:Normalize() end
+---@return Quaternion
+function Quaternion:Normalized() end
+---@param other Quaternion
+---@param t number Finite interpolation parameter.
+---@return Quaternion
+function Quaternion:Slerp(other, t) end
+---@param vector Vector3
+---@return Vector3
+function Quaternion:Rotate(vector) end
+---Equivalent to quaternion multiplication; operands are normalized internally.
+---@param other Quaternion
+---@return Quaternion
+function Quaternion:Compose(other) end
+
+---@alias ComponentType 'Camera'|'DirectionalLight'|'PointLight'|'SpotLight'|'MeshRenderer'|'RigidBody'|'Collider'|'Script'|'GamePersistence'|'Bounds'
+---@class CameraSnapshot
+---@field fovY number Radians, between zero and pi.
+---@field nearPlane number Positive.
+---@field farPlane number Greater than nearPlane.
+---@class DirectionalLightSnapshot
+---@field color Vector3 Nonnegative RGB.
+---@field intensity number Nonnegative.
+---@class PointLightSnapshot: DirectionalLightSnapshot
+---@field range number Positive.
+---@class SpotLightSnapshot: PointLightSnapshot
+---@field innerHalfAngle number Radians, nonnegative and no greater than outerHalfAngle.
+---@field outerHalfAngle number Radians, positive and less than pi/2.
+---@class MeshRendererSnapshot
+---@field mesh string Catalogued mesh UUID or logical path (getter returns UUID).
+---@field materialInstance string Catalogued material-instance UUID or logical path.
+---@class RigidBodySnapshot
+---@field motionType 'Static'|'Dynamic'|'Kinematic'
+---@field mass number Positive.
+---@field friction number Nonnegative.
+---@field restitution number Between zero and one.
+---@class ColliderSnapshot
+---@field shape 'Cube'|'Box'|'Sphere'|'Capsule'|'ConvexMesh'|'TriangleMesh'
+---@field center Vector3
+---@field halfExtents Vector3 Positive components.
+---@field radius number Positive.
+---@field halfHeight number Nonnegative.
+---@field showDebug boolean
+---@field isTrigger boolean
+---@class ScriptSnapshot
+---@field script string Catalogued script UUID or logical path (getter returns UUID).
+---@field enabled boolean
+---@field properties table<string, string|number|boolean> Scalar Inspector overrides.
+---@class GamePersistenceSnapshot
+---@field transform boolean
+---@field controllerState boolean
+---@field scriptState boolean Opt into entity script OnSaveGame/OnLoadGame hooks; default false.
+---@class BoundsSnapshot
+---@field min Vector3
+---@field max Vector3
+---@alias ComponentSnapshot CameraSnapshot|DirectionalLightSnapshot|PointLightSnapshot|SpotLightSnapshot|MeshRendererSnapshot|RigidBodySnapshot|ColliderSnapshot|ScriptSnapshot|GamePersistenceSnapshot|BoundsSnapshot
+---@class MaterialParametersSnapshot
+---@field specularColor Vector3 Nonnegative RGB.
+---@field shininess number Nonnegative.
+
+)"
+R"(---@class Entity
 Entity = {}
 ---@return boolean
 function Entity:IsValid() end
+---@return string uuid
+function Entity:GetId() end
+---@return string
+function Entity:GetName() end
+---@param name string
+function Entity:SetName(name) end
 ---Returns a copy of the owner's local position. Raises an error for an invalid owner.
 ---@return Vector3
 function Entity:GetPosition() end
 ---Sets local position; all coordinates must be finite. Requires a valid owner.
 ---@param position Vector3
 function Entity:SetPosition(position) end
+---@return Quaternion
+function Entity:GetRotation() end
+---@param rotation Quaternion Finite, nonzero; normalized before storing.
+function Entity:SetRotation(rotation) end
+---@return Vector3
+function Entity:GetScale() end
+---@param scale Vector3 Finite local scale.
+function Entity:SetScale(scale) end
+---@return Vector3
+function Entity:GetWorldPosition() end
+---@param position Vector3
+function Entity:SetWorldPosition(position) end
+---@return Quaternion
+function Entity:GetWorldRotation() end
+---@param rotation Quaternion
+function Entity:SetWorldRotation(rotation) end
+---@return Vector3
+function Entity:GetWorldScale() end
+---@param scale Vector3
+function Entity:SetWorldScale(scale) end
+---@return Vector3
+function Entity:Forward() end
+---@return Vector3
+function Entity:Right() end
+---@return Vector3
+function Entity:Up() end
+---@return string[]
+function Entity:GetTags() end
+---@param tag string
+---@return boolean
+function Entity:HasTag(tag) end
+---@param tag string
+function Entity:AddTag(tag) end
+---@param tag string
+function Entity:RemoveTag(tag) end
+---Returns an invalid handle when there is no parent; check IsValid().
+---@return Entity
+function Entity:GetParent() end
+---@return Entity[]
+function Entity:GetChildren() end
+---@param parent? Entity Nil unparents; local transform is preserved.
+---@return boolean
+function Entity:SetParent(parent) end
+---@param parent? Entity Nil unparents; world transform is preserved.
+---@return boolean
+function Entity:SetParentKeepingWorld(parent) end
+---@param type ComponentType
+---@return boolean
+function Entity:HasComponent(type) end
+---Returns a detached snapshot or nil for a missing component. Use SetComponent to commit edits.
+---@overload fun(self: Entity, type: 'Camera'): CameraSnapshot?
+---@overload fun(self: Entity, type: 'DirectionalLight'): DirectionalLightSnapshot?
+---@overload fun(self: Entity, type: 'PointLight'): PointLightSnapshot?
+---@overload fun(self: Entity, type: 'SpotLight'): SpotLightSnapshot?
+---@overload fun(self: Entity, type: 'MeshRenderer'): MeshRendererSnapshot?
+---@overload fun(self: Entity, type: 'RigidBody'): RigidBodySnapshot?
+---@overload fun(self: Entity, type: 'Collider'): ColliderSnapshot?
+---@overload fun(self: Entity, type: 'Script'): ScriptSnapshot?
+---@overload fun(self: Entity, type: 'GamePersistence'): GamePersistenceSnapshot?
+---@overload fun(self: Entity, type: 'Bounds'): BoundsSnapshot?
+---@param type ComponentType
+---@return ComponentSnapshot?
+function Entity:GetComponent(type) end
+---Patches an existing component; omitted fields retain their values. Unknown fields raise errors.
+---@param type ComponentType
+---@param data table
+function Entity:SetComponent(type, data) end
+---Adds one component; omitted fields use defaults. Script/MeshRenderer require asset data.
+---@param type ComponentType
+---@param data? table
+function Entity:AddComponent(type, data) end
+---Queues removal after Lua callbacks; false if absent.
+---@param type ComponentType
+---@return boolean queued
+function Entity:RemoveComponent(type) end
+function Entity:SetActiveCamera() end
+---@return boolean
+function Entity:IsActiveCamera() end
+---@return MaterialParametersSnapshot
+function Entity:GetMaterialParameters() end
+---Patches an entity-local material override; does not edit the shared material asset.
+---@param data {specularColor?: Vector3, shininess?: number}
+function Entity:SetMaterialParameters(data) end
+---True only for a live, started, healthy script receiver; attachment changes reconcile at safe points.
+---@return boolean
+function Entity:HasScript() end
+---@param name string Public function name, excluding reserved callbacks.
+---@return boolean
+function Entity:HasScriptMethod(name) end
+---Returns true followed by all method results, or false followed by an error string.
+---Rejects reentry into an active receiver. A method exception faults the receiver.
+---@param name string
+---@param ... any
+---@return boolean success
+---@return any ...
+function Entity:CallScript(name, ...) end
 
 ---Available only in GameObject script instances, not autoloads or shared modules.
 ---@type Entity
@@ -62,6 +318,309 @@ Scene = {}
 ---@return boolean success
 ---@return string error
 function Scene.OpenLevel(name) end
+---A missing result is an invalid Entity handle, not nil.
+---@param name string
+---@return Entity
+function Scene.FindByName(name) end
+---@param name string
+---@return Entity[]
+function Scene.FindAllByName(name) end
+---@param tag string
+---@return Entity[]
+function Scene.FindByTag(tag) end
+---@param id string Entity UUID.
+---@return Entity
+function Scene.FindById(id) end
+---@param uuid string
+---@return Entity
+function Scene.FindByUuid(uuid) end
+---@class SpawnOptions
+---@field position? Vector3 Local position; default zero.
+---@field rotation? Quaternion Default identity; finite/nonzero and normalized internally.
+---@field scale? Vector3 Local scale; default one.
+---@field parent? Entity
+---@field components? table<ComponentType, table> Component field patches keyed by type.
+---@param name string
+---@param options? SpawnOptions
+---@return Entity
+function Scene.Spawn(name, options) end
+---Queues destruction when called from Lua gameplay callbacks.
+---@param target Entity
+function Scene.Destroy(target) end
+---Queues a validated native controller definition (version 1, enabled).
+---@param target Entity
+---@param type string Registered C++ controller type.
+---@param data? table Serializable data.
+function Scene.AttachController(target, type, data) end
+
+)"
+R"(---@class InputContext
+InputContext = {}
+---@return boolean
+function InputContext:IsValid() end
+---@param action string
+---@return boolean
+function InputContext:Pressed(action) end
+---@param action string
+---@return boolean
+function InputContext:Released(action) end
+---@param action string
+---@return boolean
+function InputContext:Down(action) end
+---@param axis string
+---@return number
+function InputContext:Axis1D(axis) end
+---@param axis string
+---@return Vector2
+function InputContext:Axis2D(axis) end
+---@return Vector2
+function InputContext:MouseDelta() end
+---Render-surface pixel coordinates, origin top-left, +y down; persists across frames.
+---Zero when blocked, released or expired; focus loss clears position on the next input latch.
+---@return Vector2
+function InputContext:MousePosition() end
+---@return number
+function InputContext:MouseWheel() end
+---Replaces this context's activation; blocking flags default false, priority defaults zero.
+---@param priority? integer
+---@param keyboard? boolean
+---@param mouse? boolean
+---@return boolean
+function InputContext:Capture(priority, keyboard, mouse) end
+function InputContext:Release() end
+---Alias for Release; releases activation, not binding definitions.
+function InputContext:Reset() end
+---@param action string
+---@param key integer PhysicalKey constant.
+function InputContext:BindAction(action, key) end
+---@param action string
+---@param button integer MouseButton constant.
+function InputContext:BindMouseAction(action, button) end
+---@param axis string
+---@param key integer
+---@param value number Finite contribution.
+function InputContext:BindAxis1D(axis, key, value) end
+---@param axis string
+---@param key integer
+---@param value Vector2 Finite contribution.
+function InputContext:BindAxis2D(axis, key, value) end
+
+---@class PhysicalKeyConstants
+---@field A integer
+---@field B integer
+---@field C integer
+---@field D integer
+---@field E integer
+---@field F integer
+---@field G integer
+---@field H integer
+---@field I integer
+---@field J integer
+---@field K integer
+---@field L integer
+---@field M integer
+---@field N integer
+---@field O integer
+---@field P integer
+---@field Q integer
+---@field R integer
+---@field S integer
+---@field T integer
+---@field U integer
+---@field V integer
+---@field W integer
+---@field X integer
+---@field Y integer
+---@field Z integer
+---@field Num0 integer
+---@field Num1 integer
+---@field Num2 integer
+---@field Num3 integer
+---@field Num4 integer
+---@field Num5 integer
+---@field Num6 integer
+---@field Num7 integer
+---@field Num8 integer
+---@field Num9 integer
+---@field F1 integer
+---@field F2 integer
+---@field F3 integer
+---@field F4 integer
+---@field F5 integer
+---@field F6 integer
+---@field F7 integer
+---@field F8 integer
+---@field F9 integer
+---@field F10 integer
+---@field F11 integer
+---@field F12 integer
+---@field Enter integer
+---@field Escape integer
+---@field Backspace integer
+---@field Tab integer
+---@field Space integer
+---@field Delete integer
+---@field Right integer
+---@field Left integer
+---@field Down integer
+---@field Up integer
+---@field NumpadEnter integer
+---@field LeftControl integer
+---@field LeftShift integer
+---@field LeftAlt integer
+---@field LeftMeta integer
+---@field RightControl integer
+---@field RightShift integer
+---@field RightAlt integer
+---@field RightMeta integer
+---@type PhysicalKeyConstants
+PhysicalKey = {}
+---@class MouseButtonConstants
+---@field Left integer
+---@field Right integer
+---@field Middle integer
+---@type MouseButtonConstants
+MouseButton = {}
+Input = {}
+---@type PhysicalKeyConstants
+Input.PhysicalKey = PhysicalKey
+---@type MouseButtonConstants
+Input.MouseButton = MouseButton
+---Gets/defines and nonblockingly activates a named context; nil without an input subsystem.
+---@param name string Nonempty context name.
+---@return InputContext?
+function Input.GetContext(name) end
+---@param name string
+---@return InputContext?
+function Input.DefineContext(name) end
+---Input polling shortcuts use the Gameplay context and named bindings.
+---@param action string
+---@return boolean
+function Input.Pressed(action) end
+---@param action string
+---@return boolean
+function Input.Released(action) end
+---@param action string
+---@return boolean
+function Input.Down(action) end
+---@param axis string
+---@return number
+function Input.Axis1D(axis) end
+---@param axis string
+---@return Vector2
+function Input.Axis2D(axis) end
+---@return Vector2
+function Input.MouseDelta() end
+---Gameplay context position in render-surface pixels, origin top-left, +y down.
+---Persists across frames; zero when unavailable, blocked, released or expired.
+---Focus loss clears position on the next input latch.
+---@return Vector2
+function Input.MousePosition() end
+---@return number
+function Input.MouseWheel() end
+
+)"
+R"(Physics = {}
+---@param target Entity
+---@param velocity Vector3 Dynamic body; world-space velocity.
+---@return boolean success
+---@return string error
+function Physics.SetLinearVelocity(target, velocity) end
+---@param target Entity
+---@param impulse Vector3 Dynamic body; world-space impulse.
+---@return boolean success
+---@return string error
+function Physics.AddImpulse(target, impulse) end
+---@param target Entity Kinematic body.
+---@param position Vector3 Parent-local target position.
+---@param rotation Quaternion Finite and normalized, parent-local.
+---@return boolean success
+---@return string error
+function Physics.MoveKinematic(target, position, rotation) end
+---@param target Entity
+---@param position Vector3 Parent-local position.
+---@param rotation Quaternion Finite and normalized, parent-local.
+---@return boolean success
+---@return string error
+function Physics.Teleport(target, position, rotation) end
+
+Time = {}
+---@return number seconds Simulation frame delta.
+function Time.Delta() end
+---@return number seconds
+function Time.SimulationTime() end
+---@return number seconds Real frame delta.
+function Time.RealDelta() end
+---@return number seconds
+function Time.RealTime() end
+---@return boolean
+function Time.IsPaused() end
+
+---@class SaveGameRequest
+SaveGameRequest = {}
+---@return boolean
+function SaveGameRequest:IsComplete() end
+---Check IsComplete first; queue acceptance does not mean the operation succeeded.
+---Before completion, returns false and "Request is pending".
+---@return boolean success
+---@return string error
+function SaveGameRequest:GetResult() end
+SaveGame = {}
+---Queues a save in the Engine save directory (default contentRoot.parent/.sri/saves).
+---Requires an active session outside persistence hooks. Slot is a name, not a path.
+---@param slot string 1-64 ASCII letters, digits, underscores or hyphens; leading digits allowed.
+---@return SaveGameRequest? request
+---@return string error
+function SaveGame.RequestSave(slot) end
+---Queues a load; resets the Lua session, including autoloads. Preflight errors preserve the live scene.
+---OnLoadGame errors fail the request but start the fresh session normally without faulting instances.
+---@param slot string 1-64 ASCII letters, digits, underscores or hyphens; leading digits allowed.
+---@return SaveGameRequest? request
+---@return string error
+function SaveGame.RequestLoad(slot) end
+
+---@class PhysicsContact
+---@field point Vector3
+---@field normal Vector3 Receiver-oriented normal.
+---@field stepIndex integer Fixed physics step index.
+---@field otherId integer Transient EnTT identifier, not an entity UUID.
+---Optional top-level script callbacks. Returned-table scripts receive self first.
+function OnStart() end
+---@param dt number Simulation seconds.
+function OnUpdate(dt) end
+---@param dt number Fixed-step seconds; use this argument rather than Time.Delta().
+function OnFixedUpdate(dt) end
+function OnDestroy() end
+---@param other Entity? Nil if the other object no longer exists.
+---@param contact PhysicsContact
+function OnCollisionEnter(other, contact) end
+---@param other Entity?
+---@param contact PhysicsContact
+function OnCollisionExit(other, contact) end
+---@param other Entity?
+---@param contact PhysicsContact
+function OnCollisionStay(other, contact) end
+---@param other Entity?
+---@param contact PhysicsContact
+function OnTriggerEnter(other, contact) end
+---@param other Entity?
+---@param contact PhysicsContact
+function OnTriggerExit(other, contact) end
+---@param other Entity?
+---@param contact PhysicsContact
+function OnTriggerStay(other, contact) end
+function OnSleep() end
+function OnWake() end
+---Positive integer; defaults to 1. Older versions may be migrated by OnLoadGame.
+---@type integer
+SaveVersion = nil
+---Both persistence hooks must be declared together; return exactly one serializable table.
+---@return table data
+function OnSaveGame() end
+---Runs in the fresh session after native controller state restore and before OnStart.
+---@param data table
+---@param savedVersion integer Positive and no greater than current SaveVersion.
+function OnLoadGame(data, savedVersion) end
 )";
 
 bool WriteChanged(const std::filesystem::path& path, std::string_view text, std::string& error) {

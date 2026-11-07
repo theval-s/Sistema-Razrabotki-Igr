@@ -16,6 +16,14 @@ namespace editor {
 
 namespace {
 
+void feedMousePosition(ViewportWidget& viewport, engine::InputSubsystem* input, QPointF position) {
+    if (input && viewport.hasFocus()) {
+        const qreal ratio = viewport.devicePixelRatioF();
+        input->OnMousePosition(static_cast<float>(position.x() * ratio),
+                               static_cast<float>(position.y() * ratio));
+    }
+}
+
 engine::Key toEngineKey(const int key) {
     using engine::Key;
     if (key >= Qt::Key_A && key <= Qt::Key_Z) {
@@ -91,6 +99,7 @@ void ViewportWidget::setPlaying(bool playing) {
     playing_ = playing;
     if (input_) {
         input_->Reset();
+        feedMousePosition(*this, input_, mapFromGlobal(QCursor::pos()));
     }
 }
 
@@ -144,6 +153,7 @@ void ViewportWidget::keyReleaseEvent(QKeyEvent* event) {
 void ViewportWidget::mousePressEvent(QMouseEvent* event) {
     // Clicking the viewport is how it gets the keyboard, so WASD works right away.
     setFocus(Qt::MouseFocusReason);
+    feedMousePosition(*this, input_, event->position());
     last_cursor_ = event->globalPosition().toPoint();
     if (!cursor_pinned_) {
         emit mousePressed(event->position(), event->button(), event->modifiers());
@@ -158,6 +168,7 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
 }
 
 void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
+    feedMousePosition(*this, input_, event->position());
     if (event->button() == Qt::RightButton) {
         releaseCursor();
     } else if (!cursor_pinned_) {
@@ -169,6 +180,7 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void ViewportWidget::mouseMoveEvent(QMouseEvent* event) {
+    feedMousePosition(*this, input_, event->position());
     if (!cursor_pinned_) {
         emit mouseMoved(event->position());
     }
@@ -191,6 +203,7 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void ViewportWidget::wheelEvent(QWheelEvent* event) {
+    feedMousePosition(*this, input_, event->position());
     if (input_ != nullptr) {
         input_->OnMouseWheel(static_cast<float>(event->angleDelta().y()) / static_cast<float>(QWheelEvent::DefaultDeltasPerStep));
     }
@@ -209,6 +222,7 @@ void ViewportWidget::focusOutEvent(QFocusEvent* event) {
 
 void ViewportWidget::focusInEvent(QFocusEvent* event) {
     QWidget::focusInEvent(event);
+    feedMousePosition(*this, input_, mapFromGlobal(QCursor::pos()));
     if (camera_) camera_->SetInputActive(true);
 }
 

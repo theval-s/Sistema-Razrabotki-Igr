@@ -52,6 +52,7 @@ protected:
 
     /// Valid from Initialize() until after Shutdown().
     [[nodiscard]] Engine& GetEngine() const;
+    [[nodiscard]] Engine* TryGetEngine() const noexcept { return engine_; }
 
 private:
     friend class Engine;

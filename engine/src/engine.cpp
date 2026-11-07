@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <deque>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -80,6 +81,19 @@ struct Engine::Impl {
     bool editorMode = false;
     bool transitioning = false;
     bool inCallbacks = false;
+    bool standalonePlaying = false;
+    bool restoringGame = false;
+    bool savingGame = false;
+    bool stoppingSession = false;
+    std::filesystem::path sessionRoot;
+    std::filesystem::path saveDirectory;
+    std::vector<AutoloadDefinition> autoloads;
+    struct GameRequest {
+        std::filesystem::path file;
+        bool load;
+        std::shared_ptr<SaveGameRequest> completion;
+    };
+    std::deque<GameRequest> gameRequests;
     struct PlaySnapshot {
         SceneDocument scene, baseline;
         AssetReference reference;
@@ -202,6 +216,8 @@ void Engine::Shutdown() {
     }
     log::Engine().info("Engine shutting down");
     StopPlay();
+    StopGame();
+    CancelGameRequests();
     ResetSimulation();
 
     impl_->scene.SetControllersActive(false);
@@ -304,6 +320,8 @@ void Engine::Tick() {
     for (std::size_t i = 0; i < impl_->subsystems.size(); ++i) {
         impl_->subsystems[i].subsystem->Render(current);
     }
+    if (auto* scripting = GetSubsystem<ScriptSubsystem>()) scripting->GetRuntime().FlushSceneCommands();
+    ProcessGameRequests();
 }
 
 bool Engine::Run() {
@@ -383,7 +401,7 @@ void Engine::SetEditorMode() {
     impl_->scene.SetControllerInstantiationEnabled(false);
 }
 
-bool Engine::IsPlaying() const noexcept { return impl_->playSnapshot.has_value(); }
+bool Engine::IsPlaying() const noexcept { return impl_->playSnapshot.has_value() || impl_->standalonePlaying; }
 
 bool Engine::PlayCurrentScene(const std::filesystem::path& root,
                              std::span<const AutoloadDefinition> autoloads, std::string& error) {
@@ -403,6 +421,8 @@ bool Engine::PlayCurrentScene(const std::filesystem::path& root,
     snapshot.hasReference = impl_->hasSceneReference;
     impl_->playSnapshot = std::move(snapshot);
     impl_->transitioning = true;
+    impl_->sessionRoot = std::filesystem::absolute(root);
+    impl_->autoloads.assign(autoloads.begin(), autoloads.end());
     impl_->queuedScene.reset();
     CommitScene(impl_->playSnapshot->scene);
     scripting->GetRuntime().SetLevelLoader([this](std::string_view name, std::string& failure) {
@@ -427,20 +447,132 @@ bool Engine::PlayCurrentScene(const std::filesystem::path& root,
 void Engine::StopPlay() {
     if (!impl_->playSnapshot || impl_->transitioning || impl_->inCallbacks) return;
     impl_->transitioning = true;
+    impl_->stoppingSession = true;
+    CancelGameRequests();
     impl_->queuedScene.reset();
     if (auto* scripting = GetSubsystem<ScriptSubsystem>()) {
         scripting->EndPlay();
         scripting->GetRuntime().SetLevelLoader({});
     }
+    CancelGameRequests();
+    impl_->queuedScene.reset();
     CommitScene(impl_->playSnapshot->scene);
     impl_->sceneBaseline = impl_->playSnapshot->baseline;
     impl_->sceneReference = impl_->playSnapshot->reference;
     impl_->hasSceneReference = impl_->playSnapshot->hasReference;
     impl_->playSnapshot.reset();
+    impl_->sessionRoot.clear();
+    impl_->autoloads.clear();
     impl_->queuedScene.reset();
     impl_->transitioning = false;
     impl_->frame.simulationTimeSeconds = 0;
     SetPaused(true);
+    impl_->stoppingSession = false;
+}
+
+bool Engine::StartGame(const std::filesystem::path& root,
+                       std::span<const AutoloadDefinition> autoloads, std::string& error) {
+    if (!IsInitialized() || impl_->editorMode || IsPlaying() || impl_->inCallbacks || impl_->transitioning || !impl_->hasSceneReference) {
+        error = "StartGame requires an initialized standalone Engine with a loaded catalog-backed scene and no active session";
+        return false;
+    }
+    auto* scripting = GetSubsystem<ScriptSubsystem>();
+    if (!scripting) { error = "ScriptSubsystem is not registered"; return false; }
+    impl_->transitioning = true;
+    impl_->standalonePlaying = true;
+    impl_->sessionRoot = std::filesystem::absolute(root);
+    impl_->autoloads.assign(autoloads.begin(), autoloads.end());
+    scripting->GetRuntime().SetLevelLoader([this](std::string_view name, std::string& failure) {
+        return RequestOpenLevel(name, failure);
+    });
+    if (!scripting->BeginPlay(root, autoloads, error)) {
+        impl_->transitioning = false;
+        StopGame();
+        return false;
+    }
+    scripting->StartSceneScripts(impl_->scene);
+    impl_->scene.SetControllerInstantiationEnabled(true);
+    impl_->scene.SetControllersActive(true);
+    ResetSimulation();
+    impl_->frame.simulationTimeSeconds = 0;
+    impl_->lastTickTime = std::chrono::steady_clock::now();
+    impl_->transitioning = false;
+    SetPaused(false);
+    error.clear();
+    return true;
+}
+
+void Engine::StopGame() {
+    if (!impl_->standalonePlaying || impl_->inCallbacks || impl_->transitioning) return;
+    impl_->transitioning = true;
+    impl_->stoppingSession = true;
+    CancelGameRequests();
+    impl_->queuedScene.reset();
+    if (auto* scripting = GetSubsystem<ScriptSubsystem>()) {
+        scripting->EndPlay();
+        scripting->GetRuntime().SetLevelLoader({});
+    }
+    impl_->scene.SetControllersActive(false);
+    ResetSimulation();
+    impl_->standalonePlaying = false;
+    CancelGameRequests();
+    impl_->queuedScene.reset();
+    impl_->sessionRoot.clear();
+    impl_->autoloads.clear();
+    impl_->transitioning = false;
+    impl_->stoppingSession = false;
+}
+
+void Engine::SetSaveDirectory(const std::filesystem::path& directory) {
+    impl_->saveDirectory = directory.empty() ? directory : std::filesystem::absolute(directory);
+}
+
+std::shared_ptr<SaveGameRequest> Engine::QueueGameRequest(std::string_view slot, bool load, std::string& error) {
+    if (!IsPlaying() || impl_->savingGame || impl_->restoringGame || impl_->stoppingSession) {
+        error = "SaveGame requests require an active session outside persistence hooks"; return {};
+    }
+    if (slot.empty() || slot.size() > 64 || !std::all_of(slot.begin(), slot.end(), [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_' || c == '-';
+    })) { error = "Save slot must contain 1-64 ASCII letters, digits, underscores or hyphens"; return {}; }
+    const auto directory = impl_->saveDirectory.empty()
+        ? impl_->sessionRoot.parent_path() / ".sri" / "saves" : impl_->saveDirectory;
+    auto completion = std::make_shared<SaveGameRequest>();
+    impl_->gameRequests.push_back({directory / (std::string(slot) + ".save.json"), load, completion});
+    error.clear();
+    return completion;
+}
+
+std::shared_ptr<SaveGameRequest> Engine::RequestSave(std::string_view slot, std::string& error) {
+    return QueueGameRequest(slot, false, error);
+}
+std::shared_ptr<SaveGameRequest> Engine::RequestLoad(std::string_view slot, std::string& error) {
+    return QueueGameRequest(slot, true, error);
+}
+void Engine::CancelGameRequests() {
+    for (auto& request : impl_->gameRequests) {
+        request.completion->complete_ = true;
+        request.completion->error_ = "Request cancelled because the scripting session ended";
+    }
+    impl_->gameRequests.clear();
+}
+void Engine::ProcessGameRequests() {
+    // Process only the requests that existed at this boundary. A successful load
+    // cancels remaining old-session requests before starting new script callbacks.
+    auto remaining = impl_->gameRequests.size();
+    while (remaining-- && !impl_->gameRequests.empty()) {
+        auto request = std::move(impl_->gameRequests.front());
+        impl_->gameRequests.pop_front();
+        std::string error;
+        bool ok = false;
+        try {
+            if (!request.load) std::filesystem::create_directories(request.file.parent_path());
+            ok = request.load ? LoadGame(request.file, error) : SaveGame(request.file, error);
+        } catch (const std::exception& exception) { error = exception.what(); }
+        request.completion->success_ = ok;
+        request.completion->error_ = std::move(error);
+        request.completion->complete_ = true;
+    }
 }
 
 bool Engine::RequestOpenLevel(std::string_view name, std::string& error) {
@@ -449,7 +581,7 @@ bool Engine::RequestOpenLevel(std::string_view name, std::string& error) {
         log::Engine().error("OpenLevel: {}", error);
         return false;
     };
-    if (!IsPlaying()) return fail("OpenLevel requires a play session");
+    if (!IsPlaying() || impl_->stoppingSession) return fail("OpenLevel requires an active play session that is not stopping");
     std::string logical(name);
     if (logical.empty() || logical.find('\\') != std::string::npos || logical.find(':') != std::string::npos)
         return fail("Use a project scene name or game/scenes/name.scene.json");
@@ -493,9 +625,11 @@ void Engine::CommitScene(const SceneDocument& document) {
     impl_->sceneAssets->UnloadAll();
     PopulateScene(document, *impl_->sceneAssets, impl_->scene);
     impl_->sceneBaseline = document;
-    if (auto* scripting = GetSubsystem<ScriptSubsystem>(); scripting && scripting->IsPlaying())
+    if (auto* scripting = GetSubsystem<ScriptSubsystem>(); scripting && scripting->IsPlaying() && !impl_->restoringGame)
         scripting->StartSceneScripts(impl_->scene);
-    if (!impl_->editorMode || (IsPlaying() && !impl_->transitioning)) {
+    const auto* scripting = GetSubsystem<ScriptSubsystem>();
+    const bool standaloneReady = !impl_->editorMode && (!scripting || scripting->IsPlaying());
+    if (!impl_->restoringGame && (standaloneReady || (IsPlaying() && !impl_->transitioning))) {
         impl_->scene.SetControllerInstantiationEnabled(true);
         if (!impl_->deferControllerActivation) impl_->scene.SetControllersActive(true);
     }
@@ -551,6 +685,8 @@ bool Engine::SaveScene(const std::filesystem::path& file, std::string& error) {
 }
 
 bool Engine::SaveGame(const std::filesystem::path& file, std::string& error) {
+    if (impl_->savingGame || impl_->restoringGame) { error = "Persistence operations are not reentrant"; return false; }
+    struct SavingScope { bool& active; explicit SavingScope(bool& flag) : active(flag) { active = true; } ~SavingScope() { active = false; } } scope(impl_->savingGame);
     if (impl_->scene.IsInControllerCallback()) { error = "save game outside controller callbacks"; return false; }
     if (!impl_->hasSceneReference) { error = "save game requires a catalog-backed loaded scene"; return false; }
     SceneDocument current;
@@ -592,19 +728,26 @@ bool Engine::SaveGame(const std::filesystem::path& file, std::string& error) {
             error = "persistent spawn " + id.ToString() + " has a non-persistent spawned parent: " + parent.ToString();
             return false;
         }
+    if (auto* scripting = GetSubsystem<ScriptSubsystem>(); scripting && scripting->IsPlaying()) {
+        if (!scripting->CaptureGameState(game, error)) { scripting->GetRuntime().DiscardSceneCommands(); return false; }
+        // Persistence hooks describe state. Structural commands are discarded;
+        // they must not change what the already captured snapshot represents.
+        scripting->GetRuntime().DiscardSceneCommands();
+    }
     std::string text;
     if (!SerializeGameDocument(game, text, error)) return false;
     return WriteFileAtomic(AssetPathResolver::ToAbsolute(file), text + '\n', error);
 }
 
 bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
+    if (impl_->savingGame || impl_->restoringGame || impl_->inCallbacks) { error = "Load game requires a safe engine boundary"; return false; }
     if (!IsInitialized()) { error = "engine must be initialized before loading a save game"; return false; }
     if (impl_->scene.IsInControllerCallback()) { error = "load game outside controller callbacks"; return false; }
     std::string text;
     if (!ReadTextFile(AssetPathResolver::ToAbsolute(file), text, error)) return false;
     GameDocument game;
     if (!ParseGameDocument(text, game, error)) return false;
-    const auto* entry = impl_->sceneAssets->GetCatalog().Find(game.scene.id, CatalogAssetKind::Scene);
+    const auto* entry = impl_->assets->GetCatalog().Find(game.scene.id, CatalogAssetKind::Scene);
     if (!entry) { error = "missing scene UUID in save game: " + game.scene.id.ToString(); return false; }
     std::string sceneText;
     if (!ReadTextFile(entry->source, sceneText, error)) return false;
@@ -648,13 +791,18 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
             return nullptr;
         }();
         if (!definition->persistence || (state.transform && !definition->persistence->transform) ||
-            (state.controller && !definition->persistence->controllerState)) {
+            (state.controller && !definition->persistence->controllerState) ||
+            (state.script && !definition->persistence->scriptState)) {
             error = "save-game state is not enabled for " + state.id.ToString(); return false;
         }
         if (state.controller && (!definition->controller ||
             definition->controller->type != state.controller->type ||
             definition->controller->version != state.controller->version)) {
             error = "saved controller type/version mismatch for " + state.id.ToString(); return false;
+        }
+        if (state.script && (!definition->script || !definition->script->enabled ||
+            definition->script->script.id != state.script->asset)) {
+            error = "saved script asset mismatch for " + state.id.ToString(); return false;
         }
     }
     // Check parent cycles before touching the live scene.
@@ -681,6 +829,60 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
     if (restored.directionalLight && removed(*restored.directionalLight)) restored.directionalLight.reset();
     std::string checkedScene;
     if (!SerializeSceneDocument(restored, checkedScene, error)) return false;
+    auto* scripting = GetSubsystem<ScriptSubsystem>();
+    const bool restoreScripts = scripting && scripting->IsPlaying();
+    const bool containsScriptState = !game.autoloads.empty() || std::any_of(game.entities.begin(), game.entities.end(), [](const auto& state) { return state.script.has_value(); });
+    if (containsScriptState && !restoreScripts) { error = "Saved Lua state requires an active scripting session"; return false; }
+    if (restoreScripts && !scripting->PreflightGameState(game, error)) return false;
+    if (restoreScripts) {
+        // Copy catalog identity before scene asset teardown. The shared catalog
+        // remains available throughout a fresh runtime/session restoration.
+        const AssetReference reference = game.scene;
+        const auto root = impl_->sessionRoot.empty() ? scripting->GetRoot() : impl_->sessionRoot;
+        const auto autoloads = impl_->autoloads;
+        impl_->restoringGame = true;
+        struct RestoreScope { bool& active; ~RestoreScope() { active = false; } } scope{impl_->restoringGame};
+        CancelGameRequests();
+        impl_->queuedScene.reset();
+        scripting->EndPlay();
+        CommitScene(restored);
+        impl_->sceneBaseline = base;
+        impl_->sceneReference = reference;
+        impl_->hasSceneReference = true;
+        if (!scripting->BeginPlay(root, autoloads, error, true) ||
+            !scripting->PrepareSceneScripts(impl_->scene, error)) {
+            scripting->EndPlay();
+            return false;
+        }
+        // Both native and Lua restoration happen while controllers are dormant.
+        impl_->scene.SetControllersActive(false);
+        impl_->scene.SetControllerInstantiationEnabled(true);
+        for (const auto& state : game.entities) if (state.controller) {
+            if (!impl_->scene.RestoreControllerGameState(impl_->scene.FindByUuid(state.id), state.controller->data, error) || !error.empty()) {
+                scripting->EndPlay(); return false;
+            }
+        }
+        if (!scripting->RestoreGameState(game, error)) {
+            // Hook errors fail this operation, without faulting the prepared
+            // script. Start the fresh scene normally so gameplay can continue.
+            const auto failure = error;
+            scripting->GetRuntime().DiscardSceneCommands();
+            std::string startupError;
+            if (!scripting->StartPreparedScripts(startupError)) scripting->EndPlay();
+            impl_->scene.SetControllerInstantiationEnabled(true);
+            impl_->scene.SetControllersActive(true);
+            error = failure;
+            return false;
+        }
+        scripting->GetRuntime().DiscardSceneCommands();
+        if (!scripting->StartPreparedScripts(error)) { scripting->EndPlay(); return false; }
+        impl_->scene.SetControllerInstantiationEnabled(true);
+        impl_->scene.SetControllersActive(true);
+        impl_->frame.simulationTimeSeconds = 0;
+        impl_->lastTickTime = std::chrono::steady_clock::now();
+        error.clear();
+        return true;
+    }
     impl_->deferControllerActivation = true;
     const bool loaded = LoadScene(entry->source, error);
     impl_->deferControllerActivation = false;

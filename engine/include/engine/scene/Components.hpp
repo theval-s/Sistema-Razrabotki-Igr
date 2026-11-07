@@ -26,6 +26,7 @@ struct Tags {
 struct GamePersistence {
     bool transform = false;
     bool controllerState = false;
+    bool scriptState = false;
 };
 
 struct EntityId {

@@ -175,8 +175,13 @@ engine.SaveGame("game/example.save.json", error);
 engine.LoadGame("game/example.save.json", error);
 ~~~
 
-`GamePersistence` is an optional authored scene component with `transform` and
-`controllerState` boolean fields. Only opted-in existing entities get state
+`GamePersistence` is an optional authored scene component with `transform`,
+`controllerState`, and `scriptState` boolean fields. `scriptState` defaults to false;
+enable **Save script state** in the Inspector to opt an entity into the Lua
+`OnSaveGame`/`OnLoadGame` hook pair. Autoloads opt in with the hook pair itself;
+see [scripting.md](scripting.md#savegame-requests-and-explicit-script-state) for
+request handles, save slots, version migration, and restore ordering.
+Only opted-in existing entities get state
 records. The engine captures/restores transforms independently of controllers;
 controllers opt into live state with `SaveGameState(StateValue&)` and
 `LoadGameState(const StateValue&)`. These callbacks never change the authored

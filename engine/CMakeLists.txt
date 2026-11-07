@@ -58,6 +58,14 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/scripting/ScriptProperties.hpp
     include/engine/scripting/AutoloadDefinition.hpp
     include/engine/scripting/ScriptSubsystem.hpp
+    include/engine/scripting/LuaBindings.hpp
+    include/engine/scripting/LuaBindingsContext.hpp
+    include/engine/scripting/LuaEntityHandle.hpp
+    include/engine/scripting/LuaSceneBindings.hpp
+    include/engine/scripting/LuaComponentBindings.hpp
+    include/engine/scripting/LuaGameplayBindings.hpp
+    include/engine/scripting/LuaSaveGameBindings.hpp
+    include/engine/scripting/LuaStateValue.hpp
 )
 
 set(ENGINE_SOURCES
@@ -93,6 +101,12 @@ set(ENGINE_SOURCES
     src/scripting/LuaRuntime.cpp
     src/scripting/AutoloadDefinition.cpp
     src/scripting/ScriptSubsystem.cpp
+    src/scripting/LuaBindings.cpp
+    src/scripting/LuaEntityHandle.cpp
+    src/scripting/LuaSceneBindings.cpp
+    src/scripting/LuaComponentBindings.cpp
+    src/scripting/LuaGameplayBindings.cpp
+    src/scripting/LuaSaveGameBindings.cpp
 )
 
 set(ENGINE_SHADERS
@@ -303,6 +317,7 @@ set(ENGINE_CORE_SOURCES
 
 foreach(engine_target IN ITEMS engine engine_static)
     if(TARGET ${engine_target})
+        target_compile_options(${engine_target} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/bigobj>)
         target_sources(${engine_target} PRIVATE ${ENGINE_CORE_SOURCES} ${ENGINE_CORE_HEADERS})
         target_include_directories(${engine_target} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
         # All of these appear in public headers (SimpleMath in Transform, EnTT in

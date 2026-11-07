@@ -5,6 +5,9 @@
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/scripting/ScriptProperties.hpp>
 #include <engine/physics/PhysicsEvents.hpp>
+#include <engine/scripting/LuaEntityHandle.hpp>
+#include <engine/scene/GameDocument.hpp>
+#include <sol/forward.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -13,40 +16,40 @@
 #include <string>
 #include <string_view>
 #include <optional>
+
 #include <SimpleMath.h>
 #include <entt/entity/entity.hpp>
 
 namespace engine {
-    class Scene;
-    struct ENGINE_API ScriptEntityHandle {
-        Scene* scene = nullptr;
-        entt::entity entity = entt::null;
-        std::weak_ptr<void> lifetime;
-        [[nodiscard]] bool IsValid() const;
-        [[nodiscard]] DirectX::SimpleMath::Vector3 GetPosition() const;
-        void SetPosition(DirectX::SimpleMath::Vector3 position) const;
-    };
 
-    /// Transient handle: a HandleMap slot and generation, plus the runtime session it belongs to
-    /// (every session starts a new map). Never serialized.
+    class Engine;
+    class Scene;
+    class ScriptSubsystem;
+
+    /// Transient handle: a HandleMap slot and generation, plus the runtime session it belongs to.
+    /// Never serialized.
     class InstanceId final {
     public:
         [[nodiscard]] bool IsValid() const noexcept { return session_ != 0; }
         [[nodiscard]] bool operator==(const InstanceId&) const noexcept = default;
+
     private:
         friend class LuaRuntime;
+
         std::uint32_t slot_ = 0;
         std::int32_t generation_ = 0;
         std::uint64_t session_ = 0;
     };
 
     struct ScriptInstanceDesc {
-        // Already resolved by the caller from CatalogEntry::source, never AssetReference::path.
+        // Already resolved by the caller from CatalogEntry::source.
         std::filesystem::path source;
         AssetUuid assetId;
         std::string entityId;
+
         // Empty for entity-owned instances. Autoloads set this and leave entityId empty.
         std::string autoloadName{};
+
         std::optional<ScriptEntityHandle> owner{};
         ScriptPropertyMap properties;
     };
@@ -63,33 +66,69 @@ namespace engine {
         LuaRuntime& operator=(LuaRuntime&&) = delete;
 
         bool Initialize(std::string& error);
+        bool Initialize(const std::filesystem::path& root, Engine& engine, std::string& error);
+
         /// Pins require to this absolute project content root for the session.
-        /// The compatibility overload above leaves filesystem require unconfigured.
         bool Initialize(const std::filesystem::path& root, std::string& error);
 
         void Shutdown() noexcept;
 
         [[nodiscard]] bool IsInitialized() const noexcept;
-        using LevelLoader = std::function<bool(std::string_view, std::string&)>;
-        void SetLevelLoader(LevelLoader loader);
-        void ClearEntityInstances() noexcept { DestroyEntityInstances(); }
 
-        /// Executes the file anew in a per-instance environment. Top-level scripts return nothing
-        /// and define OnStart(), OnUpdate(dt), OnDestroy(). Returned-table scripts remain supported
-        /// with their original callbacks receiving self.
-        /// Table literals, including nested defaults, are created separately for every instance.
-        /// All three lifecycle callbacks are optional in either format.
-        /// Output is unchanged on failure. Does not start the instance.
-        bool CreateInstance(const ScriptInstanceDesc& desc, InstanceId& instance, std::string& error);
-        /// Starts once; a repeated successful start does not invoke OnStart again.
+        using LevelLoader = std::function<bool(std::string_view, std::string&)>;
+
+        void SetLevelLoader(LevelLoader loader);
+        /// Only call outside runtime callbacks and subsystem iteration/teardown.
+        void FlushSceneCommands();
+        void DiscardSceneCommands() noexcept;
+        [[nodiscard]] bool HasScript(const LuaEntityHandle& entity) const;
+        [[nodiscard]] bool HasScriptMethod(const LuaEntityHandle& entity, const std::string& method) const;
+        sol::variadic_results CallScript(const LuaEntityHandle& entity, const std::string& method,
+            sol::variadic_args args, sol::this_state state);
+        [[nodiscard]] bool HasPersistenceHooks(InstanceId instance) const;
+        /// Accepts 1 <= savedVersion <= current SaveVersion. OnLoadGame receives
+        /// the original saved version and owns migration. Hook failures do not fault the instance.
+        bool ValidateSaveVersion(InstanceId instance, int savedVersion, std::string& error) const;
+        /// Non-mutating preflight against every current instance of this asset.
+        /// Unknown assets succeed; prepared-instance validation remains necessary.
+        bool ValidateAssetSaveVersion(AssetUuid asset, int version, std::string& error) const;
+        bool CaptureSaveState(InstanceId instance, int& version, StateValue& data, std::string& error);
+        bool RestoreSaveState(InstanceId instance, int savedVersion, const StateValue& data, std::string& error);
+        bool FixedUpdateInstance(InstanceId instance, double deltaSeconds, std::string& error);
+        void ClearEntityInstances() noexcept {
+            DiscardSceneCommands();
+            DestroyEntityInstances();
+            DiscardSceneCommands();
+        }
+
+        /// Executes the file anew in a per-instance environment.
+        bool CreateInstance(
+            const ScriptInstanceDesc& desc,
+            InstanceId& instance,
+            std::string& error
+        );
+
         bool StartInstance(InstanceId instance, std::string& error);
-        bool NotifyPhysicsActivity(InstanceId instance, bool awake, std::string& error);
-        bool NotifyPhysicsContact(InstanceId instance, const PhysicsContactEvent& event,
-                                  entt::entity other, std::string& error);
-        bool UpdateInstance(InstanceId instance, double deltaSeconds, std::string& error);
-        /// Calls OnDestroy only for successfully started, non-faulted instances, then releases references.
-        /// Repeated destruction in the same session succeeds. Invalid/stale session IDs fail.
-        /// Cleanup still completes when OnDestroy fails; faulted instances skip all Lua callbacks.
+
+        bool NotifyPhysicsActivity(
+            InstanceId instance,
+            bool awake,
+            std::string& error
+        );
+
+        bool NotifyPhysicsContact(
+            InstanceId instance,
+            const PhysicsContactEvent& event,
+            entt::entity other,
+            std::string& error
+        );
+
+        bool UpdateInstance(
+            InstanceId instance,
+            double deltaSeconds,
+            std::string& error
+        );
+
         bool DestroyInstance(InstanceId instance, std::string& error);
 
         bool ExecuteFile(
@@ -115,9 +154,13 @@ namespace engine {
 
     private:
         friend class ScriptSubsystem;
+
         /// Finish entity-owned instances while autoload services and shared modules still exist.
         void DestroyEntityInstances() noexcept;
+
         bool UpdateInstances(double deltaSeconds, std::string& error);
+        bool FixedUpdateInstances(double deltaSeconds, std::string& error);
+
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };
