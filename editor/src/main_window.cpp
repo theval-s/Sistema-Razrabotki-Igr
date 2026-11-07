@@ -99,7 +99,7 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
 
     context_ = std::make_unique<EditorContext>(engine_, project_, *this, *dock_manager_);
     context_->editActions().attach(viewport_);
-    gizmo_ = std::make_unique<TransformGizmo>(engine_.GetScene(), context_->selection());
+    gizmo_ = std::make_unique<TransformGizmo>(engine_.GetScene(), context_->selection(), &context_->history());
     SceneDocument& document = context_->sceneDocument();
     connect(&document, &SceneDocument::stateChanged, this, [this] {
         refreshTitle();
@@ -397,6 +397,9 @@ void MainWindow::buildMenus() {
 
     const EditActions& edit = context_->editActions();
     auto* edit_menu = context_->menu(tr("&Edit"));
+    edit_menu->addAction(edit.undoAction());
+    edit_menu->addAction(edit.redoAction());
+    edit_menu->addSeparator();
     edit_menu->addAction(edit.duplicateAction());
     edit_menu->addAction(edit.deleteAction());
     edit_menu->addSeparator();

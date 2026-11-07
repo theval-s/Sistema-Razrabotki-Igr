@@ -3,7 +3,6 @@
 #include <QObject>
 #include <QString>
 
-#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -18,7 +17,7 @@ struct Project;
 
 namespace editor {
 
-class SceneEvents;
+class SceneHistory;
 class Selection;
 
 /// The scene file being edited: which one it is, whether it has unsaved changes, and
@@ -29,16 +28,14 @@ class EDITOR_CORE_API SceneDocument : public QObject {
 
 public:
     SceneDocument(engine::Engine& engine, const engine::Project& project, Selection& selection,
-                  SceneEvents& events, QObject* parent = nullptr);
+                  SceneHistory& history, QObject* parent = nullptr);
 
     /// Empty while the scene is untitled (never saved).
     [[nodiscard]] const std::filesystem::path& filePath() const noexcept;
     /// File name without .scene.json, or "Untitled".
     [[nodiscard]] QString displayName() const;
-    /// Every change made through the scene's API counts (SceneEvents::revision()).
-    [[nodiscard]] bool isDirty() const noexcept;
-    /// For changes that the scene doesn't report.
-    void markDirty();
+    /// Every change made through the scene's API counts, until undone (SceneHistory::isClean()).
+    [[nodiscard]] bool isDirty() const;
     /// Forgets unsaved changes, e.g. after building a scene in code.
     void markClean();
     void beginRuntime();
@@ -85,10 +82,8 @@ private:
     engine::Engine& engine_;
     const engine::Project& project_;
     Selection& selection_;
-    SceneEvents& events_;
+    SceneHistory& history_;
     std::filesystem::path file_;
-    std::uint64_t clean_revision_ = 0;
-    bool marked_dirty_ = false;
     bool runtime_ = false;
     bool runtime_dirty_ = false;
     // What stateChanged() last reported.

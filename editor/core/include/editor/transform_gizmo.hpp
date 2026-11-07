@@ -19,13 +19,14 @@ class Scene;
 
 namespace editor {
 
+class SceneHistory;
 class Selection;
 
 /// Handles in the viewport for moving, rotating and scaling the selection with the mouse.
 /// They sit on the primary entity and stay the same size on screen.
 /// Translate and rotate act around the primary entity; scale changes each entity's own scale.
 /// A selected entity whose ancestor is selected too moves with that ancestor only.
-/// Edits go through Scene::SetTransform(), so they are reported like any other.
+/// Edits go through Scene::SetTransform(), so they are reported like any other; with a history, each drag is one step.
 class EDITOR_CORE_API TransformGizmo {
 public:
     using Vector2 = DirectX::SimpleMath::Vector2;
@@ -34,7 +35,7 @@ public:
     enum class Mode { Translate, Rotate, Scale };
     enum class Space { World, Local };
 
-    TransformGizmo(engine::Scene& scene, const Selection& selection);
+    TransformGizmo(engine::Scene& scene, const Selection& selection, SceneHistory* history = nullptr);
 
     [[nodiscard]] Mode mode() const noexcept { return mode_; }
     /// Ends a drag first, keeping where it got to.
@@ -102,6 +103,7 @@ private:
 
     engine::Scene& scene_;
     const Selection& selection_;
+    SceneHistory* history_;
     Mode mode_ = Mode::Translate;
     Space space_ = Space::World;
     bool enabled_ = true;

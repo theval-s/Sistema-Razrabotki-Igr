@@ -2,6 +2,7 @@
 
 #include <QAction>
 #include <QKeySequence>
+#include <QUndoStack>
 #include <QWidget>
 
 #include <algorithm>
@@ -27,6 +28,7 @@
 
 #include <editor/editor_camera.hpp>
 #include <editor/play_session.hpp>
+#include <editor/scene_history.hpp>
 #include <editor/selection.hpp>
 
 namespace editor {
@@ -102,8 +104,9 @@ void collectSubtree(const engine::Scene& scene, const entt::entity entity, std::
 
 }  // namespace
 
-EditActions::EditActions(engine::Engine& engine, Selection& selection, PlaySession& play_session, QObject* parent)
-    : QObject(parent), engine_(engine), selection_(selection), play_session_(play_session) {
+EditActions::EditActions(engine::Engine& engine, Selection& selection, SceneHistory& history,
+                         PlaySession& play_session, QObject* parent)
+    : QObject(parent), engine_(engine), selection_(selection), history_(history), play_session_(play_session) {
     const auto make = [this](const QString& text, const QKeySequence& shortcut, auto&& slot) {
         auto* action = new QAction(text, this);
         action->setShortcut(shortcut);
@@ -111,6 +114,8 @@ EditActions::EditActions(engine::Engine& engine, Selection& selection, PlaySessi
         connect(action, &QAction::triggered, this, slot);
         return action;
     };
+    undo_ = make(tr("&Undo"), QKeySequence::Undo, [this] { history_.stack().undo(); });
+    redo_ = make(tr("&Redo"), QKeySequence::Redo, [this] { history_.stack().redo(); });
     duplicate_ = make(tr("D&uplicate"), QKeySequence(Qt::CTRL | Qt::Key_D), [this] { duplicateSelected(); });
     delete_ = make(tr("&Delete"), QKeySequence::Delete, [this] { deleteSelected(); });
     select_all_ = make(tr("Select &All"), QKeySequence::SelectAll, [this] { selectAll(); });
@@ -119,6 +124,7 @@ EditActions::EditActions(engine::Engine& engine, Selection& selection, PlaySessi
     //TODO: more?
 
     connect(&selection_, &Selection::changed, this, &EditActions::refresh);
+    connect(&history_.stack(), &QUndoStack::indexChanged, this, &EditActions::refresh);
     connect(&play_session_, &PlaySession::playingChanged, this, &EditActions::refresh);
     refresh();
 }
@@ -128,10 +134,14 @@ void EditActions::attach(QWidget* scope) const {
 }
 
 QList<QAction*> EditActions::actions() const {
-    return {duplicate_, delete_, select_all_, deselect_, focus_};
+    return {undo_, redo_, duplicate_, delete_, select_all_, deselect_, focus_};
 }
 
 void EditActions::duplicateSelected() {
+    history_.edit(tr("Duplicate"), [this] { duplicate(); });
+}
+
+void EditActions::duplicate() {
     engine::Scene& scene = engine_.GetScene();
     std::vector<engine::SceneEntityDefinition> definitions;
     if (std::string error;
@@ -155,6 +165,10 @@ void EditActions::duplicateSelected() {
 }
 
 void EditActions::deleteSelected() {
+    history_.edit(tr("Delete"), [this] { remove(); });
+}
+
+void EditActions::remove() {
     engine::Scene& scene = engine_.GetScene();
     // A copy: the selection can change under a span while entities go.
     const std::vector<entt::entity> entities(selection_.entities().begin(), selection_.entities().end());
@@ -196,6 +210,11 @@ void EditActions::focusSelection() {
 void EditActions::refresh() {
     const bool editing = !play_session_.isPlaying();
     const bool selected = editing && !selection_.isEmpty();
+    const QUndoStack& stack = history_.stack();
+    undo_->setEnabled(editing && stack.canUndo());
+    undo_->setText(stack.canUndo() ? tr("&Undo %1").arg(stack.undoText()) : tr("&Undo"));
+    redo_->setEnabled(editing && stack.canRedo());
+    redo_->setText(stack.canRedo() ? tr("&Redo %1").arg(stack.redoText()) : tr("&Redo"));
     duplicate_->setEnabled(selected);
     delete_->setEnabled(selected);
     select_all_->setEnabled(editing);
