@@ -73,6 +73,36 @@ struct RuntimeApiFixture : testing::Test {
 };
 }
 
+TEST_F(RuntimeApiFixture, InvalidRotationArgumentsAreCatchableAndLeaveRotationUnchanged) {
+    const auto owner = scene.CreateEntity("owner");
+    const auto instance = Create(R"(
+        function OnStart()
+            entity:SetRotation(Quaternion.Euler(0.2, 0.3, 0.4))
+            local before = entity:GetRotation()
+            local function rejected(callback)
+                local ok, message = pcall(callback)
+                assert(not ok and type(message) == 'string' and #message > 0)
+                local after = entity:GetRotation()
+                assert(after.x == before.x and after.y == before.y
+                    and after.z == before.z and after.w == before.w)
+            end
+            rejected(function() entity:SetRotation(Vector3.new(0, 0, 0)) end)
+            rejected(function() entity:SetRotation(0, 0, 0) end)
+            rejected(function() entity:SetRotation(nil) end)
+            rejected(function() entity:SetRotation() end)
+        end
+        function OnUpdate(dt)
+            entity:SetRotation(Quaternion.Euler(0, 0, dt))
+        end
+    )", "Test", owner);
+    ASSERT_TRUE(runtime.StartInstance(instance, error)) << error;
+    ASSERT_TRUE(runtime.UpdateInstance(instance, 0.5, error)) << error;
+    const auto expected = DirectX::SimpleMath::Quaternion::CreateFromYawPitchRoll(0, 0, 0.5f);
+    const auto actual = scene.GetTransform(owner).rotation;
+    EXPECT_NEAR(actual.z, expected.z, 1e-6f);
+    EXPECT_NEAR(actual.w, expected.w, 1e-6f);
+}
+
 TEST_F(RuntimeApiFixture, SelfDestroyWaitsUntilExplicitSafeBoundary) {
     const auto owner = scene.CreateEntity("owner");
     const auto instance = Create(R"(
