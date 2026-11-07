@@ -19,8 +19,10 @@
 #include <string>
 #include <utility>
 
+#include <editor/edit_actions.hpp>
 #include <editor/editor_context.hpp>
 #include <editor/scene_events.hpp>
+#include <editor/scene_history.hpp>
 #include <editor/selection.hpp>
 
 #include "component_inspectors.hpp"
@@ -77,6 +79,7 @@ InspectorPanel::InspectorPanel(editor::EditorContext& context, QWidget* parent) 
     layout->addWidget(add_);
 
     connect(name_, &QLineEdit::editingFinished, this, &InspectorPanel::applyName);
+    addActions({context_.editActions().undoAction(), context_.editActions().redoAction()});
 
     connect(&context_.sceneEvents(), &editor::SceneEvents::changed, this, [this](const editor::SceneChanges& changes) {
         if (entity_ != entt::null && changes.entities.contains(entity_)) {
@@ -144,7 +147,7 @@ void InspectorPanel::applyName() {
     if (entity_ != entt::null && scene.IsValid(entity_)) {
         const std::string name = name_->text().toStdString();
         if (name != scene.GetName(entity_)) {
-            scene.SetName(entity_, name);
+            context_.history().edit(tr("Rename"), [&] { scene.SetName(entity_, name); });
         }
     }
 }
@@ -208,9 +211,9 @@ void InspectorPanel::addSection(const engine::Scene::ComponentType& type) {
         remove->setAutoRaise(true);
         remove->setToolTip(known->removeToolTip.isEmpty() ? tr("Remove %1").arg(known->title) : known->removeToolTip);
         // The rebuild that follows deletes this button later, not while it's in its signal.
-        connect(remove, &QToolButton::clicked, this, [this, remover = known->remove] {
+        connect(remove, &QToolButton::clicked, this, [this, remover = known->remove, title = known->title] {
             if (entity_ != entt::null && context_.scene().IsValid(entity_)) {
-                remover(context_, entity_);
+                context_.history().edit(tr("Remove %1").arg(title), [&] { remover(context_, entity_); });
                 refresh();
             }
         });
@@ -221,6 +224,12 @@ void InspectorPanel::addSection(const engine::Scene::ComponentType& type) {
     QWidget* body = nullptr;
     if (known != inspectors.end()) {
         auto* form = new PropertyForm(section);
+        // Keyed per field: arrows and the wheel apply each step, and those merge while it has the focus.
+        form->setRecorder([this, entity = entity_, title = known->title](const QString& label,
+                                                                          const std::function<void()>& change) {
+            const QString key = QString::fromStdString(context_.scene().GetId(entity).ToString()) + u'/' + title + u'/' + label;
+            context_.history().edit(tr("Change %1").arg(label), change, key);
+        });
         known->build(*form, context_, entity_);
         forms_.push_back(form);
         body = form;
@@ -259,12 +268,12 @@ void InspectorPanel::fillAddMenu() {
             continue;
         }
         QAction* action = add_menu_->addAction(inspector.title);
-        connect(action, &QAction::triggered, this, [this, adder = inspector.add, id = inspector.type] {
+        connect(action, &QAction::triggered, this, [this, adder = inspector.add, id = inspector.type, title = inspector.title] {
             if (entity_ == entt::null || !context_.scene().IsValid(entity_)) {
                 return;
             }
             collapsed_.erase(id);  // show what was just added
-            adder(context_, entity_);
+            context_.history().edit(tr("Add %1").arg(title), [&] { adder(context_, entity_); });
             refresh();
         });
     }

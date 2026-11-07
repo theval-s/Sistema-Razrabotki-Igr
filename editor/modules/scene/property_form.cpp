@@ -134,8 +134,19 @@ void PropertyForm::addAngle(const QString& label, Binding<float> value, const Nu
     addScaledFloat(label, std::move(value), format, DirectX::XMConvertToDegrees(1.0f));
 }
 
+void PropertyForm::record(const QString& label, const std::function<void()>& change) const {
+    for (const QObject* object = this; object != nullptr; object = object->parent()) {
+        if (const auto* form = dynamic_cast<const PropertyForm*>(object); form != nullptr && form->recorder_) {
+            form->recorder_(label, change);
+            return;
+        }
+    }
+    change();
+}
+
 void PropertyForm::addScaledFloat(const QString& label, Binding<float> value, const NumberFormat format,
                                   const double scale) {
+    value.set = recorded(label, std::move(value.set));
     QDoubleSpinBox* box = makeSpinBox(this, format);
     layout_->addRow(label, box);
     connect(box, &QDoubleSpinBox::valueChanged, this, [set = value.set, scale](const double shown) {
@@ -149,6 +160,7 @@ void PropertyForm::addScaledFloat(const QString& label, Binding<float> value, co
 }
 
 void PropertyForm::addVec3(const QString& label, Binding<Vector3> value, const NumberFormat format) {
+    value.set = recorded(label, std::move(value.set));
     QHBoxLayout* row = nullptr;
     const Vec3Boxes boxes = makeVec3Boxes(this, format, row);
     layout_->addRow(label, row);
@@ -163,6 +175,7 @@ void PropertyForm::addVec3(const QString& label, Binding<Vector3> value, const N
 }
 
 void PropertyForm::addScale(const QString& label, Binding<Vector3> value, const NumberFormat format) {
+    value.set = recorded(label, std::move(value.set));
     QHBoxLayout* row = nullptr;
     const Vec3Boxes boxes = makeVec3Boxes(this, format, row);
     auto* link = new QToolButton(this);
@@ -199,6 +212,7 @@ void PropertyForm::addScale(const QString& label, Binding<Vector3> value, const 
 }
 
 void PropertyForm::addRotation(const QString& label, Binding<Quaternion> value) {
+    value.set = recorded(label, std::move(value.set));
     QHBoxLayout* row = nullptr;
     const Vec3Boxes boxes = makeVec3Boxes(this, {.step = 1.0, .decimals = 2}, row);
     layout_->addRow(label, row);
@@ -228,6 +242,7 @@ void PropertyForm::addRotation(const QString& label, Binding<Quaternion> value) 
 }
 
 void PropertyForm::addColor(const QString& label, Binding<Vector3> value) {
+    value.set = recorded(label, std::move(value.set));
     QHBoxLayout* row = nullptr;
     const Vec3Boxes boxes = makeVec3Boxes(this, {.step = 0.05, .decimals = 3, .minimum = 0.0, .maximum = 1.0e3}, row);
     auto* swatch = new QToolButton(this);
@@ -267,6 +282,7 @@ void PropertyForm::addColor(const QString& label, Binding<Vector3> value) {
 }
 
 void PropertyForm::addBool(const QString& label, Binding<bool> value) {
+    value.set = recorded(label, std::move(value.set));
     auto* box = new QCheckBox(this);
     layout_->addRow(label, box);
     connect(box, &QCheckBox::toggled, this, [set = value.set](const bool checked) { set(checked); });

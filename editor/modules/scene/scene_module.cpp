@@ -32,6 +32,7 @@
 #include <editor/menu_button.hpp>
 #include <editor/play_session.hpp>
 #include <editor/scene_events.hpp>
+#include <editor/scene_history.hpp>
 #include <editor/selection.hpp>
 
 #include "component_inspectors.hpp"
@@ -328,17 +329,19 @@ public:
     explicit HierarchyPanel(editor::EditorContext& context) : context_(context) {
         tree_ = new HierarchyTree(
             context.scene(), context.selection(), context.sceneEvents(),
-            [this](const QTreeWidgetItem* receiver) { drop(receiver); },
-            [this](const QString& folder, const QString& name) { renameFolder(folder, name); });
+            [this](const QTreeWidgetItem* receiver) { record(QObject::tr("Move"), [this, receiver] { drop(receiver); }); },
+            [this](const QString& folder, const QString& name) {
+                record(QObject::tr("Rename Folder"), [&] { renameFolder(folder, name); });
+            });
         auto* layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->addWidget(tree_);
 
         auto* menu = new QMenu(this);
-        menu->addAction(QObject::tr("Empty Entity"), this, [this] { addEmpty(); });
-        menu->addAction(QObject::tr("Cube"), this, [this] { addCube(); });
+        menu->addAction(QObject::tr("Empty Entity"), this, [this] { record(QObject::tr("Add Entity"), [this] { addEmpty(); }); });
+        menu->addAction(QObject::tr("Cube"), this, [this] { record(QObject::tr("Add Cube"), [this] { addCube(); }); });
         menu->addSeparator();
-        menu->addAction(QObject::tr("Folder"), this, [this] { addFolder(); });
+        menu->addAction(QObject::tr("Folder"), this, [this] { record(QObject::tr("Add Folder"), [this] { addFolder(); }); });
 
         const editor::EditActions& edit = context.editActions();
         edit.attach(this);
@@ -350,7 +353,9 @@ public:
             QTreeWidgetItem* item = tree_->itemAt(position);
             if (const QString folder = HierarchyTree::folderOf(item); !folder.isEmpty()) {
                 context_menu.addAction(QObject::tr("Rename"), this, [this, item] { tree_->editItem(item); });
-                context_menu.addAction(QObject::tr("Delete Folder"), this, [this] { deleteSelectedFolders(); });
+                context_menu.addAction(QObject::tr("Delete Folder"), this, [this] {
+                    record(QObject::tr("Delete Folder"), [this] { deleteSelectedFolders(); });
+                });
                 context_menu.addSeparator();
             } else if (item != nullptr) {
                 context_menu.addAction(edit.focusAction());
@@ -358,7 +363,9 @@ public:
                 if (std::ranges::any_of(movableSelection(), [this](const entt::entity entity) {
                         return context_.scene().GetParent(entity) != entt::null;
                     })) {
-                    context_menu.addAction(QObject::tr("Unparent"), this, [this] { reparentSelected(entt::null); });
+                    context_menu.addAction(QObject::tr("Unparent"), this, [this] {
+                        record(QObject::tr("Unparent"), [this] { reparentSelected(entt::null); });
+                    });
                 }
                 context_menu.addAction(edit.deleteAction());
                 context_menu.addSeparator();
@@ -385,6 +392,10 @@ protected:
     }
 
 private:
+    void record(const QString& text, const std::function<void()>& change) {
+        context_.history().edit(text, change);
+    }
+
     entt::entity createAtSpawnPoint(const std::string_view name) {
         engine::Scene& scene = context_.scene();
         const entt::entity entity = scene.CreateEntity(name);
