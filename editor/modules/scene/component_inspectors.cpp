@@ -109,7 +109,8 @@ void buildTransform(PropertyForm& form, editor::EditorContext& context, const en
     engine::Scene& scene = context.scene();
     form.addVec3(QObject::tr("Position"), transformField(scene, entity, &engine::Transform::position));
     form.addRotation(QObject::tr("Rotation"), transformField(scene, entity, &engine::Transform::rotation));
-    form.addScale(QObject::tr("Scale"), transformField(scene, entity, &engine::Transform::scale));
+    form.addScale(QObject::tr("Scale"), transformField(scene, entity, &engine::Transform::scale),
+                  {.minimum = 0.0});
 }
 
 /// Comma-separated. Tags go through Scene, which counts them as structural changes.
