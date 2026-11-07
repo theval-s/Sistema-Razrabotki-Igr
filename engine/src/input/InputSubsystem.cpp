@@ -54,11 +54,19 @@ InputSubsystem::Context InputSubsystem::Activate(std::string_view name, int prio
 }
 
 void InputSubsystem::Deactivate(std::uint64_t id) {
+    const auto* removed = Find(id);
+    if (!removed) return;
+    const int priority = removed->priority;
+    const bool keyboard = removed->blockKeyboard;
+    const bool mouse = removed->blockMouse;
     std::erase_if(active_, [id](const ActiveContext& c) { return c.id == id; });
     // A modal disappearing must not make already-held keys start moving a camera.
+    // Only readers/devices masked by that modal need a fresh press. Removing a
+    // nonblocking reader must not disturb input in unrelated host/game contexts.
     for (auto& c : active_) {
-        c.suppressed |= pending_.physicalDown;
-        c.suppressedButtons |= pending_.buttonsDown;
+        if (c.priority >= priority) continue;
+        if (keyboard) c.suppressed |= pending_.physicalDown;
+        if (mouse) c.suppressedButtons |= pending_.buttonsDown;
     }
 }
 
@@ -157,6 +165,10 @@ float InputSubsystem::Context::Axis1D(std::string_view name) const { return *thi
 DirectX::SimpleMath::Vector2 InputSubsystem::Context::Axis2D(std::string_view name) const {
     return *this ? input_->Axis2(*this, name) : DirectX::SimpleMath::Vector2{};
 }
+DirectX::SimpleMath::Vector2 InputSubsystem::Context::MousePosition() const {
+    const auto* active = *this ? input_->Find(id_) : nullptr;
+    return active && input_->Allowed(*active, true) ? input_->GetMousePosition() : DirectX::SimpleMath::Vector2{};
+}
 DirectX::SimpleMath::Vector2 InputSubsystem::Context::MouseDelta() const {
     const auto* active = *this ? input_->Find(id_) : nullptr;
     return active && input_->Allowed(*active, true) ? input_->GetMouseDelta() : DirectX::SimpleMath::Vector2{};
@@ -206,6 +218,10 @@ void InputSubsystem::OnMouseMove(const float dx, const float dy) {
     pending_.mouseDelta += DirectX::SimpleMath::Vector2{dx, dy};
 }
 
+void InputSubsystem::OnMousePosition(const float x, const float y) {
+    if (std::isfinite(x) && std::isfinite(y)) pending_.mousePosition = {x, y};
+}
+
 void InputSubsystem::OnMouseWheel(const float notches) {
     pending_.wheelDelta += notches;
 }
@@ -215,6 +231,7 @@ void InputSubsystem::OnFocusLost() {
     pending_.buttonsReleased |= pending_.buttonsDown;
     pending_.keysDown.reset();
     pending_.mouseDelta = {};
+    pending_.mousePosition = {};
     pending_.wheelDelta = 0.0f;
     pending_.physicalReleased |= pending_.physicalDown;
     pending_.physicalDown.reset();

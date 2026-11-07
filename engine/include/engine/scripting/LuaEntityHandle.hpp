@@ -39,6 +39,17 @@ namespace engine {
         void SetRotation(DirectX::SimpleMath::Quaternion rotation) const;
         [[nodiscard]] DirectX::SimpleMath::Vector3 GetScale() const;
         void SetScale(DirectX::SimpleMath::Vector3 scale) const;
+        [[nodiscard]] DirectX::SimpleMath::Vector3 GetWorldPosition() const;
+        [[nodiscard]] DirectX::SimpleMath::Quaternion GetWorldRotation() const;
+        [[nodiscard]] DirectX::SimpleMath::Vector3 GetWorldScale() const;
+        void SetWorldPosition(DirectX::SimpleMath::Vector3 value) const;
+        void SetWorldRotation(DirectX::SimpleMath::Quaternion value) const;
+        void SetWorldScale(DirectX::SimpleMath::Vector3 value) const;
+        [[nodiscard]] DirectX::SimpleMath::Vector3 Forward() const;
+        [[nodiscard]] DirectX::SimpleMath::Vector3 Right() const;
+        [[nodiscard]] DirectX::SimpleMath::Vector3 Up() const;
+        [[nodiscard]] bool Unparent(bool keepingWorld = false) const;
+        [[nodiscard]] bool Equals(const LuaEntityHandle& other) const;
 
         [[nodiscard]] std::vector<std::string> GetTags() const;
         [[nodiscard]] bool HasTag(const std::string& tag) const;

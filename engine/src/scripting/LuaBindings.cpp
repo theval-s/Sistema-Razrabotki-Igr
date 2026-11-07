@@ -1,6 +1,7 @@
 #include <engine/scripting/LuaBindings.hpp>
 
 #include <engine/scripting/LuaEntityHandle.hpp>
+#include <engine/scripting/LuaComponentBindings.hpp>
 
 namespace engine {
 
@@ -48,9 +49,23 @@ namespace engine {
             "GetParent", &LuaEntityHandle::GetParent,
             "GetChildren", &LuaEntityHandle::GetChildren,
 
-            "SetParent", &LuaEntityHandle::SetParent,
+            "GetWorldPosition", &LuaEntityHandle::GetWorldPosition,
+            "SetWorldPosition", &LuaEntityHandle::SetWorldPosition,
+            "GetWorldRotation", &LuaEntityHandle::GetWorldRotation,
+            "SetWorldRotation", &LuaEntityHandle::SetWorldRotation,
+            "GetWorldScale", &LuaEntityHandle::GetWorldScale,
+            "SetWorldScale", &LuaEntityHandle::SetWorldScale,
+            "Forward", &LuaEntityHandle::Forward,
+            "Right", &LuaEntityHandle::Right,
+            "Up", &LuaEntityHandle::Up,
+            sol::meta_function::equal_to, &LuaEntityHandle::Equals,
+            "SetParent", [](const LuaEntityHandle& self, sol::optional<LuaEntityHandle> parent) {
+                return parent ? self.SetParent(*parent) : self.Unparent();
+            },
             "SetParentKeepingWorld",
-            &LuaEntityHandle::SetParentKeepingWorld
+            [](const LuaEntityHandle& self, sol::optional<LuaEntityHandle> parent) {
+                return parent ? self.SetParentKeepingWorld(*parent) : self.Unparent(true);
+            }
         );
     }
 
@@ -59,6 +74,7 @@ namespace engine {
         LuaBindingsContext& context
     ) {
         RegisterEntityHandleBindings(lua);
+        RegisterComponentBindings(lua, context);
         RegisterSceneBindings(lua, context);
     }
 

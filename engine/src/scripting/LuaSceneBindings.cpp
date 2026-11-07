@@ -13,6 +13,7 @@
 #include <engine/scene/Scene.hpp>
 #include <engine/scene/StateValue.hpp>
 #include <engine/scripting/LuaEntityHandle.hpp>
+#include <engine/scripting/LuaComponentBindings.hpp>
 
 namespace engine {
 
@@ -208,11 +209,11 @@ namespace engine {
                 );
             }
 
-            const float lengthSquared =
-                rotation.x * rotation.x +
-                rotation.y * rotation.y +
-                rotation.z * rotation.z +
-                rotation.w * rotation.w;
+            const double lengthSquared =
+                double(rotation.x) * rotation.x +
+                double(rotation.y) * rotation.y +
+                double(rotation.z) * rotation.z +
+                double(rotation.w) * rotation.w;
 
             if (lengthSquared <= 1e-12f) {
                 throw std::runtime_error(
@@ -220,13 +221,12 @@ namespace engine {
                 );
             }
 
-            const float inverseLength =
-                1.0f / std::sqrt(lengthSquared);
+            const double inverseLength = 1.0 / std::sqrt(lengthSquared);
 
-            rotation.x *= inverseLength;
-            rotation.y *= inverseLength;
-            rotation.z *= inverseLength;
-            rotation.w *= inverseLength;
+            rotation.x = static_cast<float>(rotation.x * inverseLength);
+            rotation.y = static_cast<float>(rotation.y * inverseLength);
+            rotation.z = static_cast<float>(rotation.z * inverseLength);
+            rotation.w = static_cast<float>(rotation.w * inverseLength);
         }
         void ValidateSpawnOptions(LuaSpawnOptions& options) {
             if (!IsFinite(options.position)) {
@@ -436,6 +436,7 @@ namespace engine {
 
 
                     ValidateSpawnOptions(config);
+                    auto addComponents = PrepareLuaSpawnComponents(context, options);
                     entt::entity parentEntity = entt::null;
 
                     if (config.parent.IsValid()) {
@@ -466,7 +467,10 @@ namespace engine {
 
                     current->SetTransform(entity, transform);
 
-                    return LuaEntityHandle::FromScene(*current, entity);
+                    auto handle = LuaEntityHandle::FromScene(*current, entity);
+                    try { addComponents(handle); }
+                    catch (...) { current->DestroyEntity(entity); throw; }
+                    return handle;
             }
         );
 
@@ -477,7 +481,10 @@ namespace engine {
         scene.set_function(
             "Destroy",
             [&context](LuaEntityHandle entity) {
-                entity.GetScene()->DestroyEntity(entity.Resolve());
+                Scene* current = context.GetScene();
+                if (!current || !entity.BelongsTo(*current))
+                    throw std::runtime_error("Invalid entity or entity belongs to another scene");
+                current->DestroyEntity(entity.Resolve());
             }
         );
 

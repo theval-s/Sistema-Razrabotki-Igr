@@ -19,6 +19,8 @@
 #include <engine/window.hpp>
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/input/Win32InputHost.hpp>
+#include <engine/scripting/ScriptSubsystem.hpp>
+#include <engine/assets/AssetPathResolver.hpp>
 
 namespace {
 
@@ -270,6 +272,7 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
     engine::Engine engine{config};
     engine.AddSubsystem<engine::Win32InputHost>(window);
     engine.AddSubsystem<engine::InputSubsystem>();
+    engine.AddSubsystem<engine::ScriptSubsystem>();
     engine.AddSubsystem<engine::RenderingSubsystem>();
     engine.AddSubsystem<ExampleGameLogic>(window);
     engine.AddSubsystem<engine::PhysicsSubsystem>();
@@ -286,6 +289,10 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
         return 1;
     }
     engine::log::Game().info("{} animated entities", engine.GetScene().FindWithTag("animated").size());
+    if (!engine.StartGame(engine::AssetPathResolver::GetGameRoot(), {}, error)) {
+        engine::log::Game().error("Cannot start scripting: {}", error);
+        return 1;
+    }
     const bool ran = engine.Run();
     engine.Shutdown();
     return ran ? 0 : 1;

@@ -6,6 +6,8 @@
 #include <engine/scripting/ScriptProperties.hpp>
 #include <engine/physics/PhysicsEvents.hpp>
 #include <engine/scripting/LuaEntityHandle.hpp>
+#include <engine/scene/GameDocument.hpp>
+#include <sol/forward.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -76,7 +78,28 @@ namespace engine {
         using LevelLoader = std::function<bool(std::string_view, std::string&)>;
 
         void SetLevelLoader(LevelLoader loader);
-        void ClearEntityInstances() noexcept { DestroyEntityInstances(); }
+        /// Only call outside runtime callbacks and subsystem iteration/teardown.
+        void FlushSceneCommands();
+        void DiscardSceneCommands() noexcept;
+        [[nodiscard]] bool HasScript(const LuaEntityHandle& entity) const;
+        [[nodiscard]] bool HasScriptMethod(const LuaEntityHandle& entity, const std::string& method) const;
+        sol::variadic_results CallScript(const LuaEntityHandle& entity, const std::string& method,
+            sol::variadic_args args, sol::this_state state);
+        [[nodiscard]] bool HasPersistenceHooks(InstanceId instance) const;
+        /// Accepts 1 <= savedVersion <= current SaveVersion. OnLoadGame receives
+        /// the original saved version and owns migration. Hook failures do not fault the instance.
+        bool ValidateSaveVersion(InstanceId instance, int savedVersion, std::string& error) const;
+        /// Non-mutating preflight against every current instance of this asset.
+        /// Unknown assets succeed; prepared-instance validation remains necessary.
+        bool ValidateAssetSaveVersion(AssetUuid asset, int version, std::string& error) const;
+        bool CaptureSaveState(InstanceId instance, int& version, StateValue& data, std::string& error);
+        bool RestoreSaveState(InstanceId instance, int savedVersion, const StateValue& data, std::string& error);
+        bool FixedUpdateInstance(InstanceId instance, double deltaSeconds, std::string& error);
+        void ClearEntityInstances() noexcept {
+            DiscardSceneCommands();
+            DestroyEntityInstances();
+            DiscardSceneCommands();
+        }
 
         /// Executes the file anew in a per-instance environment.
         bool CreateInstance(
@@ -136,6 +159,7 @@ namespace engine {
         void DestroyEntityInstances() noexcept;
 
         bool UpdateInstances(double deltaSeconds, std::string& error);
+        bool FixedUpdateInstances(double deltaSeconds, std::string& error);
 
         struct Impl;
         std::unique_ptr<Impl> impl_;

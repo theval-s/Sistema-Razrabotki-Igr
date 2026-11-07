@@ -67,7 +67,7 @@ entt::entity Scene::CreateEntityWithUuid(EntityUuid id, const std::string_view n
 }
 
 void Scene::DestroyEntity(const entt::entity entity) {
-    if (inControllerCallback_) {
+    if (inControllerCallback_ || externalCallbackDepth_ != 0) {
         commands_.push_back({Command::Kind::DestroyEntity, entity});
         return;
     }
@@ -99,7 +99,7 @@ void Scene::DestroyEntity(const entt::entity entity) {
 }
 
 void Scene::Clear() {
-    if (inControllerCallback_) {
+    if (inControllerCallback_ || externalCallbackDepth_ != 0) {
         commands_.push_back({Command::Kind::Clear});
         return;
     }
@@ -221,7 +221,7 @@ bool Scene::ValidateController(const ControllerDefinition& definition, std::stri
 }
 
 void Scene::AttachController(entt::entity entity, ControllerDefinition definition) {
-    if (inControllerCallback_) {
+    if (inControllerCallback_ || externalCallbackDepth_ != 0) {
         commands_.push_back({Command::Kind::AttachController, entity, std::move(definition)});
         return;
     }
@@ -285,7 +285,7 @@ void Scene::DestroyController(entt::entity entity) {
 }
 
 void Scene::RemoveController(entt::entity entity) {
-    if (inControllerCallback_) {
+    if (inControllerCallback_ || externalCallbackDepth_ != 0) {
         commands_.push_back({Command::Kind::RemoveController, entity});
         return;
     }
@@ -296,7 +296,7 @@ void Scene::RemoveController(entt::entity entity) {
 }
 
 void Scene::SetControllerEnabled(entt::entity entity, bool enabled) {
-    if (inControllerCallback_) {
+    if (inControllerCallback_ || externalCallbackDepth_ != 0) {
         commands_.push_back({Command::Kind::SetControllerEnabled, entity, {}, enabled});
         return;
     }
@@ -382,7 +382,7 @@ void Scene::SetControllerInstantiationEnabled(bool enabled) {
 }
 
 void Scene::SetControllersActive(bool active) {
-    if (inControllerCallback_) {
+    if (inControllerCallback_ || externalCallbackDepth_ != 0) {
         commands_.push_back({Command::Kind::SetControllersActive, entt::null, {}, active});
         return;
     }
@@ -417,10 +417,30 @@ void Scene::UpdateControllers(double deltaSeconds) {
     FlushCommands();
 }
 
+void Scene::EnqueueExternalCommand(std::function<void()> callback) {
+    Command command{Command::Kind::External};
+    command.external = std::move(callback);
+    commands_.push_back(std::move(command));
+    externalCommandsPending_ = true;
+}
+
+void Scene::FlushExternalCommands() {
+    if (externalCallbackDepth_ || inControllerCallback_ || destructionDepth_) return;
+    externalCommandsPending_ = false;
+    FlushCommands();
+}
+
+void Scene::DiscardExternalCommands() noexcept {
+    commands_.clear();
+    externalCommandsPending_ = false;
+}
+
 void Scene::FlushCommands() {
-    if (flushingCommands_ || inControllerCallback_ || destructionDepth_ != 0) return;
+    if (flushingCommands_ || inControllerCallback_ || destructionDepth_ != 0 ||
+        externalCallbackDepth_ != 0 || externalCommandsPending_) return;
     flushingCommands_ = true;
-    while (!commands_.empty()) {
+    struct FlushScope { bool& flushing; ~FlushScope() { flushing = false; } } flushScope{flushingCommands_};
+    while (!commands_.empty() && externalCallbackDepth_ == 0) {
         Command command = std::move(commands_.front());
         commands_.pop_front();
         switch (command.kind) {
@@ -434,9 +454,10 @@ void Scene::FlushCommands() {
         case Command::Kind::RemoveController: RemoveController(command.entity); break;
         case Command::Kind::SetControllerEnabled: SetControllerEnabled(command.entity, command.active); break;
         case Command::Kind::SetControllersActive: SetControllersActive(command.active); break;
+        case Command::Kind::External: if (command.external) command.external(); break;
         }
     }
-    flushingCommands_ = false;
+    if (commands_.empty() && externalCallbackDepth_ == 0) externalCommandsPending_ = false;
 }
 
 std::size_t Scene::AddLifecycleObserver(LifecycleHandler handler) {

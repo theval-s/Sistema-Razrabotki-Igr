@@ -31,6 +31,20 @@ struct SceneDocument;
 struct AutoloadDefinition;
 struct AssetReference;
 
+/// Completion token for an operation queued at the end of an engine tick.
+class ENGINE_API SaveGameRequest {
+public:
+    [[nodiscard]] bool IsComplete() const noexcept { return complete_; }
+    [[nodiscard]] std::pair<bool, std::string> GetResult() const {
+        return {complete_ && success_, complete_ ? error_ : "Request is pending"};
+    }
+private:
+    friend class Engine;
+    bool complete_ = false;
+    bool success_ = false;
+    std::string error_;
+};
+
 [[nodiscard]] ENGINE_API std::string_view version() noexcept;
 
 struct EngineConfig {
@@ -118,6 +132,13 @@ public:
     [[nodiscard]] ENGINE_API bool PlayCurrentScene(const std::filesystem::path& root,
         std::span<const AutoloadDefinition> autoloads, std::string& error);
     ENGINE_API void StopPlay();
+    /// Standalone session: load a scene first, then start scripts and autoloads.
+    [[nodiscard]] ENGINE_API bool StartGame(const std::filesystem::path& root,
+        std::span<const AutoloadDefinition> autoloads, std::string& error);
+    ENGINE_API void StopGame();
+    ENGINE_API void SetSaveDirectory(const std::filesystem::path& directory);
+    [[nodiscard]] ENGINE_API std::shared_ptr<SaveGameRequest> RequestSave(std::string_view slot, std::string& error);
+    [[nodiscard]] ENGINE_API std::shared_ptr<SaveGameRequest> RequestLoad(std::string_view slot, std::string& error);
     /// Validate now, replace the scene after callbacks at the end of Tick.
     [[nodiscard]] ENGINE_API bool RequestOpenLevel(std::string_view name, std::string& error);
 
@@ -172,6 +193,9 @@ public:
 private:
     void ResetSimulation();
     void CommitScene(const SceneDocument& document);
+    std::shared_ptr<SaveGameRequest> QueueGameRequest(std::string_view slot, bool load, std::string& error);
+    void ProcessGameRequests();
+    void CancelGameRequests();
     ENGINE_API Subsystem* RegisterSubsystem(entt::id_type type, std::string_view typeName,
                                             std::unique_ptr<Subsystem> subsystem);
     [[nodiscard]] ENGINE_API Subsystem* FindSubsystem(entt::id_type type, std::string_view typeName) const noexcept;

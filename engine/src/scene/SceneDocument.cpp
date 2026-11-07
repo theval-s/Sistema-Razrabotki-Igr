@@ -167,8 +167,9 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
     }
     if (components.contains("GamePersistence")) {
         const auto& persist = components.at("GamePersistence");
-        Fields(persist, {"transform", "controllerState"});
+        Fields(persist, {"transform", "controllerState", "scriptState"});
         entity.persistence = GamePersistence{persist.at("transform").get<bool>(), persist.at("controllerState").get<bool>()};
+        if (persist.contains("scriptState")) entity.persistence->scriptState = persist.at("scriptState").get<bool>();
     }
     if (components.contains("Bounds")) {
         const auto& bounds = components.at("Bounds");
@@ -392,7 +393,8 @@ Json Encode(const SceneDocument& document) {
             components["Bounds"] = {{"min", Encode(entity.bounds->local.min)}, {"max", Encode(entity.bounds->local.max)}};
         if (entity.persistence)
             components["GamePersistence"] = {{"transform", entity.persistence->transform},
-                                              {"controllerState", entity.persistence->controllerState}};
+                                              {"controllerState", entity.persistence->controllerState},
+                                              {"scriptState", entity.persistence->scriptState}};
         if (entity.script) {
             const auto& reference = entity.script->script;
             if (!reference.id.IsValid() && !reference.path.empty())

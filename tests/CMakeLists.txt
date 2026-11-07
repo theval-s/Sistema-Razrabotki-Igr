@@ -64,7 +64,9 @@ if(SRI_BUILD_EDITOR)
     add_test(NAME log_model_tests COMMAND log_model_tests)
 endif()
 
-add_executable(lua_runtime_tests lua_runtime_tests.cpp autoload_session_tests.cpp play_mode_tests.cpp)
+add_executable(lua_runtime_tests lua_runtime_tests.cpp autoload_session_tests.cpp play_mode_tests.cpp
+    runtime_api_tests.cpp gameplay_binding_tests.cpp component_binding_tests.cpp
+    persistence_document_tests.cpp persistence_integration_tests.cpp)
 target_link_libraries(lua_runtime_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(lua_runtime_tests)
 set_target_properties(lua_runtime_tests PROPERTIES FOLDER tests)
