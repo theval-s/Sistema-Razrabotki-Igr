@@ -37,6 +37,9 @@ namespace engine {
         void SetPosition(DirectX::SimpleMath::Vector3 position) const;
         [[nodiscard]] DirectX::SimpleMath::Quaternion GetRotation() const;
         void SetRotation(DirectX::SimpleMath::Quaternion rotation) const;
+        // Parent-local X/Y/Z degrees, as the inspector shows them.
+        [[nodiscard]] DirectX::SimpleMath::Vector3 GetEulerAngles() const;
+        void SetEulerAngles(DirectX::SimpleMath::Vector3 degrees) const;
         [[nodiscard]] DirectX::SimpleMath::Vector3 GetScale() const;
         void SetScale(DirectX::SimpleMath::Vector3 scale) const;
         [[nodiscard]] DirectX::SimpleMath::Vector3 GetWorldPosition() const;

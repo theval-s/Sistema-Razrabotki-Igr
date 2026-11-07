@@ -321,3 +321,61 @@ TEST(ScriptComponents, PropertyOverridesSurvivePlayStopAndSceneSwitch) {
     EXPECT_EQ(restored->properties.at("speed").Number(), 3);
 }
 } // namespace
+
+TEST(ScriptComponents, ChaserDestroysScriptedTargetAndItself) {
+    PlayFixture f;
+    std::string error;
+    const auto chase = f.root / "Chase.lua";
+    const auto idle = f.root / "Idle.lua";
+    const engine::AssetMetadata chaseMeta{engine::NewUuid(), engine::CatalogAssetKind::Script};
+    const engine::AssetMetadata idleMeta{engine::NewUuid(), engine::CatalogAssetKind::Script};
+    ASSERT_TRUE(engine::CreateNewFile(chase, R"(
+        local target
+        function OnStart() target = Scene.FindByName('Cube') end
+        function OnUpdate(dt)
+            if target and target:IsValid() then
+                local p = entity:GetPosition()
+                local t = target:GetPosition()
+                if (t - p):Length() < 1 then Scene.Destroy(target) else entity:SetPosition(p + (t - p) * 0.5) end
+            else
+                Scene.Destroy(entity)
+            end
+        end
+    )", error));
+    ASSERT_TRUE(engine::CreateNewFile(idle, "function OnUpdate(dt) entity:GetPosition() end", error));
+    ASSERT_TRUE(engine::WriteAssetMetadata(chase, chaseMeta, error));
+    ASSERT_TRUE(engine::WriteAssetMetadata(idle, idleMeta, error));
+    ASSERT_TRUE(f.host.Initialize());
+    auto& scene = f.host.GetScene();
+    const auto cube = scene.CreateEntity("Cube");
+    scene.GetTransform(cube).position.x = 5;
+    scene.AddComponent<engine::ScriptComponent>(cube, engine::ScriptComponent{{idleMeta.id, "game/Idle.lua"}, true});
+    for (int i = 0; i < 3; ++i)
+        scene.AddComponent<engine::ScriptComponent>(scene.CreateEntity("Roach"), engine::ScriptComponent{{chaseMeta.id, "game/Chase.lua"}, true});
+    for (int round = 0; round < 2; ++round) {
+        ASSERT_TRUE(f.host.PlayCurrentScene(f.root, {}, error)) << error;
+        engine::FrameContext frame; frame.deltaSeconds = 0.1;
+        for (int i = 0; i < 20; ++i) f.scripting->Update(frame);
+        EXPECT_EQ(scene.FindFirstByName("Cube"), NullEntity);
+        EXPECT_EQ(scene.FindFirstByName("Roach"), NullEntity);
+        f.host.StopPlay();
+        EXPECT_NE(scene.FindFirstByName("Cube"), NullEntity);
+    }
+}
+
+TEST(ScriptComponents, WrongArgumentTypesAreLuaErrorsInEveryConfig) {
+    PlayFixture f;
+    std::string error;
+    ASSERT_TRUE(f.host.Initialize());
+    f.host.GetScene().CreateEntity("Roach");
+    ASSERT_TRUE(f.host.PlayCurrentScene(f.root, {}, error)) << error;
+    EXPECT_TRUE(f.scripting->GetRuntime().ExecuteString(R"(
+        local e = Scene.FindByName('Roach')
+        assert(not pcall(function() e:SetRotation(0, 0, 0) end))
+        assert(not pcall(function() e:SetRotation(Vector3.new(0, 0, 1)) end))
+        assert(not pcall(function() e:SetPosition(1, 2, 3) end))
+        assert(not pcall(function() e:SetScale(nil) end))
+        e:SetRotation(Quaternion.Euler(0, 0, math.rad(15)))
+    )", "wrong-arguments", error)) << error;
+    f.host.StopPlay();
+}

@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.24)
 include(cmake/Vcpkg.cmake)
 
 project(SRI_Engine
-    VERSION 0.3.0
+    VERSION 0.3.1
     DESCRIPTION "Sistema Razrabotki Igr"
     LANGUAGES CXX
 )

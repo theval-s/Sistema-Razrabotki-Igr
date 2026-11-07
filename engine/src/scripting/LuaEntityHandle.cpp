@@ -205,6 +205,18 @@ namespace engine {
         scene_->SetTransform(entity_, transform);
     }
 
+    Vector3 LuaEntityHandle::GetEulerAngles() const {
+        const Vector3 radians = GetRotation().ToEuler();
+        return {DirectX::XMConvertToDegrees(radians.x), DirectX::XMConvertToDegrees(radians.y),
+                DirectX::XMConvertToDegrees(radians.z)};
+    }
+
+    void LuaEntityHandle::SetEulerAngles(Vector3 degrees) const {
+        if (!IsFinite(degrees)) throw std::runtime_error("Euler angles must be finite");
+        SetRotation(Quaternion::CreateFromYawPitchRoll(Vector3{DirectX::XMConvertToRadians(degrees.x),
+            DirectX::XMConvertToRadians(degrees.y), DirectX::XMConvertToRadians(degrees.z)}));
+    }
+
     // -------------------------------------------------------------------------
     // Transform: Scale
     // -------------------------------------------------------------------------

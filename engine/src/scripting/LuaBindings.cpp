@@ -37,6 +37,8 @@ namespace engine {
 
             "GetRotation", &LuaEntityHandle::GetRotation,
             "SetRotation", &LuaEntityHandle::SetRotation,
+            "GetEulerAngles", &LuaEntityHandle::GetEulerAngles,
+            "SetEulerAngles", &LuaEntityHandle::SetEulerAngles,
 
             "GetScale", &LuaEntityHandle::GetScale,
             "SetScale", &LuaEntityHandle::SetScale,

@@ -440,6 +440,7 @@ parent returns an **invalid handle**, not nil: check `handle:IsValid()`.
 | `GetName()`, `SetName(name)` | Read/write the object name. |
 | `GetPosition()`, `SetPosition(v)` | Parent-local Vector3 position. |
 | `GetRotation()`, `SetRotation(q)` | Parent-local Quaternion; setter normalizes finite nonzero input. |
+| `GetEulerAngles()`, `SetEulerAngles(v)` | Parent-local rotation as a Vector3 of X/Y/Z degrees, matching the inspector. |
 | `GetScale()`, `SetScale(v)` | Parent-local Vector3 scale. |
 | `GetWorldPosition()`, `SetWorldPosition(v)` | World-space position. |
 | `GetWorldRotation()`, `SetWorldRotation(q)` | World-space rotation; setter normalizes finite nonzero input. |

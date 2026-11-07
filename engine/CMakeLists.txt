@@ -318,6 +318,8 @@ set(ENGINE_CORE_SOURCES
 foreach(engine_target IN ITEMS engine engine_static)
     if(TARGET ${engine_target})
         target_compile_options(${engine_target} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/bigobj>)
+        # Type-check Lua arguments in every config: unchecked Release bindings crash on wrong argument types. TO BE REMOVED
+        target_compile_definitions(${engine_target} PUBLIC SOL_ALL_SAFETIES_ON=1)
         target_sources(${engine_target} PRIVATE ${ENGINE_CORE_SOURCES} ${ENGINE_CORE_HEADERS})
         target_include_directories(${engine_target} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
         # All of these appear in public headers (SimpleMath in Transform, EnTT in

@@ -252,6 +252,19 @@ TEST_F(ComponentBindingFixture, SingularAndShearedWorldEditsAreTransactional) {
     )");
 }
 
+TEST_F(ComponentBindingFixture, EulerAnglesAreInspectorDegrees) {
+    Lua(R"(
+        local e = Scene.Spawn('turned')
+        e:SetEulerAngles(Vector3.new(10, 20, 30))
+        local a = e:GetEulerAngles()
+        assert(math.abs(a.x - 10) < 1e-3 and math.abs(a.y - 20) < 1e-3 and math.abs(a.z - 30) < 1e-3)
+        e:SetEulerAngles(Vector3.new(0, 0, 90))
+        assert((e:GetRotation():Rotate(Vector3.new(1, 0, 0)) - Vector3.new(0, 1, 0)):Length() < 1e-5)
+        assert(not pcall(function() e:SetEulerAngles(Vector3.new(0/0, 0, 0)) end))
+        assert(not pcall(function() e:SetEulerAngles(0, 0, 90) end))
+    )");
+}
+
 TEST_F(ComponentBindingFixture, DestroyInvalidAndForeignHandlesRaiseCatchableErrors) {
     Lua(R"(
         assert(not pcall(function() Scene.Destroy(Scene.FindByName('missing')) end))
