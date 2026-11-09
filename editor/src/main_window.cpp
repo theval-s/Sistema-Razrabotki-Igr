@@ -298,6 +298,9 @@ void MainWindow::buildMenus() {
     edit_menu->addAction(edit.undoAction());
     edit_menu->addAction(edit.redoAction());
     edit_menu->addSeparator();
+    edit_menu->addAction(edit.cutAction());
+    edit_menu->addAction(edit.copyAction());
+    edit_menu->addAction(edit.pasteAction());
     edit_menu->addAction(edit.duplicateAction());
     edit_menu->addAction(edit.deleteAction());
     edit_menu->addSeparator();
@@ -308,7 +311,7 @@ void MainWindow::buildMenus() {
     edit_menu->addSeparator();
     buildGizmoActions(*edit_menu);
     edit_menu->addSeparator();
-    auto* preferences = edit_menu->addAction(tr("&Preferences..."), this, [this] {
+    auto* preferences = edit_menu->addAction(tr("Prefere&nces..."), this, [this] {
         PreferencesDialog dialog(context_->shortcuts(), this);
         dialog.exec();
     });

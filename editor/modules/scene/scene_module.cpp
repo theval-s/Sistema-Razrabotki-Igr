@@ -359,6 +359,10 @@ public:
                 context_menu.addSeparator();
             } else if (item != nullptr) {
                 context_menu.addAction(edit.focusAction());
+                context_menu.addSeparator();
+                context_menu.addAction(edit.cutAction());
+                context_menu.addAction(edit.copyAction());
+                context_menu.addAction(edit.pasteAction());
                 context_menu.addAction(edit.duplicateAction());
                 if (std::ranges::any_of(movableSelection(), [this](const entt::entity entity) {
                         return context_.scene().GetParent(entity) != entt::null;
@@ -368,6 +372,9 @@ public:
                     });
                 }
                 context_menu.addAction(edit.deleteAction());
+                context_menu.addSeparator();
+            } else {
+                context_menu.addAction(edit.pasteAction());
                 context_menu.addSeparator();
             }
             context_menu.addActions(menu->actions());

@@ -1,7 +1,10 @@
 #include <editor/edit_actions.hpp>
 
 #include <QAction>
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QKeySequence>
+#include <QMimeData>
 #include <QUndoStack>
 #include <QWidget>
 
@@ -10,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <stdexcept>
 #include <system_error>
 #include <unordered_set>
 #include <utility>
@@ -18,6 +22,7 @@
 #include <DirectXCollision.h>
 #include <SimpleMath.h>
 #include <editor/editor_log.hpp>
+#include <nlohmann/json.hpp>
 
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/engine.hpp>
@@ -71,6 +76,63 @@ void growBounds(const engine::Scene& scene, engine::AssetSystem& assets, const e
     }
 }
 
+/// Entities on the clipboard, as {"version", "parents", "scene"}.
+const QString EntitiesMime = QStringLiteral("application/x-sri-entities");
+
+bool writeEntities(std::vector<engine::SceneEntityDefinition> definitions, QByteArray& result, std::string& error) {
+    nlohmann::json parents = nlohmann::json::object();
+    std::unordered_set<engine::EntityUuid, engine::EntityUuidHash> inside;
+    for (engine::SceneEntityDefinition& definition : definitions) {
+        // Parents come before their children, so one not seen yet is outside.
+        if (definition.parent && !inside.contains(*definition.parent)) {
+            parents[definition.id.ToString()] = definition.parent->ToString();
+            definition.parent.reset();
+        }
+        inside.insert(definition.id);
+    }
+    engine::SceneDocument document;
+    document.entities = std::move(definitions);
+    std::string scene;
+    if (!engine::SerializeSceneDocument(document, scene, error)) return false;
+    const nlohmann::json clip{{"version", 1}, {"parents", std::move(parents)}, {"scene", nlohmann::json::parse(scene)}};
+    result = QByteArray::fromStdString(clip.dump());
+    return true;
+}
+
+bool readEntities(const QByteArray& data, std::vector<engine::SceneEntityDefinition>& result, std::string& error) {
+    try {
+        const auto clip = nlohmann::json::parse(data.constBegin(), data.constEnd());
+        if (clip.at("version").get<int>() != 1) throw std::invalid_argument("unsupported clipboard version");
+        engine::SceneDocument document;
+        if (!engine::ParseSceneDocument(clip.at("scene").dump(), document, error)) return false;
+        const nlohmann::json& parents = clip.at("parents");
+        for (engine::SceneEntityDefinition& definition : document.entities) {
+            if (const auto it = parents.find(definition.id.ToString()); it != parents.end()) {
+                definition.parent = engine::EntityUuid::Parse(it->get<std::string>());
+            }
+        }
+        result = std::move(document.entities);
+        return true;
+    } catch (const std::exception& exception) {
+        //do we really need exception here...?
+        error = exception.what();
+        return false;
+    }
+}
+
+bool hasEntities(const QMimeData* data) {
+    return data != nullptr && data->hasFormat(EntitiesMime);
+}
+
+/// Whether a sibling of `entity` has its name.
+bool nameTaken(const engine::Scene& scene, const entt::entity entity) {
+    const entt::entity parent = scene.GetParent(entity);
+    const auto siblings = parent != entt::null ? scene.GetChildren(parent) : scene.GetRootEntities();
+    return std::ranges::any_of(siblings, [&](const entt::entity sibling) {
+        return sibling != entity && scene.GetName(sibling) == scene.GetName(entity);
+    });
+}
+
 /// "Cube (3)" -> {"Cube", 3}; "Cube" -> {"Cube", 0}.
 std::pair<std::string_view, int> splitCopyNumber(const std::string_view name) {
     const auto open = name.rfind(" (");
@@ -118,6 +180,9 @@ EditActions::EditActions(engine::Engine& engine, Selection& selection, SceneHist
     };
     undo_ = make(QStringLiteral("edit.undo"), tr("&Undo"), QKeySequence::Undo, [this] { history_.stack().undo(); });
     redo_ = make(QStringLiteral("edit.redo"), tr("&Redo"), QKeySequence::Redo, [this] { history_.stack().redo(); });
+    cut_ = make(QStringLiteral("edit.cut"), tr("Cu&t"), QKeySequence::Cut, [this] { cutSelected(); });
+    copy_ = make(QStringLiteral("edit.copy"), tr("&Copy"), QKeySequence::Copy, [this] { copySelected(); });
+    paste_ = make(QStringLiteral("edit.paste"), tr("&Paste"), QKeySequence::Paste, [this] { paste(); });
     duplicate_ = make(QStringLiteral("edit.duplicate"), tr("D&uplicate"), QKeySequence(Qt::CTRL | Qt::Key_D),
                       [this] { duplicateSelected(); });
     delete_ = make(QStringLiteral("edit.delete"), tr("&Delete"), QKeySequence::Delete, [this] { deleteSelected(); });
@@ -132,6 +197,7 @@ EditActions::EditActions(engine::Engine& engine, Selection& selection, SceneHist
     connect(&selection_, &Selection::changed, this, &EditActions::refresh);
     connect(&history_.stack(), &QUndoStack::indexChanged, this, &EditActions::refresh);
     connect(&play_session_, &PlaySession::playingChanged, this, &EditActions::refresh);
+    connect(QGuiApplication::clipboard(), &QClipboard::dataChanged, this, &EditActions::refresh);
     refresh();
 }
 
@@ -140,7 +206,39 @@ void EditActions::attach(QWidget* scope) const {
 }
 
 QList<QAction*> EditActions::actions() const {
-    return {undo_, redo_, duplicate_, delete_, select_all_, deselect_, focus_};
+    return {undo_, redo_, cut_, copy_, paste_, duplicate_, delete_, select_all_, deselect_, focus_};
+}
+
+bool EditActions::copySelected() {
+    std::vector<engine::SceneEntityDefinition> definitions;
+    std::string error;
+    QByteArray data;
+    if (!engine::CaptureEntities(engine_.GetScene(), engine_.GetSceneAssets(), selection_.entities(), definitions,
+                                 error) ||
+        !writeEntities(std::move(definitions), data, error)) {
+        editorLog().warn("Could not copy: {}", error);
+        return false;
+    }
+    auto* mime = new QMimeData;
+    mime->setData(EntitiesMime, data);
+    QGuiApplication::clipboard()->setMimeData(mime);
+    return true;
+}
+
+void EditActions::cutSelected() {
+    // Nothing goes if it couldn't be copied.
+    if (copySelected()) history_.edit(tr("Cut"), [this] { remove(); });
+}
+
+void EditActions::paste() {
+    const QMimeData* clipboard = QGuiApplication::clipboard()->mimeData();
+    if (!hasEntities(clipboard)) return;
+    std::vector<engine::SceneEntityDefinition> definitions;
+    if (std::string error; !readEntities(clipboard->data(EntitiesMime), definitions, error)) {
+        editorLog().warn("Could not paste: {}", error);
+        return;
+    }
+    history_.edit(tr("Paste"), [this, &definitions] { place(definitions); });
 }
 
 void EditActions::duplicateSelected() {
@@ -148,15 +246,19 @@ void EditActions::duplicateSelected() {
 }
 
 void EditActions::duplicate() {
-    engine::Scene& scene = engine_.GetScene();
     std::vector<engine::SceneEntityDefinition> definitions;
-    if (std::string error;
-        !engine::CaptureEntities(scene, engine_.GetSceneAssets(), selection_.entities(), definitions, error)) {
+    if (std::string error; !engine::CaptureEntities(engine_.GetScene(), engine_.GetSceneAssets(),
+                                                    selection_.entities(), definitions, error)) {
         editorLog().warn("Could not duplicate: {}", error);
         return;
     }
+    place(definitions);
+}
+
+void EditActions::place(const std::span<const engine::SceneEntityDefinition> definitions) {
+    engine::Scene& scene = engine_.GetScene();
     const auto copies = engine::InstantiateEntities(definitions, engine_.GetSceneAssets(), scene, true);
-    // The copies of the selected entities, not of their children; in selection order, so the
+    // The copies of the top entities, not of their children; in selection order, so the
     // primary's copy is the new primary.
     std::unordered_set<engine::EntityUuid, engine::EntityUuidHash> copied;
     std::vector<entt::entity> tops;
@@ -165,8 +267,10 @@ void EditActions::duplicate() {
         if (!definition.parent || !copied.contains(*definition.parent)) tops.push_back(copies[i]);
         copied.insert(definition.id);
     }
-    // Only the selected ones: their children keep their names, being under a new parent.
-    for (const entt::entity top : tops) numberCopy(scene, top);
+    // Only the top ones: their children keep their names, being under a new parent.
+    for (const entt::entity top : tops) {
+        if (nameTaken(scene, top)) numberCopy(scene, top);
+    }
     selection_.setEntities(tops);
 }
 
@@ -221,6 +325,9 @@ void EditActions::refresh() {
     undo_->setText(stack.canUndo() ? tr("&Undo %1").arg(stack.undoText()) : tr("&Undo"));
     redo_->setEnabled(editing && stack.canRedo());
     redo_->setText(stack.canRedo() ? tr("&Redo %1").arg(stack.redoText()) : tr("&Redo"));
+    cut_->setEnabled(selected);
+    copy_->setEnabled(selected);
+    paste_->setEnabled(editing && hasEntities(QGuiApplication::clipboard()->mimeData()));
     duplicate_->setEnabled(selected);
     delete_->setEnabled(selected);
     select_all_->setEnabled(editing);
