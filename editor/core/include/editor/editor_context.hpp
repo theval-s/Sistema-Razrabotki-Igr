@@ -35,6 +35,7 @@ class PlaySession;
 class SceneDocument;
 class SceneEvents;
 class SceneHistory;
+class ShortcutRegistry;
 class StartupScene;
 
 /// What the editor hands to its modules: the engine, the project, the scene being edited, the
@@ -74,6 +75,8 @@ public:
     [[nodiscard]] EditActions& editActions() noexcept;
     /// The viewport's POV
     [[nodiscard]] EditorCameraSubsystem* camera() noexcept;
+    /// Every shortcut: bind actions through it instead of setShortcut(), so the user can change them.
+    [[nodiscard]] ShortcutRegistry& shortcuts() noexcept;
 
     /// Finds the menu-bar menu with this title (ignoring '&' mnemonics) or appends a new one.
     QMenu* menu(const QString& title);
@@ -106,6 +109,7 @@ private:
     ads::CDockManager& dock_manager_;
     QToolBar* tool_bar_ = nullptr;
     std::vector<Panel> panels_;
+    std::unique_ptr<ShortcutRegistry> shortcuts_;
     std::unique_ptr<SceneEvents> scene_events_;  // before everything that follows the scene
     Selection selection_;
     std::unique_ptr<SceneHistory> history_;

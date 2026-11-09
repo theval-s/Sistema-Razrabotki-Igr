@@ -22,6 +22,7 @@
 #include <editor/scene_document.hpp>
 #include <editor/scene_events.hpp>
 #include <editor/scene_history.hpp>
+#include <editor/shortcut_registry.hpp>
 #include <editor/startup_scene.hpp>
 
 namespace editor {
@@ -48,11 +49,11 @@ ads::DockWidgetArea toAdsArea(const Qt::DockWidgetArea area) {
 EditorContext::EditorContext(engine::Engine& engine, engine::Project& project, QMainWindow& window,
                              ads::CDockManager& dock_manager)
     : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager),
-      scene_events_(std::make_unique<SceneEvents>(engine.GetScene())), selection_(engine.GetScene(), *scene_events_),
+      shortcuts_(std::make_unique<ShortcutRegistry>()), scene_events_(std::make_unique<SceneEvents>(engine.GetScene())), selection_(engine.GetScene(), *scene_events_),
       history_(std::make_unique<SceneHistory>(engine, selection_, *scene_events_)),
       scene_document_(std::make_unique<SceneDocument>(engine, project, selection_, *history_)),
       play_session_(std::make_unique<PlaySession>(engine, project, selection_, *scene_document_)),
-      edit_actions_(std::make_unique<EditActions>(engine, selection_, *history_, *play_session_)),
+      edit_actions_(std::make_unique<EditActions>(engine, selection_, *history_, *play_session_, *shortcuts_)),
       startup_scene_(std::make_unique<StartupScene>(*this)) {}
 
 EditorContext::~EditorContext() {
@@ -115,6 +116,10 @@ EditActions& EditorContext::editActions() noexcept {
 EditorCameraSubsystem* EditorContext::camera() noexcept {
     // MainWindow registers it when it starts the engine.
     return engine_.GetSubsystem<EditorCameraSubsystem>();
+}
+
+ShortcutRegistry& EditorContext::shortcuts() noexcept {
+    return *shortcuts_;
 }
 
 QMenu* EditorContext::menu(const QString& title) {

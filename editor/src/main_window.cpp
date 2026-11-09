@@ -46,6 +46,7 @@
 #include <editor/viewport_picker.hpp>
 #include <editor/viewport_widget.hpp>
 #include <editor/selection.hpp>
+#include <editor/shortcut_registry.hpp>
 #include <editor/startup_scene.hpp>
 #include <editor/editor_log.hpp>
 
@@ -267,21 +268,27 @@ void MainWindow::viewportReleased(QPointF, const Qt::MouseButton button) {
 
 void MainWindow::buildMenus() {
     auto* file_menu = context_->menu(tr("&File"));
-    file_menu->addAction(tr("New &Project..."), this, [this] { switchProject(createProjectInteractively(this)); });
-    file_menu->addAction(tr("&Open Project..."), this, [this] { switchProject(pickProjectFile(this)); });
+    const auto add = [this, file_menu](const QString& id, const QString& text, const QKeySequence& shortcut,
+                                       auto&& slot) {
+        context_->shortcuts().bind(file_menu->addAction(text, this, slot), id, tr("File"), shortcut);
+    };
+    add(QStringLiteral("file.new-project"), tr("New &Project..."), {},
+        [this] { switchProject(createProjectInteractively(this)); });
+    add(QStringLiteral("file.open-project"), tr("&Open Project..."), {},
+        [this] { switchProject(pickProjectFile(this)); });
     file_menu->addSeparator();
     SceneDocument& document = context_->sceneDocument();
-    file_menu->addAction(tr("&New Scene..."), QKeySequence::New, this,
-                         [this, &document] { document.createInteractive(this); });
-    file_menu->addAction(tr("Open &Scene..."), QKeySequence::Open, this,
-                         [this, &document] { document.openInteractive(this); });
-    file_menu->addAction(tr("&Save Scene"), QKeySequence::Save, this,
-                         [this, &document] { document.saveInteractive(this, false); });
-    file_menu->addAction(tr("Save Scene &As..."), QKeySequence::SaveAs, this,
-                         [this, &document] { document.saveInteractive(this, true); });
+    add(QStringLiteral("file.new-scene"), tr("&New Scene..."), QKeySequence::New,
+        [this, &document] { document.createInteractive(this); });
+    add(QStringLiteral("file.open-scene"), tr("Open &Scene..."), QKeySequence::Open,
+        [this, &document] { document.openInteractive(this); });
+    add(QStringLiteral("file.save-scene"), tr("&Save Scene"), QKeySequence::Save,
+        [this, &document] { document.saveInteractive(this, false); });
+    add(QStringLiteral("file.save-scene-as"), tr("Save Scene &As..."), QKeySequence::SaveAs,
+        [this, &document] { document.saveInteractive(this, true); });
     file_menu->addSeparator();
 
-    file_menu->addAction(tr("E&xit"), this, &QWidget::close);
+    add(QStringLiteral("file.exit"), tr("E&xit"), {}, [this] { close(); });
     // Scenes and projects can't be opened or saved while the scene is a running copy.
     connect(&context_->playSession(), &PlaySession::playingChanged, file_menu, &QWidget::setDisabled);
 
@@ -309,9 +316,9 @@ void MainWindow::buildMenus() {
 void MainWindow::buildGizmoActions(QMenu& menu) {
     // Shortcuts only while the viewport has focus, so W/E/R/X still type in fields elsewhere.
     // While the right button turns the view, the viewport keeps them for the camera.
-    const auto add = [this, &menu](const QString& text, const Qt::Key key) {
+    const auto add = [this, &menu](const QString& id, const QString& text, const Qt::Key key) {
         auto* action = menu.addAction(text);
-        action->setShortcut(QKeySequence(key));
+        context_->shortcuts().bind(action, id, tr("Gizmo"), QKeySequence(key));
         action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         action->setCheckable(true);
         viewport_->addAction(action);
@@ -320,20 +327,24 @@ void MainWindow::buildGizmoActions(QMenu& menu) {
         return action;
     };
     auto* modes = new QActionGroup(this);
-    const std::pair<QString, TransformGizmo::Mode> entries[] = {
-        {tr("&Move"), TransformGizmo::Mode::Translate},
-        {tr("&Rotate"), TransformGizmo::Mode::Rotate},
-        {tr("S&cale"), TransformGizmo::Mode::Scale},
+    const struct {
+        QString id;
+        QString text;
+        Qt::Key key;
+        TransformGizmo::Mode mode;
+    } entries[] = {
+        {QStringLiteral("gizmo.move"), tr("&Move"), Qt::Key_W, TransformGizmo::Mode::Translate},
+        {QStringLiteral("gizmo.rotate"), tr("&Rotate"), Qt::Key_E, TransformGizmo::Mode::Rotate},
+        {QStringLiteral("gizmo.scale"), tr("S&cale"), Qt::Key_R, TransformGizmo::Mode::Scale},
     };
-    const Qt::Key keys[] = {Qt::Key_W, Qt::Key_E, Qt::Key_R};
-    for (std::size_t i = 0; i < std::size(entries); ++i) {
-        const auto mode = entries[i].second;
-        auto* action = add(entries[i].first, keys[i]);
+    for (const auto& entry : entries) {
+        const auto mode = entry.mode;
+        auto* action = add(entry.id, entry.text, entry.key);
         action->setActionGroup(modes);
         action->setChecked(gizmo_->mode() == mode);
         connect(action, &QAction::triggered, this, [this, mode] { gizmo_->setMode(mode); });
     }
-    auto* local = add(tr("&Local Axes"), Qt::Key_X);
+    auto* local = add(QStringLiteral("gizmo.local-axes"), tr("&Local Axes"), Qt::Key_X);
     local->setChecked(gizmo_->space() == TransformGizmo::Space::Local);
     connect(local, &QAction::toggled, this, [this](const bool checked) {
         gizmo_->setSpace(checked ? TransformGizmo::Space::Local : TransformGizmo::Space::World);
@@ -341,7 +352,7 @@ void MainWindow::buildGizmoActions(QMenu& menu) {
 }
 
 void MainWindow::buildLogDock() {
-    auto* panel = new LogPanel;
+    auto* panel = new LogPanel(context_->shortcuts());
     context_->addPanel(QStringLiteral("LogDock"), tr("Log"), panel, Qt::BottomDockWidgetArea);
 
     // Every log channel writes to these sinks, the engine's and the editor's. The panel's

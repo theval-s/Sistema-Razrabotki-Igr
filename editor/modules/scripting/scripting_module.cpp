@@ -18,6 +18,7 @@
 #include <editor/editor_module.hpp>
 #include <editor/lua_definitions.hpp>
 #include <editor/play_session.hpp>
+#include <editor/shortcut_registry.hpp>
 
 #include "autoload_dialog.hpp"
 
@@ -54,12 +55,14 @@ private:
     void buildPlayActions() {
         editor::PlaySession& session = context_->playSession();
         QMenu* menu = context_->menu(QObject::tr("&Engine"));
+        editor::ShortcutRegistry& shortcuts = context_->shortcuts();
         play_ = menu->addAction(QObject::tr("Play Current Scene"));
-        play_->setShortcut(QKeySequence(Qt::Key_F5));
+        shortcuts.bind(play_, QStringLiteral("play.play"), QObject::tr("Play"), QKeySequence(Qt::Key_F5));
         pause_ = menu->addAction(QObject::tr("Pause"));
         pause_->setCheckable(true);
+        shortcuts.bind(pause_, QStringLiteral("play.pause"), QObject::tr("Play"));
         stop_ = menu->addAction(QObject::tr("Stop"));
-        stop_->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F5));
+        shortcuts.bind(stop_, QStringLiteral("play.stop"), QObject::tr("Play"), QKeySequence(Qt::SHIFT | Qt::Key_F5));
         for (QAction* action : {play_, pause_, stop_}) {
             context_->toolBar()->addAction(action);
         }
@@ -76,6 +79,9 @@ private:
         QMenu* menu = context_->menu(QObject::tr("&Project"));
         autoload_ = menu->addAction(QObject::tr("&Autoload..."));
         refresh_definitions_ = menu->addAction(QObject::tr("Refresh Lua Definitions"));
+        context_->shortcuts().bind(autoload_, QStringLiteral("project.autoload"), QObject::tr("Project"));
+        context_->shortcuts().bind(refresh_definitions_, QStringLiteral("project.refresh-lua-definitions"),
+                                   QObject::tr("Project"));
         QObject::connect(autoload_, &QAction::triggered, autoload_, [this] { editAutoloads(); });
         // Play runs with the autoloads it started with.
         QObject::connect(&context_->playSession(), &editor::PlaySession::playingChanged, autoload_,

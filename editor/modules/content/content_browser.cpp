@@ -55,6 +55,7 @@
 #include <editor/menu_button.hpp>
 #include <editor/paths.hpp>
 #include <editor/scene_document.hpp>
+#include <editor/shortcut_registry.hpp>
 
 #include "asset_dialogs.hpp"
 #include "asset_filter_model.hpp"
@@ -357,45 +358,47 @@ QWidget* ContentBrowser::buildBanner() {
 
 void ContentBrowser::buildActions() {
     // Shortcuts work while the item view has focus, so they don't clash with other panels'.
-    const auto add = [this](const QString& text, const QKeySequence& shortcut, auto&& slot) {
+    const auto add = [this](const QString& id, const QString& text, const QKeySequence& shortcut, auto&& slot) {
         auto* action = new QAction(text, this);
-        action->setShortcut(shortcut);
+        context_.shortcuts().bind(action, QStringLiteral("content.") + id, tr("Content Browser"), shortcut);
         action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         connect(action, &QAction::triggered, this, slot);
         items_->addAction(action);
         return action;
     };
-    //TODO: extract shortcuts to another class for easier remapping??
-    // (so user could remap on their own)
-    open_ = add(tr("Open"), {}, [this] { activate(items_->currentIndex()); });
-    add_to_scene_ = add(tr("Add to Scene"), {}, [this] { addSelectionToScene(); });
+    open_ = add(QStringLiteral("open"), tr("Open"), {}, [this] { activate(items_->currentIndex()); });
+    add_to_scene_ = add(QStringLiteral("add-to-scene"), tr("Add to Scene"), {}, [this] { addSelectionToScene(); });
     add_to_scene_->setToolTip(tr("Places the selected meshes and models in front of the viewport camera"));
-    new_folder_ = add(tr("New Folder"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N),
+    new_folder_ = add(QStringLiteral("new-folder"), tr("New Folder"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N),
                       [this] { newFolder(root_, folder_); });
-    rename_ = add(tr("Rename"), QKeySequence(Qt::Key_F2), [this] { items_->edit(items_->currentIndex()); });
-    duplicate_ = add(tr("Duplicate"), QKeySequence(Qt::CTRL | Qt::Key_D),
+    rename_ = add(QStringLiteral("rename"), tr("Rename"), QKeySequence(Qt::Key_F2),
+                  [this] { items_->edit(items_->currentIndex()); });
+    duplicate_ = add(QStringLiteral("duplicate"), tr("Duplicate"), QKeySequence(Qt::CTRL | Qt::Key_D),
                      [this] { select(operations_.duplicate(selectedPaths())); });
-    cut_ = add(tr("Cut"), QKeySequence::Cut, [this] { copyToClipboard(selectedPaths(), true); });
-    copy_ = add(tr("Copy"), QKeySequence::Copy, [this] { copyToClipboard(selectedPaths(), false); });
-    paste_ = add(tr("Paste"), QKeySequence::Paste, [this] { pasteInto(folder_); });
-    delete_ = add(tr("Delete"), QKeySequence::Delete, [this] { deleteItems(selectedPaths()); });
+    cut_ = add(QStringLiteral("cut"), tr("Cut"), QKeySequence::Cut, [this] { copyToClipboard(selectedPaths(), true); });
+    copy_ = add(QStringLiteral("copy"), tr("Copy"), QKeySequence::Copy,
+                [this] { copyToClipboard(selectedPaths(), false); });
+    paste_ = add(QStringLiteral("paste"), tr("Paste"), QKeySequence::Paste, [this] { pasteInto(folder_); });
+    delete_ = add(QStringLiteral("delete"), tr("Delete"), QKeySequence::Delete,
+                  [this] { deleteItems(selectedPaths()); });
     // Without a selection these apply to the shown folder.
-    copy_path_ = add(tr("Copy Asset Path"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C), [this] {
+    copy_path_ = add(QStringLiteral("copy-asset-path"), tr("Copy Asset Path"),
+                     QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C), [this] {
         const QStringList selected = selectedPaths();
         copyAssetPaths(selected.isEmpty() ? QStringList{folder_} : selected);
     });
-    copy_uuid_ = add(tr("Copy UUID"), {}, [this] { copyUuids(selectedPaths()); });
-    show_in_explorer_ = add(tr("Show in Explorer"), {}, [this] {
+    copy_uuid_ = add(QStringLiteral("copy-uuid"), tr("Copy UUID"), {}, [this] { copyUuids(selectedPaths()); });
+    show_in_explorer_ = add(QStringLiteral("show-in-explorer"), tr("Show in Explorer"), {}, [this] {
         const QStringList selected = selectedPaths();
         showInExplorer(selected.isEmpty() ? folder_ : selected.front());
     });
     open_->setShortcutVisibleInContextMenu(false);
 
-    import_ = add(tr("Import..."), {}, [this] { importAssets(); });
+    import_ = add(QStringLiteral("import"), tr("Import..."), {}, [this] { importAssets(); });
     import_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
     import_->setToolTip(tr("Copies images and models into the shown folder"));
     import_button_->setDefaultAction(import_);
-    instance_from_texture_ = add(tr("Create Material Instance..."), {},
+    instance_from_texture_ = add(QStringLiteral("create-material-instance"), tr("Create Material Instance..."), {},
                                  [this] { newMaterialInstance(selectedPaths().value(0)); });
 
     new_menu_ = std::make_unique<QMenu>(tr("New"));

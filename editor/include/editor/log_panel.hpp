@@ -15,6 +15,7 @@ namespace editor {
 class LogFilterModel;
 class LogModel;
 class LogSink;
+class ShortcutRegistry;
 
 /// Shows what was logged to sink(), colored by level, with a toolbar to filter by level,
 /// source (the log channel) and text. While auto-scroll is on the newest entries scroll into
@@ -25,7 +26,7 @@ class LogPanel : public QWidget {
     Q_OBJECT
 
 public:
-    explicit LogPanel(QWidget* parent = nullptr);
+    explicit LogPanel(ShortcutRegistry& shortcuts, QWidget* parent = nullptr);
     ~LogPanel() override;
 
     /// Add to engine::log::Sinks() to show every channel's messages here. Keeps working after the panel is gone.

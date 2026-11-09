@@ -30,6 +30,7 @@
 #include <editor/play_session.hpp>
 #include <editor/scene_history.hpp>
 #include <editor/selection.hpp>
+#include <editor/shortcut_registry.hpp>
 
 namespace editor {
 
@@ -105,22 +106,27 @@ void collectSubtree(const engine::Scene& scene, const entt::entity entity, std::
 }  // namespace
 
 EditActions::EditActions(engine::Engine& engine, Selection& selection, SceneHistory& history,
-                         PlaySession& play_session, QObject* parent)
+                         PlaySession& play_session, ShortcutRegistry& shortcuts, QObject* parent)
     : QObject(parent), engine_(engine), selection_(selection), history_(history), play_session_(play_session) {
-    const auto make = [this](const QString& text, const QKeySequence& shortcut, auto&& slot) {
+    const auto make = [this, &shortcuts](const QString& id, const QString& text, const QKeySequence& shortcut,
+                                         auto&& slot) {
         auto* action = new QAction(text, this);
-        action->setShortcut(shortcut);
+        shortcuts.bind(action, id, tr("Edit"), shortcut);
         action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         connect(action, &QAction::triggered, this, slot);
         return action;
     };
-    undo_ = make(tr("&Undo"), QKeySequence::Undo, [this] { history_.stack().undo(); });
-    redo_ = make(tr("&Redo"), QKeySequence::Redo, [this] { history_.stack().redo(); });
-    duplicate_ = make(tr("D&uplicate"), QKeySequence(Qt::CTRL | Qt::Key_D), [this] { duplicateSelected(); });
-    delete_ = make(tr("&Delete"), QKeySequence::Delete, [this] { deleteSelected(); });
-    select_all_ = make(tr("Select &All"), QKeySequence::SelectAll, [this] { selectAll(); });
-    deselect_ = make(tr("D&eselect"), QKeySequence(Qt::Key_Escape), [this] { selection_.clear(); });
-    focus_ = make(tr("&Focus Selection"), QKeySequence(Qt::Key_F), [this] { focusSelection(); });
+    undo_ = make(QStringLiteral("edit.undo"), tr("&Undo"), QKeySequence::Undo, [this] { history_.stack().undo(); });
+    redo_ = make(QStringLiteral("edit.redo"), tr("&Redo"), QKeySequence::Redo, [this] { history_.stack().redo(); });
+    duplicate_ = make(QStringLiteral("edit.duplicate"), tr("D&uplicate"), QKeySequence(Qt::CTRL | Qt::Key_D),
+                      [this] { duplicateSelected(); });
+    delete_ = make(QStringLiteral("edit.delete"), tr("&Delete"), QKeySequence::Delete, [this] { deleteSelected(); });
+    select_all_ = make(QStringLiteral("edit.select-all"), tr("Select &All"), QKeySequence::SelectAll,
+                       [this] { selectAll(); });
+    deselect_ = make(QStringLiteral("edit.deselect"), tr("D&eselect"), QKeySequence(Qt::Key_Escape),
+                     [this] { selection_.clear(); });
+    focus_ = make(QStringLiteral("edit.focus"), tr("&Focus Selection"), QKeySequence(Qt::Key_F),
+                  [this] { focusSelection(); });
     //TODO: more?
 
     connect(&selection_, &Selection::changed, this, &EditActions::refresh);

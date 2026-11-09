@@ -17,6 +17,7 @@ namespace editor {
 class PlaySession;
 class SceneHistory;
 class Selection;
+class ShortcutRegistry;
 
 /// The Edit menu's scene commands, shared by panels, only available when not in play mode
 class EDITOR_CORE_API EditActions : public QObject {
@@ -24,7 +25,7 @@ class EDITOR_CORE_API EditActions : public QObject {
 
 public:
     EditActions(engine::Engine& engine, Selection& selection, SceneHistory& history, PlaySession& play_session,
-                QObject* parent = nullptr);
+                ShortcutRegistry& shortcuts, QObject* parent = nullptr);
 
     /// Makes the shortcuts work while `scope` or one of its children has focus.
     void attach(QWidget* scope) const;

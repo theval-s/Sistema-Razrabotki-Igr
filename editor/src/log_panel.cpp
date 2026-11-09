@@ -29,6 +29,7 @@
 
 #include <editor/log_model.hpp>
 #include <editor/menu_button.hpp>
+#include <editor/shortcut_registry.hpp>
 
 namespace editor {
 
@@ -61,7 +62,7 @@ constexpr std::array LevelGroups{
 
 }  // namespace
 
-LogPanel::LogPanel(QWidget* parent)
+LogPanel::LogPanel(ShortcutRegistry& shortcuts, QWidget* parent)
     : QWidget(parent),
       sink_(std::make_shared<LogSink>()),
       model_(new LogModel(10000, this)),
@@ -115,7 +116,7 @@ LogPanel::LogPanel(QWidget* parent)
     layout->addWidget(splitter);
 
     auto* copy = new QAction(tr("&Copy"), view_);
-    copy->setShortcut(QKeySequence::Copy);
+    shortcuts.bind(copy, QStringLiteral("log.copy"), tr("Log"), QKeySequence::Copy);
     copy->setShortcutContext(Qt::WidgetShortcut);
     connect(copy, &QAction::triggered, this, &LogPanel::copySelected);
     view_->addAction(copy);

@@ -19,6 +19,7 @@ add_library(editor_core SHARED
     src/scene_events.cpp
     src/scene_history.cpp
     src/selection.cpp
+    src/shortcut_registry.cpp
     src/startup_scene.cpp
     src/transform_gizmo.cpp
     src/viewport_picker.cpp
@@ -39,6 +40,7 @@ add_library(editor_core SHARED
     include/editor/scene_events.hpp
     include/editor/scene_history.hpp
     include/editor/selection.hpp
+    include/editor/shortcut_registry.hpp
     include/editor/startup_scene.hpp
     include/editor/transform_gizmo.hpp
     include/editor/viewport_picker.hpp
