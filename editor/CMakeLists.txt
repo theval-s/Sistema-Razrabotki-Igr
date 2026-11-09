@@ -25,6 +25,7 @@ qt_add_executable(editor
     src/main.cpp
     src/main_window.cpp
     src/module_loader.cpp
+    src/preferences_dialog.cpp
     src/project_dialog.cpp
     src/viewport_overlay.cpp
     src/viewport_widget.cpp
@@ -32,6 +33,7 @@ qt_add_executable(editor
     include/editor/log_panel.hpp
     include/editor/main_window.hpp
     include/editor/module_loader.hpp
+    include/editor/preferences_dialog.hpp
     include/editor/project_dialog.hpp
     include/editor/viewport_overlay.hpp
     include/editor/viewport_widget.hpp

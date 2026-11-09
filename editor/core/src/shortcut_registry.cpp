@@ -62,7 +62,10 @@ void ShortcutRegistry::bind(QAction* action, const QString& id, const QString& c
                             const QKeySequence& defaultShortcut) {
     Entry* entry = find(id);
     if (entry == nullptr) {
-        Command command{id, category, action->text().remove(QLatin1Char('&')), cleaned({defaultShortcut}), {}};
+        QString title = action->text().remove(QLatin1Char('&'));
+        // "Open Scene..." opens a dialog from the menu; in a shortcut list it's "Open Scene".
+        if (title.endsWith(QStringLiteral("..."))) title.chop(3);
+        Command command{id, category, title, cleaned({defaultShortcut}), {}};
         const QSettings settings;
         command.shortcuts = settings.contains(settingsKey(id))
                                 ? cleaned(QKeySequence::listFromString(settings.value(settingsKey(id)).toString(),

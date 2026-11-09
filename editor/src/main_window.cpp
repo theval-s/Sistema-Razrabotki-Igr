@@ -39,6 +39,7 @@
 #include <editor/module_loader.hpp>
 #include <editor/paths.hpp>
 #include <editor/play_session.hpp>
+#include <editor/preferences_dialog.hpp>
 #include <editor/project_dialog.hpp>
 #include <editor/scene_document.hpp>
 #include <editor/transform_gizmo.hpp>
@@ -306,6 +307,13 @@ void MainWindow::buildMenus() {
     edit_menu->addAction(edit.focusAction());
     edit_menu->addSeparator();
     buildGizmoActions(*edit_menu);
+    edit_menu->addSeparator();
+    auto* preferences = edit_menu->addAction(tr("&Preferences..."), this, [this] {
+        PreferencesDialog dialog(context_->shortcuts(), this);
+        dialog.exec();
+    });
+    context_->shortcuts().bind(preferences, QStringLiteral("edit.preferences"), tr("Edit"),
+                               QKeySequence(Qt::CTRL | Qt::Key_Comma));
 
     // The menu bar's order. Modules fill Project and Engine, EditorContext::addPanel() fills View.
     for (const QString& title : {tr("&Project"), tr("&Engine"), tr("&View")}) {
