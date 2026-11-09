@@ -55,13 +55,8 @@ private:
     /// Move/Rotate/Scale (W/E/R) and Local Axes (X).
     void buildGizmoActions(QMenu& menu);
     void buildLogDock();
-    /// Opens the project's startup scene, or builds an untitled one if it has none.
-    void openStartupScene();
-    void setupDefaultScene();
     /// Scene name and unsaved-changes mark.
     void refreshTitle();
-    /// Remembers a saved scene as the project's startup scene if it has none yet.
-    void adoptStartupScene();
     void restoreLayout();
     void refreshStatus();
     /// How the viewport sees the scene right now; nothing before the engine runs.

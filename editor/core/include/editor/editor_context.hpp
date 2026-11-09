@@ -35,6 +35,7 @@ class PlaySession;
 class SceneDocument;
 class SceneEvents;
 class SceneHistory;
+class StartupScene;
 
 /// What the editor hands to its modules: the engine, the project, the scene being edited, the
 /// selection and the places a module may add UI to. Owned by MainWindow; outlives every module and is
@@ -64,6 +65,8 @@ public:
     [[nodiscard]] SceneHistory& history() noexcept;
     /// The scene file being edited: open, create and save scenes through it.
     [[nodiscard]] SceneDocument& sceneDocument() noexcept;
+    /// The scene the project opens with.
+    [[nodiscard]] StartupScene& startupScene() noexcept;
     /// Play mode: start and stop it, or follow it, through here.
     [[nodiscard]] PlaySession& playSession() noexcept;
     /// Delete, Select All, Focus... for the panels that show the scene: attach() them to a panel
@@ -109,6 +112,7 @@ private:
     std::unique_ptr<SceneDocument> scene_document_;
     std::unique_ptr<PlaySession> play_session_;
     std::unique_ptr<EditActions> edit_actions_;
+    std::unique_ptr<StartupScene> startup_scene_;  // last: it uses the ones above
 };
 
 }  // namespace editor

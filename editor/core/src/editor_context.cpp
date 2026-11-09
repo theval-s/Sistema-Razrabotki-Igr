@@ -22,6 +22,7 @@
 #include <editor/scene_document.hpp>
 #include <editor/scene_events.hpp>
 #include <editor/scene_history.hpp>
+#include <editor/startup_scene.hpp>
 
 namespace editor {
 
@@ -51,7 +52,8 @@ EditorContext::EditorContext(engine::Engine& engine, engine::Project& project, Q
       history_(std::make_unique<SceneHistory>(engine, selection_, *scene_events_)),
       scene_document_(std::make_unique<SceneDocument>(engine, project, selection_, *history_)),
       play_session_(std::make_unique<PlaySession>(engine, project, selection_, *scene_document_)),
-      edit_actions_(std::make_unique<EditActions>(engine, selection_, *history_, *play_session_)) {}
+      edit_actions_(std::make_unique<EditActions>(engine, selection_, *history_, *play_session_)),
+      startup_scene_(std::make_unique<StartupScene>(*this)) {}
 
 EditorContext::~EditorContext() {
     // Panels would otherwise die with the dock manager, after the engine they show.
@@ -96,6 +98,10 @@ SceneHistory& EditorContext::history() noexcept {
 
 SceneDocument& EditorContext::sceneDocument() noexcept {
     return *scene_document_;
+}
+
+StartupScene& EditorContext::startupScene() noexcept {
+    return *startup_scene_;
 }
 
 PlaySession& EditorContext::playSession() noexcept {

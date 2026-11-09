@@ -19,9 +19,7 @@
 
 #include <algorithm>
 #include <cstring>
-#include <filesystem>
 #include <string>
-#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -31,9 +29,7 @@
 #include <DockManager.h>
 #include <DockWidget.h>
 
-#include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
-#include <engine/core/PathUtils.hpp>
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
@@ -55,6 +51,7 @@
 #include <editor/viewport_overlay.hpp>
 #include <editor/viewport_widget.hpp>
 #include <editor/selection.hpp>
+#include <editor/startup_scene.hpp>
 #include <editor/editor_log.hpp>
 
 namespace editor {
@@ -101,10 +98,7 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     context_->editActions().attach(viewport_);
     gizmo_ = std::make_unique<TransformGizmo>(engine_.GetScene(), context_->selection(), &context_->history());
     SceneDocument& document = context_->sceneDocument();
-    connect(&document, &SceneDocument::stateChanged, this, [this] {
-        refreshTitle();
-        adoptStartupScene();
-    });
+    connect(&document, &SceneDocument::stateChanged, this, &MainWindow::refreshTitle);
     connect(&document, &SceneDocument::opened, this, [this] {
         has_last_pick_ = false;
         if (camera_ != nullptr) {
@@ -216,47 +210,10 @@ void MainWindow::startEngine() {
         return;
     }
     viewport_->setCamera(camera_);
-    openStartupScene();
+    context_->startupScene().open();
 
     tick_timer_->start(16);
     refreshStatus();
-}
-
-void MainWindow::openStartupScene() {
-    if (!project_.startupScene.empty()) {
-        std::string error;
-        if (context_->sceneDocument().open(engine::AssetPathResolver::ToAbsolute(engine::FromUtf8(project_.startupScene)),
-                                           error)) {
-            return;
-        }
-        editorLog().error("Startup scene '{}': {}", project_.startupScene, error);
-    }
-    setupDefaultScene();
-}
-
-void MainWindow::setupDefaultScene() {
-    using DirectX::SimpleMath::Quaternion;
-    using DirectX::SimpleMath::Vector3;
-    engine::Scene& scene = engine_.GetScene();
-
-    // No camera: the editor has its own viewpoint.
-    const entt::entity sun = scene.CreateEntity("Sun");
-    Vector3 sun_direction{-0.45f, -1.0f, -0.3f};
-    sun_direction.Normalize();
-    engine::Transform sun_transform = scene.GetTransform(sun);
-    sun_transform.rotation = Quaternion::FromToRotation(Vector3::Forward, sun_direction);
-    scene.SetTransform(sun, sun_transform);
-    scene.AddComponent<engine::DirectionalLight>(sun, Vector3{1.0f, 0.95f, 0.85f}, 1.25f);
-    scene.SetDirectionalLight(sun);
-
-    const entt::entity ground = scene.CreateEntity("Ground");
-    engine::Transform ground_transform = scene.GetTransform(ground);
-    ground_transform.scale = Vector3{20.0f, 1.0f, 20.0f};
-    scene.SetTransform(ground, ground_transform);
-    scene.AddComponent<engine::MeshRenderer>(ground,
-        engine_.GetSceneAssets().RequestMesh(engine::BuiltinAssets::PlaneMesh),
-        engine_.GetSceneAssets().RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance));
-    context_->sceneDocument().markClean();
 }
 
 void MainWindow::refreshTitle() {
@@ -264,29 +221,6 @@ void MainWindow::refreshTitle() {
     // [*] shows the unsaved-changes mark set by setWindowModified().
     setWindowTitle(tr("%1[*] — %2 — SRI Editor").arg(document.displayName(), QString::fromStdString(project_.name)));
     setWindowModified(document.isDirty());
-}
-
-void MainWindow::adoptStartupScene() {
-    if (context_->playSession().isPlaying()) return;
-    const std::filesystem::path& file = context_->sceneDocument().filePath();
-    if (file.empty() || context_->sceneDocument().isDirty()) {
-        return;
-    }
-    // Keep a startup scene that still exists; one that was moved or deleted gets replaced.
-    std::error_code ec;
-    if (!project_.startupScene.empty() &&
-        std::filesystem::exists(engine::AssetPathResolver::ToAbsolute(engine::FromUtf8(project_.startupScene)), ec)) {
-        return;
-    }
-    const std::string name = engine::AssetPathResolver::ToName(file);
-    if (!name.starts_with("game/")) {
-        return;  // outside the project's content
-    }
-    engine::Project updated = project_;
-    updated.startupScene = name;
-    if (std::string error; !context_->updateProject(std::move(updated), error)) {
-        editorLog().warn("Could not remember {} as the startup scene: {}", name, error);
-    }
 }
 
 void MainWindow::tickEngine() {
