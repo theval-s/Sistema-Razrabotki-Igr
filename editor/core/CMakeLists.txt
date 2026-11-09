@@ -21,6 +21,7 @@ add_library(editor_core SHARED
     src/selection.cpp
     src/startup_scene.cpp
     src/transform_gizmo.cpp
+    src/viewport_picker.cpp
     src/viewport_view.cpp
     include/editor/asset_icons.hpp
     include/editor/asset_picker.hpp
@@ -40,6 +41,7 @@ add_library(editor_core SHARED
     include/editor/selection.hpp
     include/editor/startup_scene.hpp
     include/editor/transform_gizmo.hpp
+    include/editor/viewport_picker.hpp
     include/editor/viewport_view.hpp
 )
 

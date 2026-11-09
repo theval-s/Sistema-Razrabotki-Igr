@@ -21,6 +21,8 @@ struct EDITOR_CORE_API ViewportView {
         Vector3 origin;
         /// Unit length.
         Vector3 direction;
+        /// From the origin to the far plane.
+        float length = 0.0f;
     };
 
     DirectX::SimpleMath::Matrix view;
@@ -32,7 +34,7 @@ struct EDITOR_CORE_API ViewportView {
     [[nodiscard]] static ViewportView fromCamera(const engine::FPSCamera& camera, Vector2 size);
 
     [[nodiscard]] Vector3 cameraPosition() const;
-    /// From the near plane through `point` on screen.
+    /// From the near plane through `point` on screen, as far as the far plane.
     [[nodiscard]] Ray ray(Vector2 point) const;
     /// Where `point` shows on screen; nothing when it is behind the camera.
     [[nodiscard]] std::optional<Vector2> project(const Vector3& point) const;

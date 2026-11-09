@@ -31,8 +31,9 @@ ViewportView::Ray ViewportView::ray(const Vector2 point) const {
     const Vector3 near_point = Vector3::Transform({x, y, 1.0f}, inverse);
     const Vector3 far_point = Vector3::Transform({x, y, 0.0f}, inverse);
     Vector3 direction = far_point - near_point;
+    const float length = direction.Length();
     direction.Normalize();
-    return {near_point, direction};
+    return {near_point, direction, length};
 }
 
 std::optional<ViewportView::Vector2> ViewportView::project(const Vector3& point) const {
