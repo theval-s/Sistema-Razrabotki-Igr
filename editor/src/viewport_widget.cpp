@@ -1,28 +1,26 @@
 #include <editor/viewport_widget.hpp>
 
+#include <QAction>
 #include <QCursor>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QResizeEvent>
 #include <QWheelEvent>
 
+#include <algorithm>
 #include <cmath>
 
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/input/Win32PhysicalKey.hpp>
 #include <editor/editor_camera.hpp>
+#include <editor/shortcut_registry.hpp>
 
 namespace editor {
 
 namespace {
 
-void feedMousePosition(ViewportWidget& viewport, engine::InputSubsystem* input, QPointF position) {
-    if (input && viewport.hasFocus()) {
-        const qreal ratio = viewport.devicePixelRatioF();
-        input->OnMousePosition(static_cast<float>(position.x() * ratio),
-                               static_cast<float>(position.y() * ratio));
-    }
-}
+/// Bound by the Scripting module's play controls.
+const QString PlayShortcutIds[] = {QStringLiteral("play.stop"), QStringLiteral("play.pause")};
 
 engine::Key toEngineKey(const int key) {
     using engine::Key;
@@ -90,17 +88,59 @@ void ViewportWidget::setInput(engine::InputSubsystem* input) {
 
 void ViewportWidget::setCamera(EditorCameraSubsystem* camera) {
     camera_ = camera;
-    if (camera_ && hasFocus()) camera_->SetInputActive(true);
+    if (camera_ && hasFocus() && !playing_) camera_->SetInputActive(true);
+}
+
+void ViewportWidget::setShortcuts(ShortcutRegistry& shortcuts) {
+    shortcuts_ = &shortcuts;
+    // Only a handle for the registry: Qt never triggers it, keyPressEvent matches it while the
+    // game has the keyboard. So Esc can still deselect while editing.
+    auto* release = new QAction(tr("Release Game Input"), this);
+    release->setShortcutContext(Qt::WidgetShortcut);
+    shortcuts.bind(release, ReleaseInputId, tr("Play"), QKeySequence(Qt::Key_Escape));
 }
 
 void ViewportWidget::setPlaying(bool playing) {
+    releaseInput();
     releaseCursor();
     last_cursor_.reset();
     playing_ = playing;
+    paused_ = false;
+    // During Play the view is the game's.
+    if (camera_) camera_->SetInputActive(!playing && hasFocus());
     if (input_) {
         input_->Reset();
-        feedMousePosition(*this, input_, mapFromGlobal(QCursor::pos()));
+        feedMousePosition(mapFromGlobal(QCursor::pos()));
     }
+    if (playing) captureInput();
+}
+
+void ViewportWidget::setPaused(const bool paused) {
+    paused_ = paused;
+    if (paused) {
+        releaseInput();
+    } else {
+        captureInput();
+    }
+}
+
+void ViewportWidget::captureInput() {
+    if (!playing_ || paused_ || captured_) return;
+    captured_ = true;
+    setFocus(Qt::OtherFocusReason);
+    feedMousePosition(mapFromGlobal(QCursor::pos()));
+    emit inputCaptureChanged(true);
+}
+
+void ViewportWidget::releaseInput() {
+    if (!captured_) return;
+    captured_ = false;
+    swallowed_buttons_ = {};
+    releaseCursor();
+    last_cursor_.reset();
+    // The game would never see the release of what is held now.
+    if (input_ != nullptr) input_->OnFocusLost();
+    emit inputCaptureChanged(false);
 }
 
 QPaintEngine* ViewportWidget::paintEngine() const {
@@ -109,8 +149,9 @@ QPaintEngine* ViewportWidget::paintEngine() const {
 
 bool ViewportWidget::event(QEvent* event) {
     // Accepting the override keeps a shortcut (F, Ctrl+A...) from taking the key: it arrives
-    // in keyPressEvent instead, and from there at the camera.
-    if (event->type() == QEvent::ShortcutOverride && cursor_pinned_) {
+    // in keyPressEvent instead, and from there at the camera, or at the game while it has input.
+    if (event->type() == QEvent::ShortcutOverride &&
+        (cursor_pinned_ || (captured_ && !isPlayShortcut(*static_cast<QKeyEvent*>(event))))) {
         event->accept();
         return true;
     }
@@ -124,14 +165,12 @@ void ViewportWidget::resizeEvent(QResizeEvent* event) {
 }
 
 void ViewportWidget::keyPressEvent(QKeyEvent* event) {
-    // During Play, Escape hands the keyboard back to the editor instead of going to the game.
-    if (playing_ && event->key() == Qt::Key_Escape) {
-        releaseCursor();
-        clearFocus();
+    if (captured_ && shortcuts_ != nullptr && shortcuts_->matches(ReleaseInputId, *event)) {
+        releaseInput();
         event->accept();
         return;
     }
-    if (input_ != nullptr && !event->isAutoRepeat()) {
+    if (feedsEngine() && !event->isAutoRepeat()) {
         input_->OnKey(toEngineKey(event->key()), true);
         const auto scan = event->nativeScanCode();
         input_->OnPhysicalKey(engine::PhysicalKeyFromWin32Scan(scan & 0xff,
@@ -141,7 +180,7 @@ void ViewportWidget::keyPressEvent(QKeyEvent* event) {
 }
 
 void ViewportWidget::keyReleaseEvent(QKeyEvent* event) {
-    if (input_ != nullptr && !event->isAutoRepeat()) {
+    if (feedsEngine() && !event->isAutoRepeat()) {
         input_->OnKey(toEngineKey(event->key()), false);
         const auto scan = event->nativeScanCode();
         input_->OnPhysicalKey(engine::PhysicalKeyFromWin32Scan(scan & 0xff,
@@ -153,9 +192,15 @@ void ViewportWidget::keyReleaseEvent(QKeyEvent* event) {
 void ViewportWidget::mousePressEvent(QMouseEvent* event) {
     // Clicking the viewport is how it gets the keyboard, so WASD works right away.
     setFocus(Qt::MouseFocusReason);
-    feedMousePosition(*this, input_, event->position());
     last_cursor_ = event->globalPosition().toPoint();
-    if (!cursor_pinned_) {
+    if (playing_ && !captured_) {
+        // The click only hands the input back, so the game never sees a stray shot.
+        swallowed_buttons_ |= event->button();
+        captureInput();
+        return;
+    }
+    feedMousePosition(event->position());
+    if (!playing_ && !cursor_pinned_) {
         emit mousePressed(event->position(), event->button(), event->modifiers());
     }
     if (!playing_ && event->button() == Qt::RightButton) {
@@ -168,10 +213,15 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
 }
 
 void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
-    feedMousePosition(*this, input_, event->position());
+    if (swallowed_buttons_.testFlag(event->button())) {
+        swallowed_buttons_.setFlag(event->button(), false);
+        return;
+    }
+    if (playing_ && !captured_) return;
+    feedMousePosition(event->position());
     if (event->button() == Qt::RightButton) {
         releaseCursor();
-    } else if (!cursor_pinned_) {
+    } else if (!playing_ && !cursor_pinned_) {
         emit mouseReleased(event->position(), event->button());
     }
     if (const auto button = toEngineButton(event->button()); input_ != nullptr && button) {
@@ -180,8 +230,9 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void ViewportWidget::mouseMoveEvent(QMouseEvent* event) {
-    feedMousePosition(*this, input_, event->position());
-    if (!cursor_pinned_) {
+    if (playing_ && !captured_) return;
+    feedMousePosition(event->position());
+    if (!playing_ && !cursor_pinned_) {
         emit mouseMoved(event->position());
     }
     const QPoint cursor = event->globalPosition().toPoint();
@@ -203,8 +254,8 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void ViewportWidget::wheelEvent(QWheelEvent* event) {
-    feedMousePosition(*this, input_, event->position());
-    if (input_ != nullptr) {
+    feedMousePosition(event->position());
+    if (feedsEngine()) {
         input_->OnMouseWheel(static_cast<float>(event->angleDelta().y()) / static_cast<float>(QWheelEvent::DefaultDeltasPerStep));
     }
     event->accept();
@@ -212,6 +263,7 @@ void ViewportWidget::wheelEvent(QWheelEvent* event) {
 
 void ViewportWidget::focusOutEvent(QFocusEvent* event) {
     // The release events go to whoever has focus now: drop everything held.
+    releaseInput();
     releaseCursor();
     if (input_ != nullptr) {
         input_->OnFocusLost();
@@ -222,8 +274,8 @@ void ViewportWidget::focusOutEvent(QFocusEvent* event) {
 
 void ViewportWidget::focusInEvent(QFocusEvent* event) {
     QWidget::focusInEvent(event);
-    feedMousePosition(*this, input_, mapFromGlobal(QCursor::pos()));
-    if (camera_) camera_->SetInputActive(true);
+    feedMousePosition(mapFromGlobal(QCursor::pos()));
+    if (camera_ && !playing_) camera_->SetInputActive(true);
 }
 
 void ViewportWidget::leaveEvent(QEvent* event) {
@@ -236,6 +288,18 @@ void ViewportWidget::leaveEvent(QEvent* event) {
 QSize ViewportWidget::pixelSize() const {
     const qreal ratio = devicePixelRatioF();
     return {static_cast<int>(std::lround(width() * ratio)), static_cast<int>(std::lround(height() * ratio))};
+}
+
+void ViewportWidget::feedMousePosition(const QPointF position) {
+    if (feedsEngine() && hasFocus()) {
+        const qreal ratio = devicePixelRatioF();
+        input_->OnMousePosition(static_cast<float>(position.x() * ratio), static_cast<float>(position.y() * ratio));
+    }
+}
+
+bool ViewportWidget::isPlayShortcut(const QKeyEvent& event) const {
+    return shortcuts_ != nullptr &&
+           std::ranges::any_of(PlayShortcutIds, [&](const QString& id) { return shortcuts_->matches(id, event); });
 }
 
 void ViewportWidget::releaseCursor() {

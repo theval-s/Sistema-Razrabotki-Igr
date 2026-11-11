@@ -86,6 +86,8 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
 
     status_label_ = new QLabel(this);
     statusBar()->addPermanentWidget(status_label_);
+    play_hint_ = new QLabel(this);
+    statusBar()->addWidget(play_hint_);
 
     // Becomes the main window's central widget. The viewport is the docking system's
     // central widget: always there, never floated, so its HWND (and swap chain) stays put.
@@ -108,6 +110,8 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
 
     context_ = std::make_unique<EditorContext>(engine_, project_, *this, *dock_manager_, *viewport_, *tool_bar);
     context_->editActions().attach(viewport_);
+    viewport_->setShortcuts(context_->shortcuts());
+    connect(viewport_, &ViewportWidget::inputCaptureChanged, this, &MainWindow::refreshPlayHint);
     gizmo_ = std::make_unique<TransformGizmo>(engine_.GetScene(), context_->selection(), &context_->history());
     picker_ = std::make_unique<ViewportPicker>(engine_, context_->selection());
     SceneDocument& document = context_->sceneDocument();
@@ -122,7 +126,11 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
         viewport_->setPlaying(playing);
         // The running copy isn't the scene being edited.
         gizmo_->setEnabled(!playing);
-        if (playing) viewport_->setFocus();
+        refreshPlayHint();
+    });
+    connect(&context_->playSession(), &PlaySession::pausedChanged, this, [this](const bool paused) {
+        viewport_->setPaused(paused);
+        refreshPlayHint();
     });
     refreshTitle();
     buildMenus();
@@ -239,6 +247,19 @@ void MainWindow::refreshTitle() {
 void MainWindow::tickEngine() {
     engine_.Tick();
     refreshStatus();
+}
+
+void MainWindow::refreshPlayHint() {
+    const PlaySession& session = context_->playSession();
+    if (!session.isPlaying() || session.isPaused()) {
+        play_hint_->clear();
+    } else if (!viewport_->capturesInput()) {
+        play_hint_->setText(tr("Click the viewport to give the game input"));
+    } else if (const auto release = context_->shortcuts().shortcuts(ViewportWidget::ReleaseInputId); !release.isEmpty()) {
+        play_hint_->setText(tr("Game has input, %1 to release").arg(release[0].toString(QKeySequence::NativeText)));
+    } else {
+        play_hint_->setText(tr("Game has input, click outside the viewport to release"));
+    }
 }
 
 void MainWindow::viewportPressed(const QPointF position, const Qt::MouseButton button,

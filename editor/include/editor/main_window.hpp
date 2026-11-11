@@ -55,6 +55,8 @@ private:
     void refreshTitle();
     void restoreLayout();
     void refreshStatus();
+    /// Whether the game has the input during Play, and how to change that.
+    void refreshPlayHint();
     /// A left press grabs a gizmo handle, or else picks; a right press cancels a gizmo drag.
     void viewportPressed(QPointF position, Qt::MouseButton button, Qt::KeyboardModifiers modifiers);
     void viewportMoved(QPointF position);
@@ -77,6 +79,7 @@ private:
     ViewportWidget* viewport_ = nullptr;
     EditorCameraSubsystem* camera_ = nullptr;
     QLabel* status_label_ = nullptr;
+    QLabel* play_hint_ = nullptr;
     QTimer* tick_timer_ = nullptr;
     /// Set by switchProject(): started once the layout is saved.
     QString relaunch_project_;

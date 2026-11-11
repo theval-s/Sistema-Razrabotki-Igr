@@ -1,6 +1,7 @@
 #include <editor/shortcut_registry.hpp>
 
 #include <QAction>
+#include <QKeyEvent>
 #include <QMenu>
 #include <QSettings>
 #include <QWidget>
@@ -88,6 +89,13 @@ QList<ShortcutRegistry::Command> ShortcutRegistry::commands() const {
 QList<QKeySequence> ShortcutRegistry::shortcuts(const QString& id) const {
     const Entry* entry = find(id);
     return entry != nullptr ? entry->command.shortcuts : QList<QKeySequence>{};
+}
+
+bool ShortcutRegistry::matches(const QString& id, const QKeyEvent& event) const {
+    // Qt's own matching ignores the keypad flag too.
+    Qt::KeyboardModifiers modifiers = event.modifiers();
+    modifiers.setFlag(Qt::KeypadModifier, false);
+    return shortcuts(id).contains(QKeySequence(QKeyCombination(modifiers, Qt::Key(event.key()))));
 }
 
 bool ShortcutRegistry::setShortcuts(const QString& id, const QList<QKeySequence>& shortcuts) {
