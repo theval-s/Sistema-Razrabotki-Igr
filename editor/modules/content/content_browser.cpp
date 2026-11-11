@@ -124,7 +124,6 @@ public:
 };
 
 void setUpDragAndDrop(QAbstractItemView& view) {
-    //TODO: figure out drag and drop for viewport, probably needs mime data handling
     view.setDragDropMode(QAbstractItemView::DragDrop);
     view.setDefaultDropAction(Qt::MoveAction);  // Ctrl copies
     view.setDragDropOverwriteMode(true);        // drop onto folders, not between items

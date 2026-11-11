@@ -1,9 +1,13 @@
 #include "scene_placement.hpp"
 
 #include <QDir>
+#include <QDropEvent>
 #include <QFileInfo>
+#include <QMimeData>
 #include <QString>
+#include <QWidget>
 
+#include <algorithm>
 #include <vector>
 
 #include <SimpleMath.h>
@@ -11,12 +15,15 @@
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/engine.hpp>
 #include <engine/rendering/RenderComponents.hpp>
+#include <engine/scene/SceneQueries.hpp>
 
 #include <editor/editor_camera.hpp>
 #include <editor/editor_context.hpp>
 #include <editor/paths.hpp>
+#include <editor/play_session.hpp>
 #include <editor/scene_history.hpp>
 #include <editor/selection.hpp>
+#include <editor/viewport_view.hpp>
 
 #include "asset_operations.hpp"
 
@@ -70,7 +77,7 @@ const engine::CatalogEntry* placeableMesh(const engine::AssetCatalog& catalog, c
     return nullptr;
 }
 
-int addToScene(editor::EditorContext& context, const QStringList& paths) {
+int addToScene(editor::EditorContext& context, const QStringList& paths, const std::optional<Vector3> at) {
     engine::AssetSystem& assets = context.engine().GetSceneAssets();
     const engine::AssetCatalog& catalog = assets.GetCatalog();
     std::vector<const engine::CatalogEntry*> meshes;
@@ -84,7 +91,7 @@ int addToScene(editor::EditorContext& context, const QStringList& paths) {
     }
 
     const editor::EditorCameraSubsystem* camera = context.camera();
-    const Vector3 center = camera != nullptr ? camera->GetSpawnPoint() : Vector3::Zero;
+    const Vector3 center = at ? *at : camera != nullptr ? camera->GetSpawnPoint() : Vector3::Zero;
     const Vector3 right = camera != nullptr ? camera->GetRight() : Vector3::Right;
     engine::Scene& scene = context.scene();
     std::vector<entt::entity> added;
@@ -112,6 +119,63 @@ int addToScene(editor::EditorContext& context, const QStringList& paths) {
     context.selection().setEntities(added);
     context.history().end();
     return static_cast<int>(added.size());
+}
+
+ViewportDropTarget::ViewportDropTarget(editor::EditorContext& context, QObject* parent)
+    : QObject(parent), context_(context) {
+    context.viewport()->setAcceptDrops(true);
+    context.viewport()->installEventFilter(this);
+}
+
+bool ViewportDropTarget::eventFilter(QObject* watched, QEvent* event) {
+    switch (event->type()) {
+    case QEvent::DragEnter: {
+        auto* drag = static_cast<QDragEnterEvent*>(event);
+        paths_.clear();
+        if (const QMimeData* data = drag->mimeData();
+            !context_.playSession().isPlaying() && data->hasFormat(editor::AssetPathsMimeType)) {
+            paths_ = QString::fromUtf8(data->data(editor::AssetPathsMimeType)).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+            const engine::AssetCatalog& catalog = context_.engine().GetSceneAssets().GetCatalog();
+            if (std::ranges::none_of(paths_, [&](const QString& path) { return placeableMesh(catalog, path) != nullptr; })) {
+                paths_.clear();
+            }
+        }
+        [[fallthrough]];
+    }
+    case QEvent::DragMove: {
+        auto* drag = static_cast<QDragMoveEvent*>(event);
+        // A copy: the browser would delete the files after a move.
+        drag->setDropAction(Qt::CopyAction);
+        drag->setAccepted(!paths_.isEmpty());
+        return true;
+    }
+    case QEvent::Drop: {
+        auto* drop = static_cast<QDropEvent*>(event);
+        if (paths_.isEmpty()) return false;
+        drop->setDropAction(Qt::CopyAction);
+        drop->accept();
+        addToScene(context_, paths_, dropPoint(drop->position()));
+        context_.viewport()->setFocus(Qt::OtherFocusReason);
+        paths_.clear();
+        return true;
+    }
+    default:
+        return QObject::eventFilter(watched, event);
+    }
+}
+
+std::optional<Vector3> ViewportDropTarget::dropPoint(const QPointF position) const {
+    const auto view = context_.viewportView();
+    if (!view) return std::nullopt;
+    const auto ray = view->ray({static_cast<float>(position.x()), static_cast<float>(position.y())});
+    // World bounds, not triangles: a model lands on the box of what's under the cursor.
+    std::optional<float> nearest;
+    for (const engine::RayHit& hit : engine::RaycastAll(context_.engine().GetScene(), context_.engine().GetSceneAssets(),
+                                                         ray.origin, ray.direction, ray.length)) {
+        if (hit.distance > 0.0f && (!nearest || hit.distance < *nearest)) nearest = hit.distance;
+    }
+    return nearest ? ray.origin + ray.direction * *nearest
+                   : editor::EditorCameraSubsystem::SpawnPoint(ray.origin, ray.direction);
 }
 
 }  // namespace content

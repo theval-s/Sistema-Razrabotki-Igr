@@ -48,6 +48,9 @@ public:
     /// Where new entities go: the ground (y = 0) where the view meets it nearby, else a few
     /// units ahead.
     [[nodiscard]] DirectX::SimpleMath::Vector3 GetSpawnPoint() const noexcept;
+    /// The same rule along any ray, e.g. through the cursor; `direction` is unit length.
+    [[nodiscard]] static DirectX::SimpleMath::Vector3 SpawnPoint(const DirectX::SimpleMath::Vector3& origin,
+                                                                 const DirectX::SimpleMath::Vector3& direction) noexcept;
 
 private:
     void TakeSceneCamera();

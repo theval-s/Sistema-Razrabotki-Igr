@@ -21,8 +21,10 @@ add_library(editor_core SHARED
     src/selection.cpp
     src/shortcut_registry.cpp
     src/startup_scene.cpp
+    src/tool_icon.cpp
     src/transform_gizmo.cpp
     src/viewport_picker.cpp
+    src/viewport_tool_bar.cpp
     src/viewport_view.cpp
     include/editor/asset_icons.hpp
     include/editor/asset_picker.hpp
@@ -42,9 +44,12 @@ add_library(editor_core SHARED
     include/editor/selection.hpp
     include/editor/shortcut_registry.hpp
     include/editor/startup_scene.hpp
+    include/editor/tool_icon.hpp
     include/editor/transform_gizmo.hpp
     include/editor/viewport_picker.hpp
+    include/editor/viewport_tool_bar.hpp
     include/editor/viewport_view.hpp
+    ../resources/icons.qrc
 )
 
 include(GenerateExportHeader)
@@ -67,10 +72,11 @@ target_link_libraries(editor_core PUBLIC
     Qt6::Widgets
 )
 # Private: modules talk to EditorContext only and never see ADS.
-target_link_libraries(editor_core PRIVATE ads::qtadvanceddocking-qt6 nlohmann_json::nlohmann_json)
+target_link_libraries(editor_core PRIVATE ads::qtadvanceddocking-qt6 nlohmann_json::nlohmann_json Qt6::Svg)
 
 set_target_properties(editor_core PROPERTIES
     OUTPUT_NAME editor_core
+    AUTORCC ON
     FOLDER "tools"
 )
 

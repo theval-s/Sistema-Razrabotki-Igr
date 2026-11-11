@@ -16,6 +16,8 @@
 #include <QStatusBar>
 #include <QString>
 #include <QTimer>
+#include <QToolBar>
+#include <QVBoxLayout>
 
 #include <string>
 #include <utility>
@@ -45,10 +47,12 @@
 #include <editor/transform_gizmo.hpp>
 #include <editor/viewport_overlay.hpp>
 #include <editor/viewport_picker.hpp>
+#include <editor/viewport_tool_bar.hpp>
 #include <editor/viewport_widget.hpp>
 #include <editor/selection.hpp>
 #include <editor/shortcut_registry.hpp>
 #include <editor/startup_scene.hpp>
+#include <editor/tool_icon.hpp>
 #include <editor/editor_log.hpp>
 
 namespace editor {
@@ -90,12 +94,19 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     connect(viewport_, &ViewportWidget::mousePressed, this, &MainWindow::viewportPressed);
     connect(viewport_, &ViewportWidget::mouseMoved, this, &MainWindow::viewportMoved);
     connect(viewport_, &ViewportWidget::mouseReleased, this, &MainWindow::viewportReleased);
+    auto* tool_bar = new ViewportToolBar;
+    auto* viewport_panel = new QWidget;
+    auto* viewport_layout = new QVBoxLayout(viewport_panel);
+    viewport_layout->setContentsMargins(0, 0, 0, 0);
+    viewport_layout->setSpacing(0);
+    viewport_layout->addWidget(tool_bar);
+    viewport_layout->addWidget(viewport_, 1);
     auto* viewport_dock = new ads::CDockWidget(dock_manager_, tr("Viewport"));
     viewport_dock->setObjectName(QStringLiteral("Viewport"));
-    viewport_dock->setWidget(viewport_, ads::CDockWidget::ForceNoScrollArea);
+    viewport_dock->setWidget(viewport_panel, ads::CDockWidget::ForceNoScrollArea);
     dock_manager_->setCentralWidget(viewport_dock);
 
-    context_ = std::make_unique<EditorContext>(engine_, project_, *this, *dock_manager_);
+    context_ = std::make_unique<EditorContext>(engine_, project_, *this, *dock_manager_, *viewport_, *tool_bar);
     context_->editActions().attach(viewport_);
     gizmo_ = std::make_unique<TransformGizmo>(engine_.GetScene(), context_->selection(), &context_->history());
     picker_ = std::make_unique<ViewportPicker>(engine_, context_->selection());
@@ -230,22 +241,13 @@ void MainWindow::tickEngine() {
     refreshStatus();
 }
 
-std::optional<ViewportView> MainWindow::viewportView() const {
-    if (!engine_.IsInitialized() || camera_ == nullptr || viewport_->width() <= 0 || viewport_->height() <= 0) {
-        return std::nullopt;
-    }
-    // Qt's logical size, which the swap chain's physical pixels are scaled from.
-    return ViewportView::fromCamera(engine_.GetSubsystem<engine::RenderingSubsystem>()->GetWorld().camera,
-                                    {static_cast<float>(viewport_->width()), static_cast<float>(viewport_->height())});
-}
-
 void MainWindow::viewportPressed(const QPointF position, const Qt::MouseButton button,
                                  const Qt::KeyboardModifiers modifiers) {
     if (button == Qt::RightButton) {
         gizmo_->cancel();
         return;
     }
-    const auto view = viewportView();
+    const auto view = context_->viewportView();
     if (button != Qt::LeftButton || !view) return;
     // The gizmo's handles are in front of everything.
     if (!gizmo_->press(*view, toVector(position))) {
@@ -254,7 +256,7 @@ void MainWindow::viewportPressed(const QPointF position, const Qt::MouseButton b
 }
 
 void MainWindow::viewportMoved(const QPointF position) {
-    const auto view = viewportView();
+    const auto view = context_->viewportView();
     if (!view) return;
     if (gizmo_->dragging()) {
         gizmo_->drag(*view, toVector(position));
@@ -327,12 +329,14 @@ void MainWindow::buildMenus() {
 void MainWindow::buildGizmoActions(QMenu& menu) {
     // Shortcuts only while the viewport has focus, so W/E/R/X still type in fields elsewhere.
     // While the right button turns the view, the viewport keeps them for the camera.
-    const auto add = [this, &menu](const QString& id, const QString& text, const Qt::Key key) {
-        auto* action = menu.addAction(text);
+    QToolBar* bar = context_->toolBar(ViewportToolBar::Section::Left);
+    const auto add = [this, &menu, bar](const QString& id, const QString& text, const Qt::Key key, const QString& icon) {
+        auto* action = menu.addAction(toolIcon(icon), text);
         context_->shortcuts().bind(action, id, tr("Gizmo"), QKeySequence(key));
         action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         action->setCheckable(true);
         viewport_->addAction(action);
+        bar->addAction(action);
         // During Play these keys are the game's.
         connect(&context_->playSession(), &PlaySession::playingChanged, action, &QAction::setDisabled);
         return action;
@@ -342,20 +346,22 @@ void MainWindow::buildGizmoActions(QMenu& menu) {
         QString id;
         QString text;
         Qt::Key key;
+        QString icon;
         TransformGizmo::Mode mode;
     } entries[] = {
-        {QStringLiteral("gizmo.move"), tr("&Move"), Qt::Key_W, TransformGizmo::Mode::Translate},
-        {QStringLiteral("gizmo.rotate"), tr("&Rotate"), Qt::Key_E, TransformGizmo::Mode::Rotate},
-        {QStringLiteral("gizmo.scale"), tr("S&cale"), Qt::Key_R, TransformGizmo::Mode::Scale},
+        {QStringLiteral("gizmo.move"), tr("&Move"), Qt::Key_W, QStringLiteral("move"), TransformGizmo::Mode::Translate},
+        {QStringLiteral("gizmo.rotate"), tr("&Rotate"), Qt::Key_E, QStringLiteral("rotate"), TransformGizmo::Mode::Rotate},
+        {QStringLiteral("gizmo.scale"), tr("S&cale"), Qt::Key_R, QStringLiteral("scale"), TransformGizmo::Mode::Scale},
     };
     for (const auto& entry : entries) {
         const auto mode = entry.mode;
-        auto* action = add(entry.id, entry.text, entry.key);
+        auto* action = add(entry.id, entry.text, entry.key, entry.icon);
         action->setActionGroup(modes);
         action->setChecked(gizmo_->mode() == mode);
         connect(action, &QAction::triggered, this, [this, mode] { gizmo_->setMode(mode); });
     }
-    auto* local = add(QStringLiteral("gizmo.local-axes"), tr("&Local Axes"), Qt::Key_X);
+    bar->addSeparator();
+    auto* local = add(QStringLiteral("gizmo.local-axes"), tr("&Local Axes"), Qt::Key_X, QStringLiteral("local-axes"));
     local->setChecked(gizmo_->space() == TransformGizmo::Space::Local);
     connect(local, &QAction::toggled, this, [this](const bool checked) {
         gizmo_->setSpace(checked ? TransformGizmo::Space::Local : TransformGizmo::Space::World);

@@ -19,6 +19,7 @@
 #include <editor/lua_definitions.hpp>
 #include <editor/play_session.hpp>
 #include <editor/shortcut_registry.hpp>
+#include <editor/tool_icon.hpp>
 
 #include "autoload_dialog.hpp"
 
@@ -63,9 +64,10 @@ private:
         shortcuts.bind(pause_, QStringLiteral("play.pause"), QObject::tr("Play"));
         stop_ = menu->addAction(QObject::tr("Stop"));
         shortcuts.bind(stop_, QStringLiteral("play.stop"), QObject::tr("Play"), QKeySequence(Qt::SHIFT | Qt::Key_F5));
-        for (QAction* action : {play_, pause_, stop_}) {
-            context_->toolBar()->addAction(action);
-        }
+        play_->setIcon(editor::toolIcon(QStringLiteral("play")));
+        pause_->setIcon(editor::toolIcon(QStringLiteral("pause")));
+        stop_->setIcon(editor::toolIcon(QStringLiteral("stop")));
+        context_->toolBar(editor::ViewportToolBar::Section::Center)->addActions({play_, pause_, stop_});
 
         QObject::connect(play_, &QAction::triggered, play_, [this] { play(); });
         QObject::connect(stop_, &QAction::triggered, stop_, [&session] { session.stop(); });

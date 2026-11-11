@@ -5,11 +5,13 @@
 #include <Qt>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <editor/editor_core_export.hpp>
 #include <editor/selection.hpp>
+#include <editor/viewport_tool_bar.hpp>
 
 class QMainWindow;
 class QMenu;
@@ -37,6 +39,7 @@ class SceneEvents;
 class SceneHistory;
 class ShortcutRegistry;
 class StartupScene;
+struct ViewportView;
 
 /// What the editor hands to its modules: the engine, the project, the scene being edited, the
 /// selection and the places a module may add UI to. Owned by MainWindow; outlives every module and is
@@ -44,7 +47,7 @@ class StartupScene;
 class EDITOR_CORE_API EditorContext {
 public:
     EditorContext(engine::Engine& engine, engine::Project& project, QMainWindow& window,
-                  ads::CDockManager& dock_manager);
+                  ads::CDockManager& dock_manager, QWidget& viewport, ViewportToolBar& tool_bar);
     /// Deletes the panels added through addPanel().
     ~EditorContext();
 
@@ -75,13 +78,17 @@ public:
     [[nodiscard]] EditActions& editActions() noexcept;
     /// The viewport's POV
     [[nodiscard]] EditorCameraSubsystem* camera() noexcept;
+    /// Where the scene is drawn; viewport tools (e.g. drop targets) filter its events.
+    [[nodiscard]] QWidget* viewport() noexcept;
+    /// How the viewport sees the scene right now; nothing before the engine runs.
+    [[nodiscard]] std::optional<ViewportView> viewportView() const;
     /// Every shortcut: bind actions through it instead of setShortcut(), so the user can change them.
     [[nodiscard]] ShortcutRegistry& shortcuts() noexcept;
 
     /// Finds the menu-bar menu with this title (ignoring '&' mnemonics) or appends a new one.
     QMenu* menu(const QString& title);
-    /// The editor's main toolbar, created on first use.
-    QToolBar* toolBar();
+    /// A section of the toolbar above the viewport.
+    QToolBar* toolBar(ViewportToolBar::Section section);
     /// Parent for the dialogs and message boxes a module opens outside its own panels.
     [[nodiscard]] QWidget* mainWindow() noexcept;
     /// Shows `message` in the status bar for `timeout_ms`.
@@ -107,7 +114,8 @@ private:
     engine::Project& project_;
     QMainWindow& window_;
     ads::CDockManager& dock_manager_;
-    QToolBar* tool_bar_ = nullptr;
+    QWidget& viewport_;
+    ViewportToolBar& tool_bar_;
     std::vector<Panel> panels_;
     std::unique_ptr<ShortcutRegistry> shortcuts_;
     std::unique_ptr<SceneEvents> scene_events_;  // before everything that follows the scene

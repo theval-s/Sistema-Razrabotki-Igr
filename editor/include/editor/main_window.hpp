@@ -5,7 +5,6 @@
 #include <QPointF>
 
 #include <memory>
-#include <optional>
 
 #include <engine/engine.hpp>
 #include <engine/project/Project.hpp>
@@ -30,7 +29,6 @@ class ModuleLoader;
 class TransformGizmo;
 class ViewportPicker;
 class ViewportWidget;
-struct ViewportView;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -50,15 +48,13 @@ private slots:
 
 private:
     void buildMenus();
-    /// Move/Rotate/Scale (W/E/R) and Local Axes (X).
+    /// Move/Rotate/Scale (W/E/R) and Local Axes (X), in `menu` and the viewport's toolbar.
     void buildGizmoActions(QMenu& menu);
     void buildLogDock();
     /// Scene name and unsaved-changes mark.
     void refreshTitle();
     void restoreLayout();
     void refreshStatus();
-    /// How the viewport sees the scene right now; nothing before the engine runs.
-    [[nodiscard]] std::optional<ViewportView> viewportView() const;
     /// A left press grabs a gizmo handle, or else picks; a right press cancels a gizmo drag.
     void viewportPressed(QPointF position, Qt::MouseButton button, Qt::KeyboardModifiers modifiers);
     void viewportMoved(QPointF position);

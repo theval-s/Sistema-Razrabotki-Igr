@@ -90,14 +90,17 @@ Vector3 EditorCameraSubsystem::GetRight() const noexcept {
 }
 
 Vector3 EditorCameraSubsystem::GetSpawnPoint() const noexcept {
-    const Vector3 forward = GetForward();
-    if (forward.y < 0.0f) {
-        const float distance = -position_.y / forward.y;
+    return SpawnPoint(position_, GetForward());
+}
+
+Vector3 EditorCameraSubsystem::SpawnPoint(const Vector3& origin, const Vector3& direction) noexcept {
+    if (direction.y < 0.0f) {
+        const float distance = -origin.y / direction.y;
         if (distance > 0.0f && distance <= MaxGroundDistance) {
-            return position_ + forward * distance;
+            return origin + direction * distance;
         }
     }
-    return position_ + forward * SpawnDistance;
+    return origin + direction * SpawnDistance;
 }
 
 void EditorCameraSubsystem::Focus(const Vector3& center, const float radius) {

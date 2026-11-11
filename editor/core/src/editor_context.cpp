@@ -4,7 +4,6 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QStatusBar>
-#include <QToolBar>
 
 #include <algorithm>
 #include <utility>
@@ -15,6 +14,7 @@
 
 #include <engine/engine.hpp>
 #include <engine/project/Project.hpp>
+#include <engine/rendering/RenderingSubsystem.hpp>
 
 #include <editor/edit_actions.hpp>
 #include <editor/editor_camera.hpp>
@@ -24,6 +24,7 @@
 #include <editor/scene_history.hpp>
 #include <editor/shortcut_registry.hpp>
 #include <editor/startup_scene.hpp>
+#include <editor/viewport_view.hpp>
 
 namespace editor {
 
@@ -47,8 +48,9 @@ ads::DockWidgetArea toAdsArea(const Qt::DockWidgetArea area) {
 
 /// Context to pass to Modules instead of passing the whole editor to them
 EditorContext::EditorContext(engine::Engine& engine, engine::Project& project, QMainWindow& window,
-                             ads::CDockManager& dock_manager)
-    : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager),
+                             ads::CDockManager& dock_manager, QWidget& viewport, ViewportToolBar& tool_bar)
+    : engine_(engine), project_(project), window_(window), dock_manager_(dock_manager), viewport_(viewport),
+      tool_bar_(tool_bar),
       shortcuts_(std::make_unique<ShortcutRegistry>()), scene_events_(std::make_unique<SceneEvents>(engine.GetScene())), selection_(engine.GetScene(), *scene_events_),
       history_(std::make_unique<SceneHistory>(engine, selection_, *scene_events_)),
       scene_document_(std::make_unique<SceneDocument>(engine, project, selection_, *history_)),
@@ -118,6 +120,20 @@ EditorCameraSubsystem* EditorContext::camera() noexcept {
     return engine_.GetSubsystem<EditorCameraSubsystem>();
 }
 
+QWidget* EditorContext::viewport() noexcept {
+    return &viewport_;
+}
+
+std::optional<ViewportView> EditorContext::viewportView() const {
+    if (!engine_.IsInitialized() || engine_.GetSubsystem<EditorCameraSubsystem>() == nullptr ||
+        viewport_.width() <= 0 || viewport_.height() <= 0) {
+        return std::nullopt;
+    }
+    // Qt's logical size, which the swap chain's physical pixels are scaled from.
+    return ViewportView::fromCamera(engine_.GetSubsystem<engine::RenderingSubsystem>()->GetWorld().camera,
+                                    {static_cast<float>(viewport_.width()), static_cast<float>(viewport_.height())});
+}
+
 ShortcutRegistry& EditorContext::shortcuts() noexcept {
     return *shortcuts_;
 }
@@ -132,12 +148,8 @@ QMenu* EditorContext::menu(const QString& title) {
     return window_.menuBar()->addMenu(title);
 }
 
-QToolBar* EditorContext::toolBar() {
-    if (tool_bar_ == nullptr) {
-        tool_bar_ = window_.addToolBar(QObject::tr("Main"));
-        tool_bar_->setObjectName(QStringLiteral("MainToolBar"));
-    }
-    return tool_bar_;
+QToolBar* EditorContext::toolBar(const ViewportToolBar::Section section) {
+    return tool_bar_.section(section);
 }
 
 QWidget* EditorContext::mainWindow() noexcept {
