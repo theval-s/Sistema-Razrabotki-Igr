@@ -82,6 +82,21 @@ TEST_F(GameplayBindingTests, RegistrationActivatesDefaultBeforeFirstInputQuery) 
     Lua("assert(Input.Pressed('Jump') and Input.Down('Jump'))");
 }
 
+TEST_F(GameplayBindingTests, CursorModeIsTheGamesRequest) {
+    Lua(R"(
+        assert(Input.CursorMode == CursorMode)
+        assert(Input.GetCursorMode() == CursorMode.Normal)
+        Input.SetCursorMode(CursorMode.Locked)
+        assert(Input.GetCursorMode() == CursorMode.Locked)
+        assert(not pcall(Input.SetCursorMode, 7))
+        assert(not pcall(Input.SetCursorMode, -1))
+        assert(Input.GetCursorMode() == CursorMode.Locked)
+    )");
+    EXPECT_EQ(input->GetCursorMode(), CursorMode::Locked);
+    input->SetCursorMode(CursorMode::Hidden);
+    Lua("assert(Input.GetCursorMode() == CursorMode.Hidden)");
+}
+
 TEST_F(GameplayBindingTests, MousePositionIsLatchedAbsoluteAndIndependentOfMotion) {
     Lua(R"(
         game = Input.GetContext('Gameplay')

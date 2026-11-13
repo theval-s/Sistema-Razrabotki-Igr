@@ -92,13 +92,14 @@ TEST_F(UiExampleTest, ActualAutoloadLoadsFontsStylesDocumentsAndTypedArrayBindin
     EXPECT_EQ(stats.documents, 3u);
     EXPECT_EQ(stats.models, 3u);
     EXPECT_EQ(stats.subscriptions, 4u);
-    Lua("assert(Autoloads.ExampleUI ~= nil); assert(not Time.IsPaused())");
+    Lua("assert(Autoloads.ExampleUI ~= nil); assert(not Time.IsPaused()); assert(Input.GetCursorMode() == CursorMode.Locked)");
     // Feed the actual physical action bound by the shipped autoload.
     input->OnPhysicalKey(PhysicalKey::P, true);
     host.Tick();
     Lua("assert(Time.IsPaused())");
     EXPECT_TRUE(ui->GetCaptureState().keyboard);
     EXPECT_TRUE(ui->GetCaptureState().pointer);
+    EXPECT_EQ(input->GetCursorMode(), CursorMode::Locked);
     input->OnPhysicalKey(PhysicalKey::P, false);
     host.Tick(); // Layout the now-visible settings form while simulation is paused.
     scripts->EndPlay();
@@ -110,6 +111,12 @@ TEST_F(UiExampleTest, ActualAutoloadLoadsFontsStylesDocumentsAndTypedArrayBindin
     EXPECT_EQ(stats.queuedEvents, 0u);
     EXPECT_FALSE(ui->GetCaptureState().keyboard);
     EXPECT_FALSE(ui->GetCaptureState().pointer);
+    // A replacement session starts from Normal and the example must restore mouse-look.
+    // Requesting it only from the native subsystem's Initialize would miss this path.
+    input->SetCursorMode(CursorMode::Normal);
+    host.SetPaused(false);
+    StartExample();
+    EXPECT_EQ(input->GetCursorMode(), CursorMode::Locked);
 }
 
 TEST_F(UiExampleTest, ActualInventoryActionLaysOutPopulatedArrayAndClosesOnSecondPress) {

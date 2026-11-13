@@ -20,6 +20,7 @@
 #include <limits>
 
 #include <engine/input/InputSubsystem.hpp>
+#include <engine/input/CursorPolicy.hpp>
 #include <engine/core/Utf.hpp>
 #include <engine/input/Win32PhysicalKey.hpp>
 #include <editor/editor_camera.hpp>
@@ -107,12 +108,13 @@ public:
         else if (name == "unavailable") shape = Qt::ForbiddenCursor;
         else if (name == "none") shape = Qt::BlankCursor;
         widget_->ui_cursor_ = shape;
-        widget_->applyUiCapture();
+        widget_->applyCursorMode();
     }
     void SetTextInput(const engine::UiTextInputState& state) override {
         if (!widget_) return;
         if (widget_->text_input_.active && !state.active) widget_->cancelComposition();
         widget_->text_input_ = state;
+        widget_->applyCursorMode();
         widget_->setAttribute(Qt::WA_InputMethodEnabled, state.active && widget_->captured_);
         if (widget_->hasFocus()) QGuiApplication::inputMethod()->update(Qt::ImQueryAll);
     }
@@ -120,7 +122,7 @@ public:
     void SetCapture(const engine::UiCaptureState& state) override {
         if (!widget_) return;
         widget_->ui_capture_ = state;
-        widget_->applyUiCapture();
+        widget_->applyCursorMode();
     }
 private:
     QPointer<ViewportWidget> widget_;
@@ -135,19 +137,6 @@ engine::UiSurfaceMetrics ViewportWidget::uiMetrics() const {
     const auto size = pixelSize();
     return {static_cast<std::uint32_t>(size.width()), static_cast<std::uint32_t>(size.height()),
             static_cast<float>(devicePixelRatioF())};
-}
-
-void ViewportWidget::applyUiCapture() {
-    const bool active = playing_ && captured_ && hasFocus();
-    if (active && (ui_capture_.pointer || ui_capture_.wantsVisibleCursor || ui_capture_.textInput)) releaseCursor();
-    if (active && ui_capture_.pointer && !ui_mouse_grab_) {
-        grabMouse(); ui_mouse_grab_ = true;
-    } else if ((!active || !ui_capture_.pointer) && ui_mouse_grab_) {
-        if (mouseGrabber() == this) releaseMouse();
-        ui_mouse_grab_ = false;
-    }
-    if (active) setCursor(ui_capture_.wantsVisibleCursor && ui_cursor_ == Qt::BlankCursor ? Qt::ArrowCursor : ui_cursor_);
-    else if (!cursor_pinned_) unsetCursor();
 }
 
 ViewportWidget::ViewportWidget(QWidget* parent) : QWidget(parent) {
@@ -212,8 +201,8 @@ void ViewportWidget::captureInput() {
     setFocus(Qt::OtherFocusReason);
     queueUi({.payload = engine::InputUiFocus{true}});
     setAttribute(Qt::WA_InputMethodEnabled, text_input_.active);
-    applyUiCapture();
     feedMousePosition(mapFromGlobal(QCursor::pos()));
+    applyCursorMode();
     emit inputCaptureChanged(true);
 }
 
@@ -222,13 +211,36 @@ void ViewportWidget::releaseInput() {
     captured_ = false;
     cancelComposition();
     setAttribute(Qt::WA_InputMethodEnabled, false);
-    applyUiCapture();
     swallowed_buttons_ = {};
-    releaseCursor();
+    applyCursorMode();
     last_cursor_.reset();
     // The game would never see the release of what is held now.
     if (input_ != nullptr) input_->OnFocusLost();
     emit inputCaptureChanged(false);
+}
+
+void ViewportWidget::applyCursorMode() {
+    using engine::CursorMode;
+    if (!playing_) return; // Edit-mode right drag owns its own camera cursor.
+    const auto policy = engine::ResolveCursorPolicy(input_ ? input_->GetCursorMode() : CursorMode::Normal,
+        captured_ && hasFocus(), ui_capture_.pointer, ui_capture_.wantsVisibleCursor,
+        ui_capture_.textInput || text_input_.active);
+    const bool newlyLocked = policy.mode == CursorMode::Locked && cursor_mode_ != CursorMode::Locked;
+    if (policy.mode != cursor_mode_) last_cursor_.reset();
+    cursor_mode_ = policy.mode;
+    cursor_pinned_ = policy.mode == CursorMode::Locked;
+    // Qt/OS can release capture independently of the persistent policy.
+    if (policy.grab) {
+        if (mouseGrabber() != this) grabMouse();
+    } else if (mouseGrabber() == this) releaseMouse();
+    if (policy.mode != CursorMode::Normal) setCursor(Qt::BlankCursor);
+    else if (captured_ && hasFocus())
+        setCursor(policy.interactiveUi && ui_cursor_ == Qt::BlankCursor ? Qt::ArrowCursor : ui_cursor_);
+    else unsetCursor();
+    if (newlyLocked) {
+        last_cursor_ = mapToGlobal(rect().center());
+        QCursor::setPos(*last_cursor_);
+    }
 }
 
 QPaintEngine* ViewportWidget::paintEngine() const {
@@ -254,7 +266,7 @@ bool ViewportWidget::event(QEvent* event) {
     // Accepting the override keeps a shortcut (F, Ctrl+A...) from taking the key: it arrives
     // in keyPressEvent instead, and from there at the camera, or at the game while it has input.
     if (event->type() == QEvent::ShortcutOverride &&
-        (cursor_pinned_ || (captured_ && !isPlayShortcut(*static_cast<QKeyEvent*>(event))))) {
+        ((cursor_pinned_ || captured_) && !isPlayShortcut(*static_cast<QKeyEvent*>(event)))) {
         event->accept();
         return true;
     }
@@ -289,7 +301,7 @@ void ViewportWidget::keyReleaseEvent(QKeyEvent* event) {
 void ViewportWidget::mousePressEvent(QMouseEvent* event) {
     // Clicking the viewport is how it gets the keyboard, so WASD works right away.
     setFocus(Qt::MouseFocusReason);
-    last_cursor_ = event->globalPosition().toPoint();
+    if (!cursor_pinned_) last_cursor_ = event->globalPosition().toPoint();
     if (playing_ && !captured_) {
         // Reacquisition is focus-only: neither UI nor gameplay gets this press/release.
         swallowed_buttons_ |= event->button();
@@ -317,7 +329,7 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
     }
     if (playing_ && !captured_) return;
     feedMousePosition(event->position());
-    if (event->button() == Qt::RightButton) {
+    if (!playing_ && event->button() == Qt::RightButton) {
         releaseCursor();
     } else if (!playing_ && !cursor_pinned_) {
         emit mouseReleased(event->position(), event->button());

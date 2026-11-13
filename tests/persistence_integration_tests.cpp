@@ -7,6 +7,7 @@
 #include <engine/scene/GameDocument.hpp>
 #include <engine/scene/SceneDocument.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
+#include <engine/input/InputSubsystem.hpp>
 
 #include <gtest/gtest.h>
 #include <spdlog/sinks/callback_sink.h>
@@ -111,6 +112,38 @@ engine::SceneEntityDefinition PersistentEntity(const char* name, const engine::A
     entity.script = engine::ScriptComponent{script, true};
     entity.persistence = engine::GamePersistence{false, false, true};
     return entity;
+}
+
+TEST(PersistenceIntegration, ReplacingSessionResetsOldRequestBeforeFreshRestoreAndStart) {
+    PersistenceFixture f;
+    auto* input = f.host.AddSubsystem<engine::InputSubsystem>();
+    const auto script = f.Script("Cursor", R"(
+        return {
+            SaveVersion = 1,
+            OnSaveGame = function(self) return {} end,
+            OnLoadGame = function(self, state)
+                assert(Input.GetCursorMode() == CursorMode.Normal)
+                Input.SetCursorMode(CursorMode.Hidden)
+            end,
+            OnStart = function(self)
+                if Input.GetCursorMode() == CursorMode.Hidden then
+                    Input.SetCursorMode(CursorMode.Locked)
+                end
+            end,
+            OnDestroy = function(self) Input.SetCursorMode(CursorMode.Locked) end
+        }
+    )");
+    f.autoloads.push_back({"Cursor", script, true});
+    const auto level = f.Level("CursorLevel", {});
+    ASSERT_TRUE(f.Start(level)) << f.error;
+    const auto save = f.sandbox / "cursor.save.json";
+    ASSERT_TRUE(f.host.SaveGame(save, f.error)) << f.error;
+    input->SetCursorMode(engine::CursorMode::Locked);
+    ASSERT_TRUE(f.host.LoadGame(save, f.error)) << f.error;
+    EXPECT_EQ(input->GetCursorMode(), engine::CursorMode::Locked);
+    // An OnDestroy request from the old session must not escape StopGame either.
+    f.host.StopGame();
+    EXPECT_EQ(input->GetCursorMode(), engine::CursorMode::Normal);
 }
 
 void ExpectSuccess(const std::shared_ptr<engine::SaveGameRequest>& request) {

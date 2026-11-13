@@ -11,6 +11,7 @@
 #include <engine/ui/UiHost.hpp>
 
 #include <engine/core/Surface.hpp>
+#include <engine/input/InputTypes.hpp>
 
 namespace engine {
 class InputSubsystem;
@@ -27,9 +28,10 @@ class ShortcutRegistry;
 /// can turn without hitting the screen edge, and every key goes to the camera rather than
 /// to shortcuts, so W/E/Q... keep flying.
 ///
-/// During Play the game has the input while the viewport captures it: from Play, Resume or
+/// During Play the game has the input while the viewport captures it: from Play or
 /// a click into the viewport (which neither gameplay nor UI sees) until the release shortcut,
 /// Stop or focus loss. Meanwhile only the play shortcuts work, and no mouse signals go out.
+/// The game's cursor mode applies unless UI needs the pointer; Locked pins it at the centre.
 class ViewportWidget : public QWidget {
     Q_OBJECT
 
@@ -57,6 +59,8 @@ public:
     /// Available while playing, including paused simulation.
     void captureInput();
     void releaseInput();
+    /// Applies gameplay cursor mode and UI overrides while owning input; call every frame.
+    void applyCursorMode();
 
     /// No Qt painting at all, so it can't draw over the swap chain.
     [[nodiscard]] QPaintEngine* paintEngine() const override;
@@ -94,14 +98,12 @@ private:
                  std::optional<QPointF> position = std::nullopt);
     void feedKey(QKeyEvent* event, bool down);
     void cancelComposition();
-    void applyUiCapture();
     std::shared_ptr<HostBridge> ui_host_;
     engine::UiTextInputState text_input_;
     engine::UiCaptureState ui_capture_;
     Qt::CursorShape ui_cursor_ = Qt::ArrowCursor;
     bool composing_ = false;
     bool resetting_ime_ = false;
-    bool ui_mouse_grab_ = false;
     [[nodiscard]] QSize pixelSize() const;
     /// Editing: always, the camera reads it. Playing: only while captured.
     [[nodiscard]] bool feedsEngine() const noexcept { return input_ != nullptr && (!playing_ || captured_); }
@@ -116,8 +118,10 @@ private:
     /// Global position of the previous mouse move; none after the cursor left the widget,
     /// so coming back in elsewhere isn't reported as a jump.
     std::optional<QPoint> last_cursor_{};
-    /// Right button held: cursor hidden and warped back to last_cursor_.
+    /// Right button held, or the game locked it: cursor hidden and warped back to last_cursor_.
     bool cursor_pinned_ = false;
+    /// The game's mode as applied; Normal while it doesn't have the input.
+    engine::CursorMode cursor_mode_ = engine::CursorMode::Normal;
     bool playing_ = false;
     bool paused_ = false;
     bool captured_ = false;

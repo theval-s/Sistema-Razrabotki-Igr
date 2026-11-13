@@ -163,8 +163,7 @@ public:
     [[nodiscard]] bool Initialize() override {
         rendering_ = GetEngine().GetSubsystem<engine::RenderingSubsystem>();
         input_ = GetEngine().GetSubsystem<engine::InputSubsystem>();
-        host_ = GetEngine().GetSubsystem<engine::Win32InputHost>();
-        if (rendering_ == nullptr || input_ == nullptr || host_ == nullptr) {
+        if (rendering_ == nullptr || input_ == nullptr) {
             return false;
         }
         auto& bindings = input_->DefineContext("Gameplay");
@@ -182,7 +181,6 @@ public:
         bindings.BindAction("Save", Binding::Keyboard(PhysicalKey::F5));
         bindings.BindAction("Load", Binding::Keyboard(PhysicalKey::F9));
         bindings.BindAction("Raycast", Binding::Keyboard(PhysicalKey::R));
-        bindings.BindAction("CaptureMouse", Binding::Mouse(engine::MouseButton::Left));
         controls_ = input_->Activate("Gameplay");
         auto& world = rendering_->GetWorld();
 
@@ -196,13 +194,11 @@ public:
             .position = Vector3{0.0f, 3.0f, 7.0f}
         };
 
-        host_->SetRelativeMouseMode(true);
         return true;
     }
 
     void Shutdown() override {
         controls_.Reset();
-        host_->SetRelativeMouseMode(false);
     }
 
     void Update(const engine::FrameContext& frame) override {
@@ -210,9 +206,6 @@ public:
             GetEngine().RequestExit();
             return;
         }
-        if (!GetEngine().IsPaused() && controls_.Pressed("CaptureMouse") && !host_->IsRelativeMouseMode())
-            host_->SetRelativeMouseMode(true);
-
         auto& world = rendering_->GetWorld();
         const auto& surface = GetEngine().GetSurface();
         if (surface.width > 0 && surface.height > 0) {
@@ -249,7 +242,6 @@ private:
     HWND window_ = nullptr;
     engine::RenderingSubsystem* rendering_ = nullptr;
     engine::InputSubsystem* input_ = nullptr;
-    engine::Win32InputHost* host_ = nullptr;
     engine::InputSubsystem::Context controls_;
 };
 

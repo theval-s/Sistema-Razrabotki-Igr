@@ -12,6 +12,7 @@
 #include <engine/engine.hpp>
 #include <engine/core/Utf.hpp>
 #include <engine/input/InputSubsystem.hpp>
+#include <engine/input/CursorPolicy.hpp>
 #include <engine/input/Win32PhysicalKey.hpp>
 #include <engine/window.hpp>
 
@@ -117,11 +118,12 @@ public:
         else if (name == "resize-ns") id = IDC_SIZENS;
         else if (name == "unavailable") id = IDC_NO;
         cursor = name == "none" ? nullptr : LoadCursorW(nullptr, id);
-        if (Window() && !owner->relativeMouse_) ::SetCursor(cursor);
+        if (Window()) owner->ApplyCursorMode();
     }
     void SetTextInput(const UiTextInputState& state) override {
         if (text.active && !state.active) CancelComposition();
         text = state;
+        if (owner) owner->ApplyCursorMode();
         const HWND window = Window();
         if (!window || !state.active) return;
         if (const HIMC context = ImmGetContext(window)) {
@@ -152,10 +154,7 @@ public:
     }
     void SetCapture(const UiCaptureState& state) override {
         capture = state;
-        if (!Window()) return;
-        if (state.pointer || state.wantsVisibleCursor || state.textInput) owner->SetRelativeMouseMode(false);
-        if (state.pointer && GetFocus() == Window()) ::SetCapture(Window());
-        else if (!owner->relativeMouse_ && GetCapture() == Window()) ReleaseCapture();
+        if (Window()) owner->ApplyCursorMode();
     }
 };
 
@@ -187,31 +186,41 @@ bool Win32InputHost::Initialize() {
     Queue(std::move(event));
     return true;
 }
-void Win32InputHost::SetRelativeMouseMode(bool enabled) {
-    if (enabled && uiHost_ && (uiHost_->capture.pointer || uiHost_->capture.wantsVisibleCursor || uiHost_->capture.textInput)) return;
-    if (enabled == relativeMouse_) return;
-    if (enabled) {
-        if (GetForegroundWindow() != window_) return;
-        ::SetCapture(window_);
-        while (ShowCursor(FALSE) >= 0) {}
-        relativeMouse_ = true;
+void Win32InputHost::ApplyCursorMode() {
+    const bool ownsInput = focused_ && IsWindow(window_) && GetForegroundWindow() == window_;
+    const auto policy = ResolveCursorPolicy(input_ ? input_->GetCursorMode() : CursorMode::Normal,
+        ownsInput,
+        uiHost_ && uiHost_->capture.pointer, uiHost_ && uiHost_->capture.wantsVisibleCursor,
+        uiHost_ && (uiHost_->capture.textInput || uiHost_->text.active));
+    const bool wasHidden = cursorMode_ != CursorMode::Normal;
+    const bool hidden = policy.mode != CursorMode::Normal;
+    if (wasHidden != hidden) {
+        if (hidden) while (ShowCursor(FALSE) >= 0) {}
+        else while (ShowCursor(TRUE) < 0) {}
+    }
+    // Capture can be released by the OS without changing the persistent request.
+    if (policy.grab) {
+        if (GetCapture() != window_) ::SetCapture(window_);
+    } else if (GetCapture() == window_) ReleaseCapture();
+    const bool changed = cursorMode_ != policy.mode;
+    cursorMode_ = policy.mode;
+    if (uiHost_ && (ownsInput || wasHidden)) ::SetCursor(hidden ? nullptr :
+        (policy.interactiveUi && !uiHost_->cursor ? LoadCursorW(nullptr, IDC_ARROW) : uiHost_->cursor));
+    if (changed && cursorMode_ == CursorMode::Locked) {
         RECT client{};
         GetClientRect(window_, &client);
         POINT center{client.right / 2, client.bottom / 2};
         ClientToScreen(window_, &center);
         SetCursorPos(center.x, center.y);
-    } else {
-        relativeMouse_ = false;
-        if (GetCapture() == window_) ReleaseCapture();
-        while (ShowCursor(TRUE) < 0) {}
     }
-    hasCursorPosition_ = false;
+    if (changed) hasCursorPosition_ = false;
 }
 void Win32InputHost::Shutdown() {
     SetInputMessageHandler(window_, {});
+    focused_ = false;
+    ApplyCursorMode();
     if (uiHost_ && uiHost_->owner) { uiHost_->CancelComposition(); uiHost_->owner = nullptr; }
     if (GetCapture() == window_) ReleaseCapture();
-    SetRelativeMouseMode(false);
     input_ = nullptr;
     focused_ = false;
     highSurrogate_ = 0;
@@ -257,10 +266,20 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
     if (!input_) return false;
     InputUiEvent event;
     switch (message) {
+    case WM_MOUSEACTIVATE:
+        if (!focused_) {
+            const auto buttonMessage = HIWORD(lp);
+            swallowedButton_ = buttonMessage == WM_LBUTTONDOWN ? MouseButton::Left :
+                buttonMessage == WM_RBUTTONDOWN ? MouseButton::Right :
+                buttonMessage == WM_MBUTTONDOWN ? MouseButton::Middle : MouseButton::Count;
+            result = MA_ACTIVATEANDEAT;
+            return true;
+        }
+        break;
     case WM_NCDESTROY:
         if (focused_) input_->OnFocusLost();
         focused_ = false;
-        SetRelativeMouseMode(false);
+        ApplyCursorMode();
         uiHost_->CancelComposition();
         uiHost_->owner = nullptr;
         window_ = nullptr;
@@ -270,7 +289,7 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
         event.payload = InputUiFocus{true}; Queue(std::move(event)); break;
     case WM_KILLFOCUS:
         focused_ = false; hasCursorPosition_ = false;
-        SetRelativeMouseMode(false);
+        ApplyCursorMode();
         if (GetCapture() == window) ReleaseCapture();
         uiHost_->CancelComposition();
         input_->OnFocusLost();
@@ -318,6 +337,10 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
             const auto button = message == WM_LBUTTONDOWN || message == WM_LBUTTONUP ? MouseButton::Left :
                 message == WM_RBUTTONDOWN || message == WM_RBUTTONUP ? MouseButton::Right : MouseButton::Middle;
             const bool down = message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN;
+            if (button == swallowedButton_) {
+                if (!down) swallowedButton_ = MouseButton::Count;
+                result = 0; return true;
+            }
             input_->OnMouseButton(button, down); event.payload = InputUiPointerButton{button, down};
         }
         Queue(std::move(event)); break;
@@ -435,7 +458,7 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
         result = DefWindowProcW(window, message, wp, lp & ~static_cast<LPARAM>(ISC_SHOWUICOMPOSITIONWINDOW));
         return true;
     case WM_SETCURSOR:
-        if (LOWORD(lp) == HTCLIENT && !relativeMouse_) { ::SetCursor(uiHost_->cursor); result = TRUE; return true; }
+        if (LOWORD(lp) == HTCLIENT) { ApplyCursorMode(); result = TRUE; return true; }
         break;
     case WM_DPICHANGED: {
         const auto* rect = reinterpret_cast<const RECT*>(lp);
@@ -455,11 +478,13 @@ void Win32InputHost::Update(const FrameContext&) {
     }
     if (!IsWindow(window_) || GetForegroundWindow() != window_) {
         if (focused_) { focused_ = false; input_->OnFocusLost(); uiHost_->CancelComposition(); }
-        SetRelativeMouseMode(false); hasCursorPosition_ = false; return;
+        ApplyCursorMode(); hasCursorPosition_ = false; return;
     }
+    ApplyCursorMode();
+    if (!focused_) { hasCursorPosition_ = false; return; }
     POINT cursor{};
     if (!GetCursorPos(&cursor)) return;
-    if (relativeMouse_) {
+    if (cursorMode_ == CursorMode::Locked) {
         RECT client{}; GetClientRect(window_, &client);
         POINT center{client.right / 2, client.bottom / 2}; ClientToScreen(window_, &center);
         input_->OnMouseMove(static_cast<float>(cursor.x - center.x), static_cast<float>(cursor.y - center.y));

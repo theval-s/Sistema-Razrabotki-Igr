@@ -335,6 +335,7 @@ file(READ "${MATERIAL_SCHEMA_FILE}" MATERIAL_SCHEMA_JSON)
 configure_file(cmake/MaterialSchema.hpp.in generated/MaterialSchema.hpp @ONLY)
 
 set(ENGINE_CORE_HEADERS
+    include/engine/input/CursorPolicy.hpp
     include/engine/input/InputSubsystem.hpp
     include/engine/input/InputTypes.hpp
     include/engine/input/Win32InputHost.hpp

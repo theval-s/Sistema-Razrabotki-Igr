@@ -3,6 +3,7 @@
 #include <memory>
 
 #include <engine/core/FrameContext.hpp>
+#include <engine/input/CursorPolicy.hpp>
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/input/Win32PhysicalKey.hpp>
 
@@ -270,4 +271,34 @@ TEST(Input, CapturePersistsAcrossLatchAndFocusResetCancelsQueuedText) {
     ASSERT_EQ(input.GetUiEvents().size(), 1u);
     EXPECT_GT(input.GetUiEvents()[0].sequence, sequence);
     EXPECT_FALSE(std::get<InputUiFocus>(input.GetUiEvents()[0].payload).focused);
+}
+
+TEST(Input, CursorModeRequestOutlivesFocusLossAndReset) {
+    InputSubsystem input;
+    EXPECT_EQ(input.GetCursorMode(), CursorMode::Normal);
+    input.SetCursorMode(CursorMode::Locked);
+    // Hosts drop the cursor on focus loss, but put the request back when the focus returns.
+    input.OnFocusLost();
+    input.Reset();
+    input.Update(FrameContext{});
+    EXPECT_EQ(input.GetCursorMode(), CursorMode::Locked);
+}
+
+TEST(Input, CursorPolicySuspendsAndRestoresEveryRequestWithoutLosingUiDrag) {
+    for (const auto request : {CursorMode::Normal, CursorMode::Hidden, CursorMode::Locked}) {
+        auto p = ResolveCursorPolicy(request, true, false, false, false);
+        EXPECT_EQ(p.mode, request);
+        EXPECT_EQ(p.grab, request == CursorMode::Locked);
+        for (int requirement = 0; requirement < 3; ++requirement) {
+            p = ResolveCursorPolicy(request, true, requirement == 0, requirement == 1, requirement == 2);
+            EXPECT_EQ(p.mode, CursorMode::Normal);
+            EXPECT_TRUE(p.interactiveUi);
+            EXPECT_EQ(p.grab, requirement == 0);
+        }
+        p = ResolveCursorPolicy(request, false, true, true, true);
+        EXPECT_EQ(p.mode, CursorMode::Normal);
+        EXPECT_FALSE(p.grab);
+        p = ResolveCursorPolicy(request, true, false, false, false);
+        EXPECT_EQ(p.mode, request);
+    }
 }

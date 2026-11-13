@@ -34,6 +34,9 @@ function OnStart()
     controls = assert(Input.GetContext("ExampleUI"))
     controls:BindAction("ExamplePause", PhysicalKey.P)
     controls:BindAction("ExampleInventory", PhysicalKey.I)
+    -- Reapply on every scripting-session start, including after loading a save.
+    -- Menus temporarily release mouse-look without changing this request.
+    Input.SetCursorMode(CursorMode.Locked)
 end
 
 function OnUpdate(dt)

@@ -258,6 +258,7 @@ void MainWindow::tickEngine() {
     if (surface.width != metrics.pixelWidth || surface.height != metrics.pixelHeight)
         engine_.ResizeSurface(metrics.pixelWidth, metrics.pixelHeight);
     engine_.Tick();
+    viewport_->applyCursorMode();
     refreshStatus();
 }
 
