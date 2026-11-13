@@ -13,7 +13,17 @@ namespace editor {
 
 PlaySession::PlaySession(engine::Engine& engine, const engine::Project& project, Selection& selection,
                          SceneDocument& document)
-    : engine_(engine), project_(project), selection_(selection), document_(document) {}
+    : engine_(engine), project_(project), selection_(selection), document_(document) {
+    engine_.GetEvents().sink<engine::PauseChangedEvent>().connect<&PlaySession::onPauseChanged>(*this);
+}
+
+PlaySession::~PlaySession() {
+    engine_.GetEvents().sink<engine::PauseChangedEvent>().disconnect<&PlaySession::onPauseChanged>(*this);
+}
+
+void PlaySession::onPauseChanged(const engine::PauseChangedEvent& event) {
+    if (isPlaying()) emit pausedChanged(event.paused);
+}
 
 bool PlaySession::isPlaying() const {
     return engine_.IsPlaying();
@@ -50,6 +60,7 @@ bool PlaySession::play(std::string& error) {
         editorLog().warn("Play: no game camera; using the frozen editor viewpoint");
     }
     emit playingChanged(true);
+    emit pausedChanged(isPaused());
     return true;
 }
 
@@ -67,7 +78,6 @@ void PlaySession::stop() {
 void PlaySession::setPaused(const bool paused) {
     if (!isPlaying() || engine_.IsPaused() == paused) return;
     engine_.SetPaused(paused);
-    emit pausedChanged(paused);
 }
 
 void PlaySession::restoreSelection() {

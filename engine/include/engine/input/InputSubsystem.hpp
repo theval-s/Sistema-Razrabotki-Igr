@@ -3,6 +3,7 @@
 #include <bitset>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -12,6 +13,7 @@
 
 #include <engine/core/Subsystem.hpp>
 #include <engine/input/InputTypes.hpp>
+#include <engine/input/InputUiEvent.hpp>
 
 namespace engine {
 
@@ -85,6 +87,7 @@ public:
 
     [[nodiscard]] std::string_view GetName() const override;
     void Update(const FrameContext& frame) override;
+    void ResetSimulation() override;
 
     // --- Host side -------------------------------------------------------------
     void OnKey(Key key, bool down);
@@ -101,26 +104,31 @@ public:
     /// never deliver the release events.
     void OnFocusLost();
     /// Forgets all input, pending and current, e.g. when switching between editing and Play.
-    void Reset() {
-        pending_ = {};
-        current_ = {};
-    }
+    void Reset();
+    /// Queue an owned UI event only; hosts feed gameplay On* methods separately.
+    void OnUiEvent(InputUiEvent event);
+    /// Valid until the next Update or Reset; consumption does not mutate this batch.
+    [[nodiscard]] std::span<const InputUiEvent> GetUiEvents() const noexcept { return uiEvents_; }
+    /// Hide this event's gameplay edges for the frame and held state until release.
+    void ConsumeUiEvent(std::uint64_t sequence);
+    /// Reserved device mask above all contexts; gaining capture is sticky this frame.
+    void SetUiCapture(bool keyboard, bool mouse);
 
     // --- Readers: state of the current frame ------------------------------------
     /// Last absolute position, retained across frames; zero after reset/focus loss.
-    [[nodiscard]] DirectX::SimpleMath::Vector2 GetMousePosition() const { return current_.mousePosition; }
-    [[nodiscard]] bool IsDown(Key key) const { return current_.keysDown.test(Index(key)); }
+    [[nodiscard]] DirectX::SimpleMath::Vector2 GetMousePosition() const { return MouseMasked() || consumedMotion_ ? DirectX::SimpleMath::Vector2{} : current_.mousePosition; }
+    [[nodiscard]] bool IsDown(Key key) const { return !KeyMasked(key) && current_.keysDown.test(Index(key)); }
     /// Went down since the previous frame (also true for a tap that already went up).
-    [[nodiscard]] bool WasPressed(Key key) const { return current_.keysPressed.test(Index(key)); }
-    [[nodiscard]] bool WasReleased(Key key) const { return current_.keysReleased.test(Index(key)); }
+    [[nodiscard]] bool WasPressed(Key key) const { return !KeyMasked(key) && current_.keysPressed.test(Index(key)); }
+    [[nodiscard]] bool WasReleased(Key key) const { return !KeyMasked(key) && current_.keysReleased.test(Index(key)); }
 
-    [[nodiscard]] bool IsDown(MouseButton button) const { return current_.buttonsDown.test(Index(button)); }
-    [[nodiscard]] bool WasPressed(MouseButton button) const { return current_.buttonsPressed.test(Index(button)); }
-    [[nodiscard]] bool WasReleased(MouseButton button) const { return current_.buttonsReleased.test(Index(button)); }
+    [[nodiscard]] bool IsDown(MouseButton button) const { return !ButtonMasked(button) && current_.buttonsDown.test(Index(button)); }
+    [[nodiscard]] bool WasPressed(MouseButton button) const { return !ButtonMasked(button) && current_.buttonsPressed.test(Index(button)); }
+    [[nodiscard]] bool WasReleased(MouseButton button) const { return !ButtonMasked(button) && current_.buttonsReleased.test(Index(button)); }
 
     /// Pixels moved since the previous frame.
-    [[nodiscard]] DirectX::SimpleMath::Vector2 GetMouseDelta() const { return current_.mouseDelta; }
-    [[nodiscard]] float GetWheelDelta() const { return current_.wheelDelta; }
+    [[nodiscard]] DirectX::SimpleMath::Vector2 GetMouseDelta() const { return MouseMasked() || consumedMotion_ ? DirectX::SimpleMath::Vector2{} : current_.mouseDelta; }
+    [[nodiscard]] float GetWheelDelta() const { return MouseMasked() || consumedWheel_ ? 0 : current_.wheelDelta; }
 
 private:
     struct State {
@@ -140,6 +148,19 @@ private:
     State pending_{};
     /// Latched in Update(), what readers see.
     State current_{};
+    std::vector<InputUiEvent> pendingUiEvents_, uiEvents_;
+    std::uint64_t nextUiSequence_ = 1;
+    std::bitset<KeyCount> consumedKeys_, heldKeys_;
+    std::bitset<PhysicalKeyCount> consumedPhysical_, heldPhysical_;
+    std::bitset<MouseButtonCount> consumedButtons_, heldButtons_;
+    bool captureKeyboard_ = false, captureMouse_ = false;
+    bool frameKeyboard_ = false, frameMouse_ = false;
+    bool consumedMotion_ = false, consumedWheel_ = false;
+    bool uiFocused_ = true;
+    [[nodiscard]] bool MouseMasked() const { return captureMouse_ || frameMouse_; }
+    [[nodiscard]] bool KeyMasked(Key key) const;
+    [[nodiscard]] bool PhysicalMasked(PhysicalKey key) const;
+    [[nodiscard]] bool ButtonMasked(MouseButton button) const;
     struct ActiveContext {
         std::uint64_t id;
         std::string name;

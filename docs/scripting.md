@@ -521,6 +521,11 @@ otherwise valid authored component combinations; see [physics.md](physics.md).
 entity-local material override, using nonnegative values. It does not modify shared
 assets. Get requires a MeshRenderer and ready rendering/material resources.
 
+### Game UI
+
+See the [UI guide](ui.md) and [exact Lua facade reference](ui-lua-facade.md) for
+documents, models, event callbacks, ownership and paused menus.
+
 ### Input contexts and named bindings
 
 `Input.GetContext(name)` and its alias `Input.DefineContext(name)` get/define a

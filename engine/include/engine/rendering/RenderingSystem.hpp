@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <memory>
+#include <functional>
 #include <vector>
 
 #include <engine/core/Surface.hpp>
@@ -22,7 +23,9 @@ struct ENGINE_API RenderingSystem {
     bool Initialize(const NativeSurface& surface);
     /// Re-inits all screen size dependant resource and sets new screen size (We hope that HWND doesn't change during game run)
     bool Reinitialize(const NativeSurface& surface);
-    void RenderFrame(const FrameContext& frame);
+    using OverlayCallback = std::function<void(RenderingContext&, const FrameContext&)>;
+    // The final scene target remains bound during the overlay. This function presents once.
+    void RenderFrame(const FrameContext& frame, const OverlayCallback& overlay = {});
     ~RenderingSystem();
 
     [[nodiscard]] RenderingContext& GetRenderingContext();

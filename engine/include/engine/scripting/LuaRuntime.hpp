@@ -72,6 +72,8 @@ namespace engine {
         bool Initialize(const std::filesystem::path& root, std::string& error);
 
         void Shutdown() noexcept;
+        /// Stop UI delivery/registration before entity teardown; existing UI remains usable in OnDestroy.
+        void SuspendUiSession() noexcept;
 
         [[nodiscard]] bool IsInitialized() const noexcept;
 
@@ -87,7 +89,8 @@ namespace engine {
             sol::variadic_args args, sol::this_state state);
         [[nodiscard]] bool HasPersistenceHooks(InstanceId instance) const;
         /// Accepts 1 <= savedVersion <= current SaveVersion. OnLoadGame receives
-        /// the original saved version and owns migration. Hook failures do not fault the instance.
+        /// the original saved version and owns migration. UI-owning hook failures fault and
+        /// retire UI; runtimes without UI retain the existing persistence retry policy.
         bool ValidateSaveVersion(InstanceId instance, int savedVersion, std::string& error) const;
         /// Non-mutating preflight against every current instance of this asset.
         /// Unknown assets succeed; prepared-instance validation remains necessary.

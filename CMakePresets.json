@@ -65,7 +65,7 @@
       "displayName": "Windows / Example Game / MSVC 2022 / x64",
       "inherits": "windows-vs2022",
       "cacheVariables": {
-        "SRI_BUILD_EDITOR": "ON",
+        "SRI_BUILD_EDITOR": "OFF",
         "SRI_BUILD_EXAMPLE_GAME": "ON"
       },
       "vendor": {

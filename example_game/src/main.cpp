@@ -20,6 +20,7 @@
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/input/Win32InputHost.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
+#include <engine/ui/UiSubsystem.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 
 namespace {
@@ -209,7 +210,7 @@ public:
             GetEngine().RequestExit();
             return;
         }
-        if (controls_.Pressed("CaptureMouse") && !host_->IsRelativeMouseMode())
+        if (!GetEngine().IsPaused() && controls_.Pressed("CaptureMouse") && !host_->IsRelativeMouseMode())
             host_->SetRelativeMouseMode(true);
 
         auto& world = rendering_->GetWorld();
@@ -270,10 +271,16 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
     config.surface = engine::NativeSurface{window, ScreenWidth, ScreenHeight};
 
     engine::Engine engine{config};
-    engine.AddSubsystem<engine::Win32InputHost>(window);
+    auto* host = engine.AddSubsystem<engine::Win32InputHost>(window);
     engine.AddSubsystem<engine::InputSubsystem>();
-    engine.AddSubsystem<engine::ScriptSubsystem>();
     engine.AddSubsystem<engine::RenderingSubsystem>();
+    engine::UiSubsystemConfig uiConfig;
+    uiConfig.host = host->GetUiHost();
+#ifndef NDEBUG
+    uiConfig.enableDebugger = true;
+#endif
+    engine.AddSubsystem<engine::UiSubsystem>(std::move(uiConfig));
+    engine.AddSubsystem<engine::ScriptSubsystem>();
     engine.AddSubsystem<ExampleGameLogic>(window);
     engine.AddSubsystem<engine::PhysicsSubsystem>();
     engine.AddSubsystem<engine::RenderExtractionSubsystem>();
@@ -289,7 +296,9 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
         return 1;
     }
     engine::log::Game().info("{} animated entities", engine.GetScene().FindWithTag("animated").size());
-    if (!engine.StartGame(engine::AssetPathResolver::GetGameRoot(), {}, error)) {
+    const std::vector<engine::AutoloadDefinition> autoloads{{"ExampleUI",
+        {"8fc69da8-42e6-4375-9020-83ae5ab0de01", "game/scripts/ui/example_ui.lua"}, true}};
+    if (!engine.StartGame(engine::AssetPathResolver::GetGameRoot(), autoloads, error)) {
         engine::log::Game().error("Cannot start scripting: {}", error);
         return 1;
     }

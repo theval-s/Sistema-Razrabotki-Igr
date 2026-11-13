@@ -279,6 +279,11 @@ void RegisterGameplayBindings(sol::state& lua, LuaBindingsContext& context) {
     time.set_function("RealDelta", [&context] { return context.engine ? context.engine->GetFrame().realDeltaSeconds : 0.; });
     time.set_function("RealTime", [&context] { return context.engine ? context.engine->GetFrame().realTimeSeconds : 0.; });
     time.set_function("IsPaused", [&context] { return context.engine && context.engine->IsPaused(); });
+    time.set_function("SetPaused", [&context](bool paused) {
+        if (!context.engine) return std::make_tuple(false, std::string("Time.SetPaused is unavailable without an Engine"));
+        context.engine->SetPaused(paused);
+        return std::make_tuple(true, std::string{});
+    });
 }
 
 } // namespace engine

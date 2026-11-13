@@ -31,6 +31,10 @@ examples: [material asset contract](docs/material-assets.md).
 Code-only scene saving/loading, UUID sidecars, asset scope, render extraction and
 metadata generation: [scene and asset guide](docs/scene-assets.md).
 
+RML/RCSS UI, the example HUD and menus, assets and preview workflow: [UI guide](docs/ui.md).
+The [Lua UI facade](docs/ui-lua-facade.md) documents the API and ownership rules;
+[UI performance](docs/ui-performance.md) records measurements and their limitations.
+
 Imported meshes expose `MeshAsset::bounds` (`Aabb::min` / `max`) in mesh-local
 coordinates, after Assimp node transforms and optional `centerOnLoad`
 normalization. Assimp generates per-mesh bounding boxes via aiProcess_GenBoundingBoxes;
@@ -98,7 +102,8 @@ cmake --preset windows-example-game
 cmake --build --preset windows-example-game-debug
 ```
 
-`ExampleGame` links the engine statically through `Engine::EngineStatic`.
+The `windows-example-game` preset sets `SRI_BUILD_EDITOR=OFF`. `ExampleGame` links
+the engine statically through `Engine::EngineStatic`.
 
 ## 4. Package for release if needed
 

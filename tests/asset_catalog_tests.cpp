@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 
 namespace {
 struct Fixture {
@@ -34,6 +35,43 @@ TEST(AssetCatalog, ReferencesAndMetadataValidateWithoutChangingOutput) {
     ASSERT_TRUE(engine::ParseAssetMetadata(json, loaded, error));
     EXPECT_EQ(loaded.id, meta.id);
     EXPECT_TRUE(loaded.centerOnLoad);
+}
+
+TEST(AssetCatalog, UiAssetsGenerateMetadataAndRoundTripThroughCatalog) {
+    Fixture fixture;
+    using engine::CatalogAssetKind;
+    struct Example { const char* name; CatalogAssetKind kind; const char* codec; };
+    const Example examples[] = {
+        {"menu.RML", CatalogAssetKind::UiDocument, "ui_document"},
+        {"theme.rcss", CatalogAssetKind::UiStylesheet, "ui_stylesheet"},
+        {"item.rmlt", CatalogAssetKind::UiTemplate, "ui_template"},
+        {"body.ttf", CatalogAssetKind::Font, "font"},
+        {"title.OTF", CatalogAssetKind::Font, "font"},
+    };
+    for (const auto& example : examples) {
+        const auto file = fixture.root / "game/models" / example.name;
+        std::ofstream(file) << "content";
+        EXPECT_EQ(engine::CatalogKindForFile(file), example.kind);
+    }
+    std::size_t generated = 0;
+    std::string error;
+    ASSERT_TRUE(engine::GenerateMissingAssetMetadata(fixture.root / "game", generated, error)) << error;
+    EXPECT_EQ(generated, std::size(examples));
+    engine::AssetCatalog catalog;
+    ASSERT_TRUE(catalog.Scan(fixture.root / "game", {}, error)) << error;
+    for (const auto& example : examples) {
+        const auto* entry = catalog.FindPath(std::string("game/models/") + example.name);
+        ASSERT_NE(entry, nullptr);
+        EXPECT_EQ(entry->metadata.kind, example.kind);
+        EXPECT_NE(catalog.Find(entry->metadata.id, example.kind), nullptr);
+        std::string json;
+        ASSERT_TRUE(engine::SerializeAssetMetadata(entry->metadata, json, error)) << error;
+        EXPECT_NE(json.find(example.codec), std::string::npos);
+        engine::AssetMetadata parsed;
+        ASSERT_TRUE(engine::ParseAssetMetadata(json, parsed, error)) << error;
+        EXPECT_EQ(parsed.id, entry->metadata.id);
+        EXPECT_EQ(parsed.kind, example.kind);
+    }
 }
 
 TEST(AssetCatalog, RenamePreservesIdentityAndDuplicatesAreRejected) {

@@ -88,6 +88,50 @@ add_custom_command(TARGET lua_runtime_tests POST_BUILD
 )
 add_test(NAME lua_runtime_tests COMMAND lua_runtime_tests)
 
+# RmlUi owns process-global interfaces: keep fixtures sequential in one process.
+add_executable(ui_tests ui_tests.cpp ui_lifecycle_review_tests.cpp ui_example_tests.cpp ui_text_asset_tests.cpp)
+target_link_libraries(ui_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
+target_compile_definitions(ui_tests PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+target_include_directories(ui_tests PRIVATE ../engine/src)
+set_project_warnings(ui_tests)
+set_target_properties(ui_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET ui_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:ui_tests> $<TARGET_FILE_DIR:ui_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME ui_tests COMMAND ui_tests)
+set_tests_properties(ui_tests PROPERTIES RUN_SERIAL TRUE)
+
+find_package(RmlUi 6.3 CONFIG REQUIRED)
+add_executable(ui_render_tests ui_render_tests.cpp)
+target_link_libraries(ui_render_tests PRIVATE Engine::EngineStatic GTest::gtest_main
+    RmlUi::Core user32 d3d11 dxgi ole32 windowscodecs)
+target_include_directories(ui_render_tests PRIVATE ../engine/src)
+set_project_warnings(ui_render_tests)
+set_target_properties(ui_render_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET ui_render_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:ui_render_tests> $<TARGET_FILE_DIR:ui_render_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME ui_render_tests COMMAND ui_render_tests)
+set_tests_properties(ui_render_tests PROPERTIES RUN_SERIAL TRUE)
+
+# Explicit developer tool; excluded from normal builds and CTest.
+add_executable(ui_benchmark EXCLUDE_FROM_ALL ../tools/ui_benchmark.cpp)
+target_link_libraries(ui_benchmark PRIVATE Engine::EngineStatic user32 d3d11 dxgi psapi)
+target_include_directories(ui_benchmark PRIVATE ../engine/src)
+target_compile_definitions(ui_benchmark PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}"
+    SRI_BENCHMARK_CONFIG="$<CONFIG>")
+set_project_warnings(ui_benchmark)
+set_target_properties(ui_benchmark PROPERTIES FOLDER tools)
+add_custom_command(TARGET ui_benchmark POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:ui_benchmark> $<TARGET_FILE_DIR:ui_benchmark>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+
 add_executable(asset_catalog_tests asset_catalog_tests.cpp)
 target_link_libraries(asset_catalog_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(asset_catalog_tests)

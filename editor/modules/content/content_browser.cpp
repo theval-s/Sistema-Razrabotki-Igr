@@ -74,6 +74,8 @@ constexpr engine::CatalogAssetKind FilterKinds[] = {
     engine::CatalogAssetKind::Texture,  engine::CatalogAssetKind::Material,
     engine::CatalogAssetKind::MaterialInstance, engine::CatalogAssetKind::Shader,
     engine::CatalogAssetKind::Script,
+    engine::CatalogAssetKind::UiDocument, engine::CatalogAssetKind::UiStylesheet,
+    engine::CatalogAssetKind::UiTemplate, engine::CatalogAssetKind::Font,
 };
 
 /// Files dragged in from outside the editor are copied, whatever the drag proposed: reporting

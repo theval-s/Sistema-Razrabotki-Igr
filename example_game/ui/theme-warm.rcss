@@ -1,0 +1,7 @@
+/* Alternative palette: replace theme.rcss in each document to preview. */
+.hud { position: absolute; top: 20dp; left: 20dp; width: 260dp; background-color: #5b3026ee; }
+.dialog { position: absolute; top: 15%; left: 30%; width: 40%; background-color: #5b3026ee; }
+.row { padding: 7dp; border-bottom: 1dp #d49361; }
+.hint, .tooltip { color: #ffdaa0; font-size: 14dp; }
+.badge { width: 32dp; height: 32dp; }
+button { background-color: #a45030; }

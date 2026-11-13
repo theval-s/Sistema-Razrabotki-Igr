@@ -186,6 +186,55 @@ TEST(ScriptAutoloads, StartOrderUsesOneStateAndSharedModulesAndStopReversesOrder
     EXPECT_EQ(capture.Count("first-start"), 2);  // A fresh require cache on the second Play.
 }
 
+TEST(ScriptAutoloads, GuardedMethodsPreserveLegacySelfHelpersAndTeardownServiceCalls) {
+    Fixture fixture;
+    const std::vector<engine::AutoloadDefinition> definitions{
+        fixture.Add("Service", R"(
+            local prototype = {
+                Inherited = function(self) assert(self == Autoloads.Service); return self.value end
+            }
+            return setmetatable({
+                value = 0,
+                Touch = function(self, n)
+                    assert(self == Autoloads.Service)
+                    self.value = self.value + n
+                    return self:Inherited(), nil, 'tail'
+                end,
+                Reenter = function(self) return Autoloads.Client.TryReenter() end,
+                OnStart = function(self) assert(self:Touch(1) == 1) end,
+                OnDestroy = function(self) assert(self.value == 6) end
+            }, {__index = prototype, __metatable = 'protected-service'})
+        )"),
+        fixture.Add("Client", R"(
+            function TryReenter()
+                local ok, why = pcall(Autoloads.Service.Touch, Autoloads.Service, 100)
+                assert(not ok and string.find(why, 'Reentrant', 1, true))
+                return 'reentry rejected'
+            end
+            function OnStart()
+                local a, b, c = Autoloads.Service:Touch(2)
+                assert(a == 3 and b == nil and c == 'tail')
+            end
+            function OnDestroy() assert(Autoloads.Service:Touch(3) == 6) end
+        )")
+    };
+    std::string error;
+    ASSERT_TRUE(fixture.host.Initialize());
+    ASSERT_TRUE(fixture.scripts->BeginPlay(fixture.root, definitions, error)) << error;
+    auto& runtime = fixture.scripts->GetRuntime();
+    ASSERT_TRUE(runtime.ExecuteString(R"(
+        assert(getmetatable(Autoloads.Service) == 'protected-service')
+        assert(Autoloads.Service:Reenter() == 'reentry rejected')
+        assert(Autoloads.Service.value == 3)
+        local normal = {a = 1}
+        assert(rawset(normal, 'a', 2) == normal and rawget(normal, 'a') == 2)
+        assert(next(normal) == 'a')
+    )", "guarded-autoload-compatibility", error)) << error;
+    LogCapture capture;
+    fixture.scripts->EndPlay();
+    EXPECT_TRUE(capture.errors.empty());
+}
+
 TEST(ScriptAutoloads, ResolvesUuidAfterMoveUsingSharedCatalogEvenWhenSceneCatalogIsEmpty) {
     Fixture fixture;
     const auto definition = fixture.Add("Moved", "return {OnStart = function(self) Log.info('moved-start') end}");

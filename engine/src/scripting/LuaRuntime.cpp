@@ -2,6 +2,8 @@
 #include <engine/scripting/LuaRuntime.hpp>
 
 #include <sol/sol.hpp>
+#include "LuaUiBindings.hpp"
+#include "../ui/UiRuntimeAccess.hpp"
 
 #include <engine/core/Log.hpp>
 
@@ -163,6 +165,7 @@ namespace engine {
             bool environmentCallbacks = false;
             bool faulted = false;
             bool destroying = false;
+            UiOwner uiOwner;
             std::string failure;
 
 
@@ -201,6 +204,100 @@ namespace engine {
             }
         };
         std::unique_ptr<sol::state> state;
+        sol::protected_function installAutoloadFacade;
+        sol::protected_function snapshotAutoloadValues;
+        sol::protected_function lookupAutoloadMember;
+        struct UiCallbackRecord { UiCallback token; UiOwner owner; sol::protected_function function; };
+        std::vector<UiCallbackRecord> uiCallbacks;
+        struct UiLink { Impl* runtime = nullptr; };
+        struct UiDispatcher final : UiCallbackDispatcher {
+            std::weak_ptr<UiLink> link;
+            explicit UiDispatcher(std::weak_ptr<UiLink> link) : link(std::move(link)) {}
+            UiDispatchResult Dispatch(UiOwner, UiCallback, const UiEvent&, std::string&) override;
+            void ReleaseCallback(UiCallback callback) noexcept override {
+                if (const auto locked = link.lock(); locked && locked->runtime)
+                    std::erase_if(locked->runtime->uiCallbacks,
+                        [&](const auto& entry) { return entry.token == callback; });
+            }
+        };
+        std::shared_ptr<UiLink> uiLink;
+        std::shared_ptr<UiDispatcher> uiDispatcher;
+        UiSubsystem* ui = nullptr;
+        std::weak_ptr<void> uiLifetime;
+        UiSession uiSession;
+        bool uiSuspended = false;
+        bool shutdownPending = false;
+        Instance* activeUiOwner = nullptr;
+        struct UiModelRecord { UiOwner owner; UiModel model; UiValueSchema schema; };
+        std::vector<UiModelRecord> uiModels;
+        UiSubsystem* Ui() const noexcept { return ui && !uiLifetime.expired() ? ui : nullptr; }
+        void RetireUi(Instance& instance) noexcept {
+            if (auto* live = Ui(); live && !instance.uiOwner.IsEmpty()) {
+                UiRuntimeAccess::BeginOwnerTeardown(*live, instance.uiOwner);
+                UiRuntimeAccess::ReleaseOwner(*live, instance.uiOwner);
+            }
+            std::erase_if(uiCallbacks, [&](const auto& entry) { return entry.owner == instance.uiOwner; });
+            std::erase_if(uiModels, [&](const auto& entry) { return entry.owner == instance.uiOwner; });
+        }
+        void FailPersistenceUi(Instance& instance, const std::string& error) {
+            // Preserve the established retry policy in runtimes without UI. UI-owning
+            // receivers must retire their documents/modal capture on a hook failure.
+            if (!instance.uiOwner.IsEmpty()) {
+                instance.faulted = true;
+                instance.failure = error;
+            }
+        }
+        struct OwnerScope {
+            Impl& runtime;
+            Instance* previous;
+            Instance* owner;
+            int exceptions = std::uncaught_exceptions();
+            OwnerScope(Impl& runtime, Instance* owner) : runtime(runtime),
+                previous(runtime.activeUiOwner), owner(owner) { runtime.activeUiOwner = owner; }
+            ~OwnerScope() {
+                // A native binding/allocation can throw before ProtectedCall returns a
+                // result. Such an unwind must retire the owner's modal just like a
+                // reported Lua error, rather than leave a live, undispatchable UI.
+                if (owner && std::uncaught_exceptions() > exceptions) {
+                    owner->faulted = true;
+                    try { owner->failure = "Native exception escaped a script callback"; }
+                    catch (...) {} // Retirement must still happen on allocation failure.
+                }
+                if (owner && owner->faulted) runtime.RetireUi(*owner);
+                runtime.activeUiOwner = previous;
+            }
+        };
+        bool UiOwnerForCall(UiOwner& owner, std::string& error, bool creation = false) {
+            if (!Ui() || uiSession.IsEmpty()) { error = "UI is unavailable: register an initialized UiSubsystem"; return false; }
+            if (!activeUiOwner || activeUiOwner->uiOwner.IsEmpty() || !activeUiOwner->started || activeUiOwner->faulted) {
+                error = "UI requires a live started script owner (create/register in OnStart)"; return false;
+            }
+            if (creation && (uiSuspended || shuttingDown || activeUiOwner->destroying ||
+                (activeUiOwner->desc.owner && !activeUiOwner->desc.owner->IsValid()))) {
+                error = "UI registration is forbidden during owner/session teardown"; return false;
+            }
+            owner = activeUiOwner->uiOwner;
+            return true;
+        }
+        template<class Method, class Token, class... Args>
+        std::tuple<bool, std::string> UiMutate(Method method, Token token, Args&&... args) {
+            UiOwner owner;
+            std::string error;
+            const bool ok = UiOwnerForCall(owner, error) &&
+                (Ui()->*method)(owner, token, std::forward<Args>(args)..., error);
+            return {ok, std::move(error)};
+        }
+        template<class T>
+        std::tuple<sol::object, std::string> UiResult(bool ok, const T& value, std::string error) {
+            return {ok ? sol::make_object(*state, value) : sol::make_object(*state, sol::nil), std::move(error)};
+        }
+        void RegisterUi();
+        void RegisterAutoloadDispatch();
+        void InstallAutoloadDispatch(InstanceId instance);
+        sol::object StateValueInput(const sol::object& value);
+        sol::object ScriptMember(const Instance& instance, const std::string& name);
+        sol::variadic_results DispatchAutoload(InstanceId instance, const std::string& method,
+            sol::protected_function function, sol::variadic_args args, sol::this_state luaState);
         LevelLoader levelLoader;
         // Declared after state so all Lua references are released first, including at destruction.
         sol::table autoloads;
@@ -381,6 +478,8 @@ namespace engine {
 
     }
 
+    #include "LuaUiBindings.inl"
+
     LuaRuntime::LuaRuntime()
         : impl_(std::make_unique<Impl>()) {
     }
@@ -432,6 +531,8 @@ namespace engine {
         }
         try {
             impl_->moduleRoot = std::move(canonicalRoot);
+            impl_->uiSuspended = false;
+            impl_->shutdownPending = false;
             impl_->state = std::make_unique<sol::state>();
 
             impl_->state->open_libraries(
@@ -476,6 +577,19 @@ namespace engine {
             RegisterLuaBindings(*impl_->state, impl_->bindingsContext);
             RegisterGameplayBindings(*impl_->state, impl_->bindingsContext);
             RegisterSaveGameBindings(*impl_->state, impl_->bindingsContext);
+            impl_->uiLink = std::make_shared<Impl::UiLink>();
+            impl_->uiLink->runtime = impl_.get();
+            impl_->uiDispatcher = std::make_shared<Impl::UiDispatcher>(impl_->uiLink);
+            if (auto* host = impl_->bindingsContext.engine) {
+                if (auto* ui = host->GetSubsystem<UiSubsystem>(); ui && ui->IsInitialized()) {
+                    impl_->ui = ui;
+                    impl_->uiLifetime = ui->GetLifetimeToken();
+                    if (!UiRuntimeAccess::BeginScriptSession(*ui, impl_->uiDispatcher, impl_->uiSession, error))
+                        throw std::runtime_error(error);
+                }
+            }
+            impl_->RegisterAutoloadDispatch();
+            impl_->RegisterUi();
             sol::table entity = (*impl_->state)["Entity"];
             entity.set_function("HasScript", [this](const LuaEntityHandle& handle) { return HasScript(handle); });
             entity.set_function("HasScriptMethod", [this](const LuaEntityHandle& handle, const std::string& name) {
@@ -531,6 +645,17 @@ namespace engine {
             SetError(error, exception.what());
             return false;
         }
+        catch (...) {
+            Shutdown();
+            return SetError(error, "Lua initialization failed: unknown C++ exception");
+        }
+    }
+
+    void LuaRuntime::SuspendUiSession() noexcept {
+        if (!impl_ || !impl_->state) return;
+        impl_->uiSuspended = true;
+        if (auto* ui = impl_->Ui(); ui && !impl_->uiSession.IsEmpty())
+            UiRuntimeAccess::SuspendSession(*ui, impl_->uiSession);
     }
 
     void LuaRuntime::Shutdown() noexcept {
@@ -541,6 +666,8 @@ namespace engine {
             impl_->bindingsContext.enqueueSceneCommand = {};
             return;
         }
+        SuspendUiSession();
+        if (impl_->callbackDepth) { impl_->shutdownPending = true; return; }
         if (impl_->shuttingDown) return;
         impl_->shuttingDown = true;
         DiscardSceneCommands();
@@ -554,12 +681,29 @@ namespace engine {
             }
             catch (...) {
                 // Shutdown must release every Lua reference even if diagnostics fail.
+                if (auto* record = impl_->instances.TryGet(*it); record && *record) impl_->RetireUi(**record);
                 impl_->instances.Remove(*it);
             }
         }
         impl_->instances = {};  // All callbacks, tables and environments die before state.
         DiscardSceneCommands();
+        if (auto* ui = impl_->Ui(); ui && !impl_->uiSession.IsEmpty())
+            UiRuntimeAccess::EndSession(*ui, impl_->uiSession);
+        impl_->uiCallbacks.clear();
+        impl_->uiModels.clear();
+        if (impl_->uiLink) impl_->uiLink->runtime = nullptr;
+        impl_->uiDispatcher.reset();
+        impl_->uiLink.reset();
+        impl_->ui = nullptr;
+        impl_->uiLifetime.reset();
+        impl_->uiSession = {};
+        impl_->activeUiOwner = nullptr;
+        impl_->uiSuspended = false;
+        impl_->shutdownPending = false;
         impl_->modules.clear();
+        impl_->installAutoloadFacade = sol::protected_function{};
+        impl_->snapshotAutoloadValues = sol::protected_function{};
+        impl_->lookupAutoloadMember = sol::protected_function{};
         impl_->autoloads = sol::table{};
         impl_->loadingModules.clear();
         impl_->moduleRoot.clear();
@@ -579,6 +723,7 @@ namespace engine {
 
     void LuaRuntime::FlushSceneCommands() {
         if (impl_->callbackDepth || impl_->flushingSceneCommands || impl_->shuttingDown) return;
+        if (impl_->shutdownPending) { Shutdown(); return; }
         impl_->flushingSceneCommands = true;
         struct Reset { bool& flag; ~Reset() { flag = false; } } reset{impl_->flushingSceneCommands};
         // Scene-bound commands share Scene's FIFO with native destruction/removal.
@@ -619,11 +764,11 @@ namespace engine {
         auto* record = impl_->FindOwner(entity);
         if (!record || record->active) return false;
         Impl::Scope scope(*impl_, entity.GetScene());
+        Impl::OwnerScope ownerScope(*impl_, record);
         record->active = true;
         struct Reset { bool& flag; ~Reset() { flag = false; } } reset{record->active};
         try {
-            const sol::object value = record->environmentCallbacks
-                ? record->table.raw_get<sol::object>(method) : record->table.get<sol::object>(method);
+            const sol::object value = impl_->ScriptMember(*record, method);
             return value.get_type() == sol::type::function;
         } catch (...) { return false; }
     }
@@ -642,14 +787,17 @@ namespace engine {
         if (!record) return failure("Invalid, unstarted, faulted or destroying script receiver");
         if (record->active) return failure("Reentrant script receiver");
         Impl::Scope scope(*impl_, entity.GetScene());
+        Impl::OwnerScope ownerScope(*impl_, record);
         record->active = true;
         struct Reset { bool& flag; ~Reset() { flag = false; } } reset{record->active};
         try {
-            sol::object object = record->environmentCallbacks
-                ? record->table.raw_get<sol::object>(method) : record->table.get<sol::object>(method);
+            sol::object object = impl_->ScriptMember(*record, method);
             if (object.get_type() != sol::type::function) return failure("Script method not found: " + method);
             sol::protected_function callback = object.as<sol::protected_function>();
             sol::protected_function_result result = record->environmentCallbacks ? callback(args) : callback(record->table, args);
+            // A same-receiver helper may already have faulted/logged this instance
+            // through its public trampoline. Propagate that diagnostic unchanged.
+            if (!result.valid() && record->faulted) return failure(record->failure);
             std::string error;
             if (!CheckResult(result, error, record->Context() + " [method=" + method + "]")) {
                 record->faulted = true;
@@ -705,21 +853,38 @@ namespace engine {
         if (record->faulted || record->destroying) return SetError(error, "Script persistence receiver is faulted/destroying", false);
         if (record->active) return SetError(error, "Reentrant script persistence hook", false);
         Impl::Scope scope(*impl_, record->desc.owner ? record->desc.owner->GetScene() : nullptr);
+        Impl::OwnerScope ownerScope(*impl_, record);
         record->active = true;
         struct Reset { bool& flag; ~Reset() { flag = false; } } reset{record->active};
         try {
             sol::protected_function_result result = record->environmentCallbacks ? (*record->save)() : (*record->save)(record->table);
-            if (!CheckResult(result, error, record->Context() + " [callback=OnSaveGame]")) return false;
-            if (result.return_count() != 1 || result.get_type() != sol::type::table)
-                return SetError(error, "OnSaveGame must return exactly one table", false);
+            if (!CheckResult(result, error, record->Context() + " [callback=OnSaveGame]")) {
+                impl_->FailPersistenceUi(*record, error);
+                return false;
+            }
+            if (result.return_count() != 1 || result.get_type() != sol::type::table) {
+                SetError(error, record->Context() + " [callback=OnSaveGame]: must return exactly one table", false);
+                impl_->FailPersistenceUi(*record, error);
+                return false;
+            }
             StateValue captured;
-            if (!LuaToStateValue(result.get<sol::object>(), captured, error)) return false;
+            if (!LuaToStateValue(impl_->StateValueInput(result.get<sol::object>()), captured, error)) {
+                impl_->FailPersistenceUi(*record, error);
+                return false;
+            }
             version = record->saveVersion;
             data = std::move(captured);
             error.clear();
             return true;
-        } catch (const std::exception& exception) { return SetError(error, record->Context() + ": " + exception.what(), false); }
-        catch (...) { return SetError(error, "Unknown OnSaveGame exception", false); }
+        } catch (const std::exception& exception) {
+            SetError(error, record->Context() + " [callback=OnSaveGame]: " + exception.what());
+            impl_->FailPersistenceUi(*record, error);
+            return false;
+        } catch (...) {
+            SetError(error, record->Context() + " [callback=OnSaveGame]: unknown exception");
+            impl_->FailPersistenceUi(*record, error);
+            return false;
+        }
     }
 
     bool LuaRuntime::RestoreSaveState(InstanceId instance, int savedVersion, const StateValue& data, std::string& error) {
@@ -729,15 +894,25 @@ namespace engine {
         if (!std::holds_alternative<StateValue::Object>(data.value) && !std::holds_alternative<StateValue::Array>(data.value))
             return SetError(error, "Saved script state must be a table", false);
         Impl::Scope scope(*impl_, record->desc.owner ? record->desc.owner->GetScene() : nullptr);
+        Impl::OwnerScope ownerScope(*impl_, record);
         record->active = true;
         struct Reset { bool& flag; ~Reset() { flag = false; } } reset{record->active};
         try {
             sol::object object = StateValueToLua(*impl_->state, data);
             const auto context = record->Context() + " [callback=OnLoadGame]";
-            return record->environmentCallbacks ? ProtectedCall(*record->load, error, context, object, savedVersion)
+            const bool clean = record->environmentCallbacks ? ProtectedCall(*record->load, error, context, object, savedVersion)
                 : ProtectedCall(*record->load, error, context, record->table, object, savedVersion);
-        } catch (const std::exception& exception) { return SetError(error, record->Context() + ": " + exception.what(), false); }
-        catch (...) { return SetError(error, "Unknown OnLoadGame exception", false); }
+            if (!clean) impl_->FailPersistenceUi(*record, error);
+            return clean;
+        } catch (const std::exception& exception) {
+            SetError(error, record->Context() + " [callback=OnLoadGame]: " + exception.what());
+            impl_->FailPersistenceUi(*record, error);
+            return false;
+        } catch (...) {
+            SetError(error, record->Context() + " [callback=OnLoadGame]: unknown exception");
+            impl_->FailPersistenceUi(*record, error);
+            return false;
+        }
     }
 
     bool LuaRuntime::FixedUpdateInstance(InstanceId instance, double deltaSeconds, std::string& error) {
@@ -747,6 +922,7 @@ namespace engine {
         if (!record || !record->started || record->destroying) return SetError(error, "Invalid fixed-update receiver", false);
         if (!std::isfinite(deltaSeconds) || deltaSeconds < 0) return SetError(error, "Invalid script time step", false);
         Impl::Scope scope(*impl_, record->desc.owner ? record->desc.owner->GetScene() : nullptr);
+        Impl::OwnerScope ownerScope(*impl_, record);
         return record->Invoke(record->fixedUpdate, "OnFixedUpdate", error, deltaSeconds);
     }
 
@@ -773,7 +949,15 @@ namespace engine {
             return false;
         }
         Impl::Scope scope(*impl_, desc.owner ? desc.owner->GetScene() : nullptr);
+        Impl::OwnerScope noOwner(*impl_, nullptr); // Instance chunks cannot inherit a caller's registration capability.
         auto record = std::make_unique<Impl::Instance>();
+        struct PendingUiOwner {
+            Impl& runtime; UiOwner owner; bool published = false;
+            ~PendingUiOwner() {
+                if (!published) if (auto* ui = runtime.Ui(); ui && !owner.IsEmpty())
+                    UiRuntimeAccess::ReleaseOwner(*ui, owner);
+            }
+        } pendingOwner{*impl_};
         record->desc = desc;
         if (!desc.assetId.IsValid() || !desc.source.is_absolute()) {
             return record->Fail(error, "expected a script UUID and an absolute resolved source path");
@@ -870,20 +1054,30 @@ namespace engine {
                     return record->Fail(error, "SaveVersion must be a positive integer");
                 record->saveVersion = static_cast<int>(number);
             }
+            if (auto* ui = impl_->Ui(); ui && !impl_->uiSession.IsEmpty()) {
+                if (!UiRuntimeAccess::CreateScriptOwner(*ui, impl_->uiSession, record->Context(), record->uiOwner, error))
+                    return record->Fail(error, error);
+                pendingOwner.owner = record->uiOwner;
+            }
             // Publish the actual instance before OnStart, retaining its private locals/closures.
             if (!desc.autoloadName.empty()) impl_->autoloads.raw_set(desc.autoloadName, record->table);
+            InstanceId registered;
             try {
-                instance = impl_->Id(impl_->instances.Add(std::move(record)));
+                registered = impl_->Id(impl_->instances.Add(std::move(record)));
+                if (!desc.autoloadName.empty()) impl_->InstallAutoloadDispatch(registered);
+                instance = registered;
+                pendingOwner.published = true;
             }
             catch (...) {
                 if (!desc.autoloadName.empty()) impl_->autoloads.raw_set(desc.autoloadName, sol::nil);
+                if (registered.IsValid()) impl_->instances.Remove(Impl::Handle(registered));
                 throw;
             }
             error.clear();
             return true;
         }
         catch (const std::exception& exception) {
-            return record->Fail(error, exception.what());
+            return record ? record->Fail(error, exception.what()) : SetError(error, exception.what());
         }
     }
 
@@ -897,6 +1091,7 @@ namespace engine {
         }
         auto& record = *found;
         Impl::Scope scope(*impl_, record.desc.owner ? record.desc.owner->GetScene() : nullptr);
+        Impl::OwnerScope ownerScope(*impl_, &record);
         if (record.faulted) return SetError(error, record.failure, false);
         if (record.destroying) return SetError(error, "Cannot start a destroying instance", false);
         if (record.started) {
@@ -904,6 +1099,8 @@ namespace engine {
             return true;
         }
         record.started = true;
+        if (auto* ui = impl_->Ui(); ui && !record.uiOwner.IsEmpty())
+            UiRuntimeAccess::EnableScriptOwner(*ui, record.uiOwner);
         return record.Invoke(record.start, "OnStart", error);
     }
 
@@ -912,6 +1109,7 @@ namespace engine {
         if (!IsInitialized() || instance.session_ != impl_->session || impl_->shuttingDown) return true;
         auto* record = impl_->Find(instance);
         Impl::Scope scope(*impl_, record && record->desc.owner ? record->desc.owner->GetScene() : nullptr);
+        Impl::OwnerScope ownerScope(*impl_, record);
         if (!record || !record->started || record->faulted || record->destroying ||
             !record->desc.owner || !record->desc.owner->IsValid()) return true;
         constexpr auto sleep = static_cast<std::size_t>(PhysicsContactKind::TriggerStay) + 1;
@@ -925,6 +1123,7 @@ namespace engine {
         if (!IsInitialized() || instance.session_ != impl_->session || impl_->shuttingDown) return true;
         auto* record = impl_->Find(instance);
         Impl::Scope scope(*impl_, record && record->desc.owner ? record->desc.owner->GetScene() : nullptr);
+        Impl::OwnerScope ownerScope(*impl_, record);
         if (!record || !record->started || record->faulted || record->destroying || !record->desc.owner) return true;
         const auto index = static_cast<std::size_t>(event.kind);
         if (index > static_cast<std::size_t>(PhysicsContactKind::TriggerStay) || !record->physicsCallbacks[index]) return true;
@@ -971,7 +1170,8 @@ namespace engine {
             return SetError(error, "Invalid or stale script instance", false);
         }
         auto& record = *found;
-        Impl::Scope ownerScope(*impl_, record.desc.owner ? record.desc.owner->GetScene() : nullptr);
+        Impl::Scope sceneScope(*impl_, record.desc.owner ? record.desc.owner->GetScene() : nullptr);
+        Impl::OwnerScope ownerScope(*impl_, &record);
         if (record.faulted) return SetError(error, record.failure, false);
         if (!record.started || record.destroying) {
             return SetError(error, "Cannot update an unstarted/destroying instance", false);
@@ -997,7 +1197,21 @@ namespace engine {
         if (record.active) return SetError(error, "Cannot destroy an active script instance", false);
         Impl::Scope scope(*impl_, record.desc.owner ? record.desc.owner->GetScene() : nullptr);
         record.destroying = true;
-        const bool clean = !record.started || record.faulted || record.Invoke(record.destroy, "OnDestroy", error);
+        struct ReleaseUi {
+            Impl& runtime; UiOwner owner;
+            ~ReleaseUi() {
+                if (auto* ui = runtime.Ui(); ui && !owner.IsEmpty()) UiRuntimeAccess::ReleaseOwner(*ui, owner);
+                std::erase_if(runtime.uiCallbacks, [&](const auto& entry) { return entry.owner == owner; });
+                std::erase_if(runtime.uiModels, [&](const auto& entry) { return entry.owner == owner; });
+            }
+        } releaseUi{*impl_, record.uiOwner};
+        if (auto* ui = impl_->Ui(); ui && !record.uiOwner.IsEmpty())
+            UiRuntimeAccess::BeginOwnerTeardown(*ui, record.uiOwner);
+        bool clean;
+        {
+            Impl::OwnerScope ownerScope(*impl_, &record);
+            clean = !record.started || record.faulted || record.Invoke(record.destroy, "OnDestroy", error);
+        }
         if (!record.desc.autoloadName.empty()) impl_->autoloads.raw_set(record.desc.autoloadName, sol::nil);
         // By handle: OnDestroy may have added instances and moved the records' boxes around.
         impl_->instances.Remove(Impl::Handle(instance));
@@ -1012,7 +1226,10 @@ namespace engine {
             destroyed = false;
             for (const auto handle : impl_->instances.Handles()) {
                 const std::unique_ptr<Impl::Instance>* record = impl_->instances.TryGet(handle);
-                if (record == nullptr || !(*record)->desc.autoloadName.empty() || (*record)->destroying) continue;
+                // EndPlay can be requested by an embedding callback. Shutdown already
+                // defers state destruction while callbackDepth is nonzero; leave active
+                // receivers for that shutdown instead of retrying them forever here.
+                if (record == nullptr || !(*record)->desc.autoloadName.empty() || (*record)->destroying || (*record)->active) continue;
                 destroyed = true;
                 try {
                     std::string error;
@@ -1020,6 +1237,7 @@ namespace engine {
                 }
                 catch (...) {
                     // Keep cleanup progressing even if diagnostic allocation fails.
+                    if (auto* remaining = impl_->instances.TryGet(handle); remaining && *remaining) impl_->RetireUi(**remaining);
                     impl_->instances.Remove(handle);
                 }
             }
@@ -1060,6 +1278,7 @@ namespace engine {
         }
 
         Impl::Scope scope(*impl_);
+        Impl::OwnerScope noOwner(*impl_, nullptr);
         try {
             sol::load_result loaded = impl_->state->load(
                 std::string(source),
@@ -1110,6 +1329,7 @@ namespace engine {
         }
 
         Impl::Scope scope(*impl_);
+        Impl::OwnerScope noOwner(*impl_, nullptr);
         try {
             sol::object object = impl_->state->get<sol::object>(std::string(functionName));
             if (object.get_type() != sol::type::function) {
@@ -1133,6 +1353,7 @@ namespace engine {
         }
 
         Impl::Scope scope(*impl_);
+        Impl::OwnerScope noOwner(*impl_, nullptr);
         try {
             sol::object object = impl_->state->get<sol::object>("Update");
             if (object.get_type() != sol::type::function) {
