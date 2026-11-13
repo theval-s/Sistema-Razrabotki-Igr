@@ -40,6 +40,15 @@ enum class MouseButton : std::uint8_t {
     Count
 };
 
+/// What the game wants the cursor to do while it has the input.
+enum class CursorMode : std::uint8_t {
+    Normal = 0,
+    /// Invisible over the game, but moves and reports its position as usual.
+    Hidden,
+    /// Invisible and held in place, for mouse-look: only the mouse delta is meaningful.
+    Locked,
+};
+
 inline constexpr std::size_t KeyCount = static_cast<std::size_t>(Key::Count);
 inline constexpr std::size_t PhysicalKeyCount = static_cast<std::size_t>(PhysicalKey::Count);
 inline constexpr std::size_t MouseButtonCount = static_cast<std::size_t>(MouseButton::Count);

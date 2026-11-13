@@ -129,6 +129,7 @@ void ViewportWidget::captureInput() {
     captured_ = true;
     setFocus(Qt::OtherFocusReason);
     feedMousePosition(mapFromGlobal(QCursor::pos()));
+    applyCursorMode();
     emit inputCaptureChanged(true);
 }
 
@@ -136,11 +137,31 @@ void ViewportWidget::releaseInput() {
     if (!captured_) return;
     captured_ = false;
     swallowed_buttons_ = {};
-    releaseCursor();
+    applyCursorMode();
     last_cursor_.reset();
     // The game would never see the release of what is held now.
     if (input_ != nullptr) input_->OnFocusLost();
     emit inputCaptureChanged(false);
+}
+
+void ViewportWidget::applyCursorMode() {
+    using engine::CursorMode;
+    const CursorMode mode = captured_ && input_ != nullptr ? input_->GetCursorMode() : CursorMode::Normal;
+    if (mode == cursor_mode_) return;
+    if (cursor_mode_ == CursorMode::Locked) releaseMouse();
+    cursor_mode_ = mode;
+    cursor_pinned_ = mode == CursorMode::Locked;
+    if (mode == CursorMode::Normal) {
+        unsetCursor();
+        return;
+    }
+    setCursor(Qt::BlankCursor);
+    if (cursor_pinned_) {
+        last_cursor_ = mapToGlobal(rect().center());
+        QCursor::setPos(*last_cursor_);
+        // Grabbed, so a fast flick can't leave the viewport between two moves.
+        grabMouse();
+    }
 }
 
 QPaintEngine* ViewportWidget::paintEngine() const {
@@ -219,7 +240,7 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
     }
     if (playing_ && !captured_) return;
     feedMousePosition(event->position());
-    if (event->button() == Qt::RightButton) {
+    if (!playing_ && event->button() == Qt::RightButton) {
         releaseCursor();
     } else if (!playing_ && !cursor_pinned_) {
         emit mouseReleased(event->position(), event->button());

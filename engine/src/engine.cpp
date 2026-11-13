@@ -17,6 +17,7 @@
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/ResourceID.hpp>
 #include <engine/core/PathUtils.hpp>
+#include <engine/input/InputSubsystem.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/scene/SceneDocument.hpp>
 #include <engine/scene/GameDocument.hpp>
@@ -454,6 +455,8 @@ void Engine::StopPlay() {
         scripting->EndPlay();
         scripting->GetRuntime().SetLevelLoader({});
     }
+    // The next session starts with a normal cursor, whatever this one asked for.
+    if (auto* input = GetSubsystem<InputSubsystem>()) input->SetCursorMode(CursorMode::Normal);
     CancelGameRequests();
     impl_->queuedScene.reset();
     CommitScene(impl_->playSnapshot->scene);
@@ -512,6 +515,7 @@ void Engine::StopGame() {
         scripting->EndPlay();
         scripting->GetRuntime().SetLevelLoader({});
     }
+    if (auto* input = GetSubsystem<InputSubsystem>()) input->SetCursorMode(CursorMode::Normal);
     impl_->scene.SetControllersActive(false);
     ResetSimulation();
     impl_->standalonePlaying = false;

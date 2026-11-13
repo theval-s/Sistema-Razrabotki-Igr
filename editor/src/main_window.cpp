@@ -246,6 +246,7 @@ void MainWindow::refreshTitle() {
 
 void MainWindow::tickEngine() {
     engine_.Tick();
+    viewport_->applyCursorMode();
     refreshStatus();
 }
 

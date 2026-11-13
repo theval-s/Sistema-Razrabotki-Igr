@@ -105,6 +105,11 @@ public:
         pending_ = {};
         current_ = {};
     }
+    /// The game's request, read by hosts every frame and applied while they own the input.
+    /// It lasts until the game changes it or its session ends, so regaining the input
+    /// re-applies it.
+    void SetCursorMode(CursorMode mode) noexcept { cursorMode_ = mode; }
+    [[nodiscard]] CursorMode GetCursorMode() const noexcept { return cursorMode_; }
 
     // --- Readers: state of the current frame ------------------------------------
     /// Last absolute position, retained across frames; zero after reset/focus loss.
@@ -140,6 +145,7 @@ private:
     State pending_{};
     /// Latched in Update(), what readers see.
     State current_{};
+    CursorMode cursorMode_ = CursorMode::Normal;
     struct ActiveContext {
         std::uint64_t id;
         std::string name;

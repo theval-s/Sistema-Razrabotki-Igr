@@ -13,28 +13,26 @@ bool Win32InputHost::Initialize() {
     return window_ && input_;
 }
 
-void Win32InputHost::SetRelativeMouseMode(bool enabled) {
-    if (enabled == relativeMouse_) return;
-    if (enabled) {
-        if (GetForegroundWindow() != window_) return;
+void Win32InputHost::ApplyCursorMode(const CursorMode mode) {
+    if (mode == cursorMode_) return;
+    // Back to normal first: capture and visibility don't stack.
+    if (cursorMode_ == CursorMode::Locked && GetCapture() == window_) ReleaseCapture();
+    if (cursorMode_ != CursorMode::Normal) while (ShowCursor(TRUE) < 0) {}
+    cursorMode_ = mode;
+    if (mode != CursorMode::Normal) while (ShowCursor(FALSE) >= 0) {}
+    if (mode == CursorMode::Locked) {
         SetCapture(window_);
-        while (ShowCursor(FALSE) >= 0) {}
-        relativeMouse_ = true;
         RECT client{};
         GetClientRect(window_, &client);
         POINT center{(client.right - client.left) / 2, (client.bottom - client.top) / 2};
         ClientToScreen(window_, &center);
         SetCursorPos(center.x, center.y);
-    } else {
-        relativeMouse_ = false;
-        if (GetCapture() == window_) ReleaseCapture();
-        while (ShowCursor(TRUE) < 0) {}
     }
     hasCursorPosition_ = false;
 }
 
 void Win32InputHost::Shutdown() {
-    SetRelativeMouseMode(false);
+    ApplyCursorMode(CursorMode::Normal);
     input_ = nullptr;
 }
 
@@ -65,7 +63,7 @@ void Win32InputHost::Update(const FrameContext&) {
                     break;
                 case WM_KILLFOCUS:
                     input_->OnFocusLost();
-                    SetRelativeMouseMode(false);
+                    ApplyCursorMode(CursorMode::Normal);
                     hasCursorPosition_ = false;
                     break;
             }
@@ -78,11 +76,12 @@ void Win32InputHost::Update(const FrameContext&) {
         // Focus notifications can be sent directly to the window procedure rather
         // than queued. The polling path must also invalidate stale mouse input.
         input_->OnFocusLost();
-        SetRelativeMouseMode(false);
+        ApplyCursorMode(CursorMode::Normal);
         hasCursorPosition_ = false;
         return;
     }
-    if (relativeMouse_) {
+    ApplyCursorMode(input_->GetCursorMode());
+    if (cursorMode_ == CursorMode::Locked) {
         RECT client{};
         GetClientRect(window_, &client);
         POINT center{(client.right - client.left) / 2, (client.bottom - client.top) / 2};

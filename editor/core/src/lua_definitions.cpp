@@ -481,11 +481,19 @@ PhysicalKey = {}
 ---@field Middle integer
 ---@type MouseButtonConstants
 MouseButton = {}
+---@class CursorModeConstants
+---@field Normal integer
+---@field Hidden integer Invisible over the game; moves and reports its position as usual.
+---@field Locked integer Invisible and held in place, for mouse-look; read Input.MouseDelta().
+---@type CursorModeConstants
+CursorMode = {}
 Input = {}
 ---@type PhysicalKeyConstants
 Input.PhysicalKey = PhysicalKey
 ---@type MouseButtonConstants
 Input.MouseButton = MouseButton
+---@type CursorModeConstants
+Input.CursorMode = CursorMode
 ---Gets/defines and nonblockingly activates a named context; nil without an input subsystem.
 ---@param name string Nonempty context name.
 ---@return InputContext?
@@ -518,6 +526,12 @@ function Input.MouseDelta() end
 function Input.MousePosition() end
 ---@return number
 function Input.MouseWheel() end
+---Applied while the game has the input, and again when it gets it back; kept until changed
+---or the session ends.
+---@param mode integer A CursorMode value.
+function Input.SetCursorMode(mode) end
+---@return integer
+function Input.GetCursorMode() end
 
 )"
 R"(Physics = {}

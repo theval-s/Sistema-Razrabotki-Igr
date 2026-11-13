@@ -8,6 +8,7 @@
 #include <optional>
 
 #include <engine/core/Surface.hpp>
+#include <engine/input/InputTypes.hpp>
 
 namespace engine {
 class InputSubsystem;
@@ -26,7 +27,8 @@ class ShortcutRegistry;
 ///
 /// During Play the game has the input while the viewport captures it: from Play, Resume or
 /// a click into the viewport (which the game never sees) until the release shortcut, Pause,
-/// Stop or focus loss. Meanwhile only the play shortcuts work, and no mouse signals go out.
+/// Stop or focus loss. Meanwhile only the play shortcuts work, no mouse signals go out, and
+/// the game's cursor mode applies: Locked pins the cursor at the centre like the right drag.
 class ViewportWidget : public QWidget {
     Q_OBJECT
 
@@ -52,6 +54,8 @@ public:
     /// Only while playing and not paused.
     void captureInput();
     void releaseInput();
+    /// Follows the game's cursor mode while it has the input; call every frame.
+    void applyCursorMode();
 
     /// No Qt painting at all, so it can't draw over the swap chain.
     [[nodiscard]] QPaintEngine* paintEngine() const override;
@@ -96,8 +100,10 @@ private:
     /// Global position of the previous mouse move; none after the cursor left the widget,
     /// so coming back in elsewhere isn't reported as a jump.
     std::optional<QPoint> last_cursor_{};
-    /// Right button held: cursor hidden and warped back to last_cursor_.
+    /// Right button held, or the game locked it: cursor hidden and warped back to last_cursor_.
     bool cursor_pinned_ = false;
+    /// The game's mode as applied; Normal while it doesn't have the input.
+    engine::CursorMode cursor_mode_ = engine::CursorMode::Normal;
     bool playing_ = false;
     bool paused_ = false;
     bool captured_ = false;
