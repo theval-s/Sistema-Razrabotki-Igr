@@ -15,6 +15,18 @@ struct NavigationSettings {
     float agentRadius = 0.4f;
     float agentClimb = 0.4f;
     float agentSlope = 45.0f;
+    bool operator==(const NavigationSettings&) const = default;
+};
+
+struct NavigationRegion {
+    DirectX::SimpleMath::Vector3 halfExtents{10, 3, 10};
+    NavigationSettings settings;
+    bool operator==(const NavigationRegion&) const = default;
+};
+
+struct NavigationSource {
+    bool useCollider = true;
+    bool operator==(const NavigationSource&) const = default;
 };
 
 class DebugDraw;
@@ -29,6 +41,9 @@ public:
     /// winding on walkable surfaces. A failed build preserves the previous mesh.
     [[nodiscard]] bool Build(std::span<const DirectX::SimpleMath::Vector3> vertices,
                              std::span<const int> indices, const NavigationSettings& settings = {});
+    [[nodiscard]] bool BuildRegion(std::span<const DirectX::SimpleMath::Vector3> vertices,
+        std::span<const int> indices, const NavigationSettings& settings,
+        DirectX::SimpleMath::Vector3 minimum, DirectX::SimpleMath::Vector3 maximum);
     void Clear();
     void Draw(DebugDraw& draw) const;
 

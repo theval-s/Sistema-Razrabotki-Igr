@@ -579,19 +579,7 @@ function SaveGame.RequestSave(slot) end
 ---@return string error
 function SaveGame.RequestLoad(slot) end
 
----@class NavigationSettings
----@field cellSize? number
----@field cellHeight? number
----@field agentHeight? number
----@field agentRadius? number
----@field agentClimb? number
----@field agentSlope? number
-
 Navigation = {}
----@param options? NavigationSettings
----@return boolean
-function Navigation.Build(options) end
-
 ---@param start Vector3
 ---@param goal Vector3
 ---@return Vector3[]

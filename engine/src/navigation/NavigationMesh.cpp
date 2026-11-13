@@ -32,6 +32,19 @@ NavigationMesh::NavigationMesh() = default;
 NavigationMesh::~NavigationMesh() = default;
 
 bool NavigationMesh::Build(std::span<const Vector3> vertices, std::span<const int> indices, const NavigationSettings& settings) {
+    if (vertices.empty() || !std::ranges::all_of(vertices, IsFinite)) return false;
+    Vector3 minimum = vertices.front(), maximum = vertices.front();
+    for (const auto vertex : vertices) {
+        minimum = Vector3::Min(minimum, vertex);
+        maximum = Vector3::Max(maximum, vertex);
+    }
+    return BuildRegion(vertices, indices, settings, minimum, maximum);
+}
+
+bool NavigationMesh::BuildRegion(std::span<const Vector3> vertices, std::span<const int> indices,
+                                 const NavigationSettings& settings, Vector3 minimum, Vector3 maximum) {
+    if (!IsFinite(minimum) || !IsFinite(maximum) ||
+        maximum.x <= minimum.x || maximum.z <= minimum.z || maximum.y < minimum.y) return false;
     constexpr auto maxCount = static_cast<std::size_t>((std::numeric_limits<int>::max)() / 3);
     if (vertices.size() < 3 || vertices.size() > maxCount || indices.empty() ||
         indices.size() > maxCount || indices.size() % 3 != 0 ||
@@ -67,7 +80,12 @@ bool NavigationMesh::Build(std::span<const Vector3> vertices, std::span<const in
     config.maxEdgeLen = 60;
     config.maxSimplificationError = 1.3f;
     config.maxVertsPerPoly = DT_VERTS_PER_POLYGON;
-    rcCalcBounds(positions.data(), vertexCount, config.bmin, config.bmax);
+    config.bmin[0] = minimum.x;
+    config.bmin[1] = minimum.y;
+    config.bmin[2] = minimum.z;
+    config.bmax[0] = maximum.x;
+    config.bmax[1] = maximum.y;
+    config.bmax[2] = maximum.z;
     if (config.bmax[0] - config.bmin[0] > 2000.0f ||
         config.bmax[2] - config.bmin[2] > 2000.0f ||
         config.bmax[1] - config.bmin[1] > RC_SPAN_MAX_HEIGHT * config.ch) {

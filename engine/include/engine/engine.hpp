@@ -185,7 +185,7 @@ public:
     /// on a scene switch; GetAssets() is for non-scene/host-owned assets.
     [[nodiscard]] ENGINE_API AssetSystem& GetSceneAssets() noexcept;
     [[nodiscard]] ENGINE_API NavigationMesh& GetNavigationMesh() noexcept;
-    [[nodiscard]] ENGINE_API bool BuildNavigation(const NavigationSettings& settings);
+    [[nodiscard]] ENGINE_API bool BuildNavigation(entt::entity region, std::string& error);
     /// Rescans the catalogs of both registries after asset files were added, moved or removed
     /// on disk. False, with the reason, when the scan was not clean (AssetSystem::RescanCatalog).
     [[nodiscard]] ENGINE_API bool RescanAssetCatalogs(std::string& error);

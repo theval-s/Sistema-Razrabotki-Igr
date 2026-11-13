@@ -275,18 +275,6 @@ void RegisterGameplayBindings(sol::state& lua, LuaBindingsContext& context) {
         return PhysicsCommand(context, e, v, q, 3);
     });
     auto navigation = lua.create_named_table("Navigation");
-    navigation.set_function("Build", [&context](sol::optional<sol::table> options) {
-        NavigationSettings settings;
-        if (options) {
-            settings.cellSize = options->get_or("cellSize", settings.cellSize);
-            settings.cellHeight = options->get_or("cellHeight", settings.cellHeight);
-            settings.agentHeight = options->get_or("agentHeight", settings.agentHeight);
-            settings.agentRadius = options->get_or("agentRadius", settings.agentRadius);
-            settings.agentClimb = options->get_or("agentClimb", settings.agentClimb);
-            settings.agentSlope = options->get_or("agentSlope", settings.agentSlope);
-        }
-        return context.engine && context.engine->BuildNavigation(settings);
-    });
     navigation.set_function("FindPath", [&context](Vector3 start, Vector3 goal) {
         return sol::as_table(context.engine
             ? context.engine->GetNavigationMesh().FindPath(start, goal)

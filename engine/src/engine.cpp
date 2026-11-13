@@ -20,6 +20,7 @@
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/scene/SceneDocument.hpp>
 #include <engine/navigation/NavigationMesh.hpp>
+#include <engine/physics/PhysicsSubsystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/GameDocument.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
@@ -976,38 +977,75 @@ NavigationMesh& Engine::GetNavigationMesh() noexcept {
     return impl_->navigation;
 }
 
-bool Engine::BuildNavigation(const NavigationSettings& settings) {
+bool Engine::BuildNavigation(entt::entity entity, std::string& error) {
     using DirectX::SimpleMath::Vector3;
+    error.clear();
     const Scene& scene = GetScene();
-    auto& assets = GetSceneAssets();
+    const auto* region = scene.TryGetComponent<NavigationRegion>(entity);
+    if (!region) {
+        error = "Select an entity with a Navigation Region";
+        return false;
+    }
+    const auto center = scene.GetWorldMatrix(entity).Translation();
+    const auto minimum = center - region->halfExtents;
+    const auto maximum = center + region->halfExtents;
     std::vector<Vector3> vertices;
     std::vector<int> indices;
-    bool complete = true;
-    scene.ForEach<MeshRenderer>([&](entt::entity entity, const MeshRenderer& renderer) {
-        if (!renderer.mesh) {
-            if (renderer.meshReference.id.IsValid()) complete = false;
+    auto& assets = GetSceneAssets();
+    auto* physics = GetSubsystem<PhysicsSubsystem>();
+    constexpr std::size_t limit = 3000000;
+    scene.ForEach<NavigationSource>([&](entt::entity source, const NavigationSource& settings) {
+        if (!error.empty()) return;
+        const auto* body = scene.TryGetComponent<RigidBody>(source);
+        const auto* collider = scene.TryGetComponent<Collider>(source);
+        if ((body && body->motionType != MotionType::Static) || (collider && collider->isTrigger)) return;
+
+        if (settings.useCollider) {
+            const auto first = vertices.size();
+            if (!physics || !physics->CollectColliderTriangles(source, vertices, error)) {
+                if (error.empty()) error = "A Navigation Source requires a valid static collider";
+                return;
+            }
+            if (vertices.size() > limit || vertices.size() - first > limit - indices.size()) {
+                error = "Too many navigation triangles";
+                return;
+            }
+            for (auto i = first; i < vertices.size(); ++i) indices.push_back(static_cast<int>(i));
             return;
         }
-        const auto mesh = assets.Peek(renderer.mesh);
+        const auto* renderer = scene.TryGetComponent<MeshRenderer>(source);
+        if (!renderer) {
+            error = "A Navigation Source requires a Mesh Renderer";
+            return;
+        }
+        const auto mesh = assets.Peek(renderer->mesh);
         if (!mesh || !mesh->geometry) {
-            complete = false;
+            error = "A navigation source mesh is not loaded";
             return;
         }
         const auto& geometry = *mesh->geometry;
-        constexpr std::size_t limit = 3000000;
         if (geometry.positions.size() > limit - vertices.size() ||
             geometry.indices.size() > limit - indices.size()) {
-            complete = false;
+            error = "Too many navigation triangles";
             return;
         }
         const int base = static_cast<int>(vertices.size());
-        const auto world = scene.GetWorldMatrix(entity);
+        const auto world = scene.GetWorldMatrix(source);
         for (const auto position : geometry.positions)
             vertices.push_back(Vector3::Transform(position, world));
         for (const auto index : geometry.indices)
             indices.push_back(base + static_cast<int>(index));
     });
-    return complete && impl_->navigation.Build(vertices, indices, settings);
+    if (!error.empty()) return false;
+    if (indices.empty()) {
+        error = "Add a Navigation Source to the floor and any walls that affect movement";
+        return false;
+    }
+    if (!impl_->navigation.BuildRegion(vertices, indices, region->settings, minimum, maximum)) {
+        error = "No walkable mesh was built. Check the region bounds, geometry and agent settings.";
+        return false;
+    }
+    return true;
 }
 
 AssetSystem& Engine::GetSceneAssets() noexcept {

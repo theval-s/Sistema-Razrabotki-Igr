@@ -31,6 +31,8 @@ public:
     void FixedUpdate(const FixedUpdateContext& step) override;
     void ResetSimulation() override;
 
+    [[nodiscard]] bool CollectColliderTriangles(entt::entity entity,
+        std::vector<DirectX::SimpleMath::Vector3>& triangles, std::string& error);
     [[nodiscard]] bool SetLinearVelocity(entt::entity entity, DirectX::SimpleMath::Vector3 velocity, std::string& error);
     [[nodiscard]] bool AddImpulse(entt::entity entity, DirectX::SimpleMath::Vector3 impulse, std::string& error);
     [[nodiscard]] bool MoveKinematic(entt::entity entity, DirectX::SimpleMath::Vector3 position,

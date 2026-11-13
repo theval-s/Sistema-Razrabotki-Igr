@@ -1,7 +1,5 @@
-#include <engine/navigation/NavigationMesh.hpp>
 #include <QDialogButtonBox>
-#include <QDoubleSpinBox>
-#include <QFormLayout>
+ #include <QFormLayout>
 #include <engine/physics/PhysicsSubsystem.hpp>
 #include <editor/main_window.hpp>
 
@@ -138,39 +136,6 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     });
     refreshTitle();
     buildMenus();
-    auto* navigation = context_->menu(tr("&Navigation"));
-    navigation->addAction(tr("Build Navigation Mesh..."), this, [this] {
-        engine::NavigationSettings settings;
-        QDialog dialog(this);
-        dialog.setWindowTitle(tr("Build Navigation Mesh"));
-        auto* form = new QFormLayout(&dialog);
-        const auto field = [&](const QString& label, float value, double min, double max) {
-            auto* input = new QDoubleSpinBox(&dialog);
-            input->setDecimals(2);
-            input->setRange(min, max);
-            input->setValue(value);
-            form->addRow(label, input);
-            return input;
-        };
-        auto* cell = field(tr("Cell size"), settings.cellSize, 0.01, 10);
-        auto* voxelHeight = field(tr("Cell height"), settings.cellHeight, 0.01, 10);
-        auto* height = field(tr("Agent height"), settings.agentHeight, 0.03, 50);
-        auto* radius = field(tr("Agent radius"), settings.agentRadius, 0, 50);
-        auto* climb = field(tr("Maximum step"), settings.agentClimb, 0, 50);
-        auto* slope = field(tr("Maximum slope (degrees)"), settings.agentSlope, 0, 89.99);
-        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-        form->addRow(buttons);
-        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-        if (dialog.exec() != QDialog::Accepted) return;
-        settings = {float(cell->value()), float(voxelHeight->value()), float(height->value()),
-                    float(radius->value()), float(climb->value()), float(slope->value())};
-        if (!engine_.BuildNavigation(settings)) {
-            QMessageBox::warning(this, tr("Navigation Mesh"),
-                tr("Could not build a walkable mesh. Check the agent settings and make sure scene meshes are loaded."));
-        }
-    });
-    navigation->addAction(tr("Clear Navigation Mesh"), this, [this] { engine_.GetNavigationMesh().Clear(); });
     buildLogDock();  // before modules and engine init, so their startup messages show up
 
     // Panels first, then the saved layout, then the engine: the swap chain is created at

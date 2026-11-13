@@ -65,7 +65,7 @@ function OnDestroy()
     -- Release this object's gameplay resources.
 end)";
 
-constexpr std::string_view NavigationScriptTemplate = R"lua(-- Bake the scene using Navigation > Build Navigation Mesh before Play.
+constexpr std::string_view NavigationScriptTemplate = R"lua(-- Bake the Navigation Region in the Inspector before Play.
 -- Attach this script to an object without a dynamic rigid body.
 Properties = {
     goalX = 8,
