@@ -1,3 +1,4 @@
+#include <engine/navigation/NavigationMesh.hpp>
 #include <editor/viewport_overlay.hpp>
 
 #include <QWidget>
@@ -79,6 +80,7 @@ std::string_view ViewportOverlaySubsystem::GetName() const {
 void ViewportOverlaySubsystem::LateUpdate(const engine::FrameContext&) {
     auto& world = GetEngine().GetSubsystem<engine::RenderingSubsystem>()->GetWorld();
     world.selectedSceneItems.clear();
+    GetEngine().GetNavigationMesh().Draw(world.debugDraw);
     // In the bottom-left corner.
     const auto scale = static_cast<float>(viewport_.devicePixelRatioF());
     const auto height = static_cast<float>(GetEngine().GetSurface().height);

@@ -19,6 +19,8 @@
 #include <engine/core/PathUtils.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/scene/SceneDocument.hpp>
+#include <engine/navigation/NavigationMesh.hpp>
+#include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/GameDocument.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
 
@@ -54,6 +56,7 @@ struct Engine::Impl {
     explicit Impl(EngineConfig engineConfig) : config(std::move(engineConfig)) {}
 
     EngineConfig config;
+    NavigationMesh navigation;
     // Registration order == Initialize/Update/Render order. Accessed by index
     // everywhere so subsystems may register more subsystems while running.
     std::vector<Entry> subsystems;
@@ -95,6 +98,7 @@ struct Engine::Impl {
     };
     std::deque<GameRequest> gameRequests;
     struct PlaySnapshot {
+        NavigationMesh navigation;
         SceneDocument scene, baseline;
         AssetReference reference;
         bool hasReference = false;
@@ -416,6 +420,7 @@ bool Engine::PlayCurrentScene(const std::filesystem::path& root,
     }
     Impl::PlaySnapshot snapshot;
     if (!CaptureSceneDocument(impl_->scene, *impl_->sceneAssets, snapshot.scene, error)) return false;
+    snapshot.navigation = impl_->navigation;
     snapshot.baseline = impl_->sceneBaseline;
     snapshot.reference = impl_->sceneReference;
     snapshot.hasReference = impl_->hasSceneReference;
@@ -425,6 +430,7 @@ bool Engine::PlayCurrentScene(const std::filesystem::path& root,
     impl_->autoloads.assign(autoloads.begin(), autoloads.end());
     impl_->queuedScene.reset();
     CommitScene(impl_->playSnapshot->scene);
+    impl_->navigation = impl_->playSnapshot->navigation;
     scripting->GetRuntime().SetLevelLoader([this](std::string_view name, std::string& failure) {
         return RequestOpenLevel(name, failure);
     });
@@ -457,6 +463,7 @@ void Engine::StopPlay() {
     CancelGameRequests();
     impl_->queuedScene.reset();
     CommitScene(impl_->playSnapshot->scene);
+    impl_->navigation = impl_->playSnapshot->navigation;
     impl_->sceneBaseline = impl_->playSnapshot->baseline;
     impl_->sceneReference = impl_->playSnapshot->reference;
     impl_->hasSceneReference = impl_->playSnapshot->hasReference;
@@ -614,6 +621,7 @@ void Engine::ResetSimulation() {
 }
 
 void Engine::CommitScene(const SceneDocument& document) {
+    impl_->navigation.Clear();
     ResetSimulation();
     if (auto* scripting = GetSubsystem<ScriptSubsystem>()) {
         scripting->ClearSceneScripts();
@@ -962,6 +970,44 @@ void Engine::ClearEntityMaterialOverride(entt::entity entity) {
 
 AssetSystem& Engine::GetAssets() noexcept {
     return *impl_->assets;
+}
+
+NavigationMesh& Engine::GetNavigationMesh() noexcept {
+    return impl_->navigation;
+}
+
+bool Engine::BuildNavigation(const NavigationSettings& settings) {
+    using DirectX::SimpleMath::Vector3;
+    const Scene& scene = GetScene();
+    auto& assets = GetSceneAssets();
+    std::vector<Vector3> vertices;
+    std::vector<int> indices;
+    bool complete = true;
+    scene.ForEach<MeshRenderer>([&](entt::entity entity, const MeshRenderer& renderer) {
+        if (!renderer.mesh) {
+            if (renderer.meshReference.id.IsValid()) complete = false;
+            return;
+        }
+        const auto mesh = assets.Peek(renderer.mesh);
+        if (!mesh || !mesh->geometry) {
+            complete = false;
+            return;
+        }
+        const auto& geometry = *mesh->geometry;
+        constexpr std::size_t limit = 3000000;
+        if (geometry.positions.size() > limit - vertices.size() ||
+            geometry.indices.size() > limit - indices.size()) {
+            complete = false;
+            return;
+        }
+        const int base = static_cast<int>(vertices.size());
+        const auto world = scene.GetWorldMatrix(entity);
+        for (const auto position : geometry.positions)
+            vertices.push_back(Vector3::Transform(position, world));
+        for (const auto index : geometry.indices)
+            indices.push_back(base + static_cast<int>(index));
+    });
+    return complete && impl_->navigation.Build(vertices, indices, settings);
 }
 
 AssetSystem& Engine::GetSceneAssets() noexcept {

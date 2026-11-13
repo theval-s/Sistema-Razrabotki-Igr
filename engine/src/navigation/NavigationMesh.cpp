@@ -1,5 +1,6 @@
 #include <engine/navigation/NavigationMesh.hpp>
 
+#include <engine/rendering/DebugDraw.hpp>
 #include <Recast.h>
 #include <DetourAlloc.h>
 #include <DetourNavMesh.h>
@@ -30,7 +31,7 @@ struct NavigationMesh::Impl {
 NavigationMesh::NavigationMesh() = default;
 NavigationMesh::~NavigationMesh() = default;
 
-bool NavigationMesh::Build(std::span<const Vector3> vertices, std::span<const int> indices) {
+bool NavigationMesh::Build(std::span<const Vector3> vertices, std::span<const int> indices, const NavigationSettings& settings) {
     constexpr auto maxCount = static_cast<std::size_t>((std::numeric_limits<int>::max)() / 3);
     if (vertices.size() < 3 || vertices.size() > maxCount || indices.empty() ||
         indices.size() > maxCount || indices.size() % 3 != 0 ||
@@ -49,13 +50,17 @@ bool NavigationMesh::Build(std::span<const Vector3> vertices, std::span<const in
     const int vertexCount = static_cast<int>(vertices.size());
     const int triangleCount = static_cast<int>(indices.size() / 3);
 
-    constexpr float agentHeight = 2.0f;
-    constexpr float agentRadius = 0.4f;
-    constexpr float agentClimb = 0.4f;
+    const auto [cellSize, cellHeight, agentHeight, agentRadius, agentClimb, agentSlope] = settings;
+    if (!(cellSize >= 0.01f && cellSize <= 10.0f && cellHeight >= 0.01f && cellHeight <= 10.0f &&
+          agentHeight >= 3 * cellHeight && agentHeight / cellHeight <= 255 &&
+          agentRadius >= 0 && agentRadius / cellSize <= 127 &&
+          agentClimb >= 0 && agentClimb / cellHeight <= 255 && agentSlope >= 0 && agentSlope < 90)) {
+        return false;
+    }
     rcConfig config{};
-    config.cs = 0.2f;
-    config.ch = 0.1f;
-    config.walkableSlopeAngle = 45.0f;
+    config.cs = cellSize;
+    config.ch = cellHeight;
+    config.walkableSlopeAngle = agentSlope;
     config.walkableHeight = static_cast<int>(std::ceil(agentHeight / config.ch));
     config.walkableClimb = static_cast<int>(std::floor(agentClimb / config.ch));
     config.walkableRadius = static_cast<int>(std::ceil(agentRadius / config.cs));
@@ -109,7 +114,7 @@ bool NavigationMesh::Build(std::span<const Vector3> vertices, std::span<const in
         !rcBuildPolyMeshDetail(&context, *polygons, *compact, 1.2f, 0.1f, *detail)) {
         return false;
     }
-    std::fill_n(polygons->flags, polygons->npolys, 1);
+    std::fill_n(polygons->flags, polygons->npolys, static_cast<unsigned short>(1));
 
     dtNavMeshCreateParams params{};
     params.verts = polygons->verts;
@@ -133,7 +138,7 @@ bool NavigationMesh::Build(std::span<const Vector3> vertices, std::span<const in
     rcVcopy(params.bmax, polygons->bmax);
     params.buildBvTree = true;
 
-    auto next = std::make_unique<Impl>();
+    auto next = std::make_shared<Impl>();
     unsigned char* data = nullptr;
     int dataSize = 0;
     if (!next->mesh || !next->query || !dtCreateNavMeshData(&params, &data, &dataSize)) {
@@ -148,6 +153,26 @@ bool NavigationMesh::Build(std::span<const Vector3> vertices, std::span<const in
     }
     impl_ = std::move(next);
     return true;
+}
+
+void NavigationMesh::Clear() {
+    impl_.reset();
+}
+
+void NavigationMesh::Draw(DebugDraw& draw) const {
+    if (!impl_) return;
+    const dtNavMesh& mesh = *impl_->mesh;
+    const auto* tile = mesh.getTile(0);
+    if (!tile || !tile->header) return;
+    const DirectX::SimpleMath::Color color{0.15f, 0.85f, 0.8f, 1.0f};
+    for (int i = 0; i < tile->header->polyCount; ++i) {
+        const auto& poly = tile->polys[i];
+        for (int j = 0; j < poly.vertCount; ++j) {
+            const auto* a = tile->verts + 3 * poly.verts[j];
+            const auto* b = tile->verts + 3 * poly.verts[(j + 1) % poly.vertCount];
+            draw.Line({a[0], a[1] + 0.03f, a[2]}, {b[0], b[1] + 0.03f, b[2]}, color);
+        }
+    }
 }
 
 std::vector<Vector3> NavigationMesh::FindPath(Vector3 start, Vector3 goal) const {
