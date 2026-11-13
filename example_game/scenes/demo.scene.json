@@ -32,6 +32,11 @@
       "name": "Enchanted cube",
       "parent": null,
       "components": {
+        "BehaviorTree": {
+          "tree": { "id": "cc8b73ce-5afc-4e54-a7cc-17a7070beae9", "path": "game/ai/pulse.bt.lua" },
+          "enabled": true,
+          "parameters": { "pulseEnabled": true, "seconds": 1 }
+        },
         "Transform": { "position": [0, 3.8, 0], "rotation": [0, 0, 0, 1], "scale": [1.6, 1.6, 1.6] },
         "MeshRenderer": {
           "mesh": { "id": "a1051591-1cee-4520-a41d-0b282d7103b4", "path": "engine/primitives/cube/model.obj" },
@@ -144,6 +149,11 @@
       "name": "Editor cube",
       "parent": null,
       "components": {
+        "BehaviorTree": {
+          "tree": { "id": "cc8b73ce-5afc-4e54-a7cc-17a7070beae9", "path": "game/ai/pulse.bt.lua" },
+          "enabled": true,
+          "parameters": { "pulseEnabled": true, "seconds": 2 }
+        },
         "Transform": { "position": [-5, 0.5, -4], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
         "MeshRenderer": {
           "mesh": { "id": "a1051591-1cee-4520-a41d-0b282d7103b4", "path": "engine/primitives/cube/model.obj" },
