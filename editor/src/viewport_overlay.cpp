@@ -80,7 +80,7 @@ std::string_view ViewportOverlaySubsystem::GetName() const {
 void ViewportOverlaySubsystem::LateUpdate(const engine::FrameContext&) {
     auto& world = GetEngine().GetSubsystem<engine::RenderingSubsystem>()->GetWorld();
     world.selectedSceneItems.clear();
-    GetEngine().DrawNavigationMeshes(world.debugDraw);
+    if (!GetEngine().IsPlaying()) GetEngine().DrawNavigationMeshes(world.debugDraw);
     // In the bottom-left corner.
     const auto scale = static_cast<float>(viewport_.devicePixelRatioF());
     const auto height = static_cast<float>(GetEngine().GetSurface().height);
@@ -89,7 +89,8 @@ void ViewportOverlaySubsystem::LateUpdate(const engine::FrameContext&) {
     auto& assets = GetEngine().GetSceneAssets();
     const auto& scene = GetEngine().GetScene();
     const auto selected = selection_.primary();
-    if (const auto* region = scene.TryGetComponent<engine::NavigationRegion>(selected)) {
+    const auto* region = scene.TryGetComponent<engine::NavigationRegion>(selected);
+    if (region && !GetEngine().IsPlaying()) {
         using DirectX::SimpleMath::Matrix;
         world.debugDraw.Box(Matrix::CreateScale(region->halfExtents * 2.0f) *
             Matrix::CreateTranslation(scene.GetWorldMatrix(selected).Translation()), {0.15f, 0.85f, 0.8f, 1.0f});

@@ -8,6 +8,7 @@
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <TaskScheduler.h>
@@ -74,6 +75,8 @@ struct Engine::Impl {
     std::uint64_t simulationRevision = 0;
     std::uint64_t nextFrameIndex = 0;
     std::chrono::steady_clock::time_point lastTickTime{};
+    std::chrono::steady_clock::time_point lastTickEnd{};
+    std::chrono::steady_clock::time_point lastBacklogWarning{};
 
     entt::dispatcher events;
     // GPU clones belong to the active scene runtime, never to serializable components.
@@ -291,6 +294,10 @@ void Engine::Tick() {
         if (!LoadScene(file, error) || !error.empty()) log::Engine().error("Deferred scene load: {}", error);
     }
     const auto revision = impl_->simulationRevision;
+    using Milliseconds = std::chrono::duration<double, std::milli>;
+    const auto fixedStart = std::chrono::steady_clock::now();
+    double crowdMilliseconds = 0;
+    bool discardedBacklog = false;
     // A newly committed scene starts accumulating time on the next frame.
     if (!impl_->paused && (!impl_->editorMode || IsPlaying()) && revision == frameRevision) {
         impl_->fixedAccumulator += current.deltaSeconds;
@@ -304,10 +311,12 @@ void Engine::Tick() {
             for (std::size_t i = 0; i < impl_->subsystems.size(); ++i)
                 impl_->subsystems[i].subsystem->FixedUpdate(step);
             impl_->inCallbacks = false;
+            const auto crowdStart = std::chrono::steady_clock::now();
             impl_->scene.ForEach<NavigationRegion>([&](entt::entity region, const NavigationRegion&) {
                 if (const auto* mesh = GetNavigationMesh(region))
                     mesh->UpdateCrowd(static_cast<float>(step.deltaSeconds), impl_->scene);
             });
+            crowdMilliseconds += Milliseconds(std::chrono::steady_clock::now() - crowdStart).count();
             ++impl_->fixedStep.stepIndex;
             ++steps;
             if (impl_->queuedScene) {
@@ -321,9 +330,10 @@ void Engine::Tick() {
         }
         if (impl_->fixedAccumulator >= impl_->config.fixedStepSeconds) {
             impl_->fixedAccumulator = std::fmod(impl_->fixedAccumulator, impl_->config.fixedStepSeconds);
-            log::Engine().warn("FixedUpdate catch-up limit reached; discarded simulation backlog");
+            discardedBacklog = true;
         }
     }
+    const auto renderStart = std::chrono::steady_clock::now();
     for (std::size_t i = 0; i < impl_->subsystems.size(); ++i) {
         impl_->subsystems[i].subsystem->LateUpdate(current);
     }
@@ -332,6 +342,19 @@ void Engine::Tick() {
     }
     if (auto* scripting = GetSubsystem<ScriptSubsystem>()) scripting->GetRuntime().FlushSceneCommands();
     ProcessGameRequests();
+    const auto frameEnd = std::chrono::steady_clock::now();
+    const auto previousEnd = std::exchange(impl_->lastTickEnd, frameEnd);
+    if (discardedBacklog && frameEnd - impl_->lastBacklogWarning >= std::chrono::seconds(1)) {
+        impl_->lastBacklogWarning = frameEnd;
+        const double outsideTick = previousEnd.time_since_epoch().count()
+            ? Milliseconds(now - previousEnd).count() : 0;
+        log::Engine().warn("FixedUpdate catch-up limit reached; discarded simulation backlog "
+                           "(between ticks {:.1f} ms, update {:.1f} ms, fixed updates {:.1f} ms "
+                           "including crowd {:.1f} ms, late update/render {:.1f} ms)",
+            outsideTick, Milliseconds(fixedStart - now).count(),
+            Milliseconds(renderStart - fixedStart).count(), crowdMilliseconds,
+            Milliseconds(frameEnd - renderStart).count());
+    }
 }
 
 bool Engine::Run() {

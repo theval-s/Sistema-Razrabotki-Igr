@@ -248,7 +248,7 @@ void MainWindow::refreshTitle() {
 
 void MainWindow::tickEngine() {
     engine_.Tick();
-    refreshStatus();
+    if (engine_.GetFrame().frameIndex % 15 == 0) refreshStatus();
 }
 
 void MainWindow::refreshPlayHint() {
