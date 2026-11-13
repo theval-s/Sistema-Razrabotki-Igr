@@ -1,5 +1,23 @@
 find_package(GTest CONFIG REQUIRED)
 
+# Exercise both generated export-header modes against the same utility contract.
+foreach(utf_target IN ITEMS utf_tests utf_shared_tests)
+    add_executable(${utf_target} utf_tests.cpp)
+    if(utf_target STREQUAL "utf_shared_tests")
+        target_link_libraries(${utf_target} PRIVATE Engine::Engine GTest::gtest_main)
+    else()
+        target_link_libraries(${utf_target} PRIVATE Engine::EngineStatic GTest::gtest_main)
+    endif()
+    set_project_warnings(${utf_target})
+    set_target_properties(${utf_target} PROPERTIES FOLDER tests)
+    add_custom_command(TARGET ${utf_target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:${utf_target}> $<TARGET_FILE_DIR:${utf_target}>
+        COMMAND_EXPAND_LISTS VERBATIM
+    )
+    add_test(NAME ${utf_target} COMMAND ${utf_target})
+endforeach()
+
 add_executable(input_tests input_tests.cpp)
 target_link_libraries(input_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(input_tests)

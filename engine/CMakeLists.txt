@@ -56,6 +56,7 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/core/Log.hpp
     include/engine/core/ResourceID.hpp
     include/engine/core/Uuid.hpp
+    include/engine/core/Utf.hpp
     include/engine/engine.hpp
     include/engine/rendering/DebugDraw.hpp
     include/engine/rendering/FPSCamera.hpp
@@ -103,6 +104,7 @@ set(ENGINE_SOURCES
     src/core/Log.cpp
     src/core/ResourceID.cpp
     src/core/Uuid.cpp
+    src/core/Utf.cpp
     src/engine.cpp
     src/rendering/DebugDraw.cpp
     src/rendering/FPSCamera.cpp

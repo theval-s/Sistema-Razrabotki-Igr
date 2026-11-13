@@ -4,11 +4,13 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <utility>
 #include <vector>
 #include <windowsx.h>
 #include <imm.h>
 #include <engine/engine.hpp>
+#include <engine/core/Utf.hpp>
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/input/Win32PhysicalKey.hpp>
 #include <engine/window.hpp>
@@ -18,37 +20,6 @@
 
 namespace engine {
 namespace {
-std::string Utf8(std::wstring_view text) {
-    if (text.empty()) return {};
-    const int size = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
-    std::string result(size, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(), size, nullptr, nullptr);
-    return result;
-}
-std::wstring Utf16(std::string_view text) {
-    if (text.empty()) return {};
-    const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
-    std::wstring result(size, L'\0');
-    if (size) MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), result.data(), size);
-    return result;
-}
-std::uint32_t Scalars(std::wstring_view text, std::size_t offset) {
-    offset = (std::min)(offset, text.size());
-    std::uint32_t result = 0;
-    for (std::size_t i = 0; i < offset; ++i) {
-        if (text[i] >= 0xd800 && text[i] <= 0xdbff && i + 1 < offset &&
-            text[i + 1] >= 0xdc00 && text[i + 1] <= 0xdfff) ++i;
-        ++result;
-    }
-    return result;
-}
-std::size_t Units(std::wstring_view text, std::uint32_t scalarOffset) {
-    std::size_t i = 0;
-    for (std::uint32_t n = 0; n < scalarOffset && i < text.size(); ++n, ++i)
-        if (text[i] >= 0xd800 && text[i] <= 0xdbff && i + 1 < text.size() &&
-            text[i + 1] >= 0xdc00 && text[i + 1] <= 0xdfff) ++i;
-    return i;
-}
 Key Logical(WPARAM key) {
     if (key >= 'A' && key <= 'Z') return static_cast<Key>(static_cast<int>(Key::A) + key - 'A');
     if (key >= '0' && key <= '9') return static_cast<Key>(static_cast<int>(Key::Num0) + key - '0');
@@ -98,7 +69,11 @@ public:
             std::size_t size = 0;
             while (size < capacity && value[size]) ++size;
             success = size < capacity;
-            if (success) utf8 = Utf8({value, size});
+            if (success) {
+                auto converted = utf::ToUtf8(std::wstring_view(value, size));
+                success = converted.has_value();
+                if (converted) utf8 = std::move(*converted);
+            }
             GlobalUnlock(data);
         }
         CloseClipboard();
@@ -107,8 +82,12 @@ public:
     }
     bool WriteClipboard(std::string_view utf8, std::string& error) override {
         error.clear();
-        const auto value = Utf16(utf8);
-        if (!utf8.empty() && value.empty()) { error = "Invalid UTF-8 clipboard text"; return false; }
+        const auto converted = utf::ToWide(utf8);
+        if (!converted) { error = "Invalid UTF-8 clipboard text"; return false; }
+        const auto& value = *converted;
+        if (value.size() >= (std::numeric_limits<SIZE_T>::max)() / sizeof(wchar_t)) {
+            error = "Clipboard text is too large"; return false;
+        }
         const HWND window = Window();
         if (!window || !OpenClipboard(window)) { error = "Cannot open Win32 clipboard"; return false; }
         const auto bytes = (value.size() + 1) * sizeof(wchar_t);
@@ -266,7 +245,9 @@ void Win32InputHost::TextUnit(wchar_t unit) {
     if (unit < 0x20 || unit == 0x7f) return;
     text.push_back(unit);
     InputUiEvent event;
-    event.payload = InputUiText{Utf8(text)};
+    auto converted = utf::ToUtf8(text);
+    if (!converted) return;
+    event.payload = InputUiText{std::move(*converted)};
     Queue(std::move(event));
 }
 
@@ -357,8 +338,10 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
         if (!context) break;
         if (lp & GCS_RESULTSTR) {
             const auto text = CompositionString(context, GCS_RESULTSTR);
+            auto converted = utf::ToUtf8(text);
+            if (!converted) { ImmReleaseContext(window, context); result = 0; return true; }
             InputUiComposition composition;
-            composition.phase = InputUiCompositionPhase::Commit; composition.utf8 = Utf8(text);
+            composition.phase = InputUiCompositionPhase::Commit; composition.utf8 = std::move(*converted);
             event.payload = std::move(composition); Queue(event);
             // Returning handled prevents DefWindowProc from generating WM_IME_CHAR;
             // also discard legacy IMEs' echoed WM_CHAR units, if supplied.
@@ -367,10 +350,12 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
         }
         if (lp & GCS_COMPSTR) {
             const auto text = CompositionString(context, GCS_COMPSTR);
+            auto converted = utf::ToUtf8(text);
+            if (!converted) { ImmReleaseContext(window, context); result = 0; return true; }
             InputUiComposition composition;
-            composition.phase = InputUiCompositionPhase::Update; composition.utf8 = Utf8(text);
+            composition.phase = InputUiCompositionPhase::Update; composition.utf8 = std::move(*converted);
             const LONG cursor = ImmGetCompositionStringW(context, GCS_CURSORPOS, nullptr, 0);
-            composition.cursor = Scalars(text, cursor < 0 ? 0 : static_cast<std::size_t>(cursor));
+            composition.cursor = static_cast<std::uint32_t>(utf::Utf16ScalarOffset(text, cursor < 0 ? 0 : static_cast<std::size_t>(cursor)));
             const LONG attrBytes = ImmGetCompositionStringW(context, GCS_COMPATTR, nullptr, 0);
             std::vector<BYTE> attributes(attrBytes > 0 ? static_cast<std::size_t>(attrBytes) : 0);
             if (!attributes.empty()) ImmGetCompositionStringW(context, GCS_COMPATTR, attributes.data(), static_cast<DWORD>(attributes.size()));
@@ -378,8 +363,8 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
             while (start < attributes.size() && attributes[start] != ATTR_TARGET_CONVERTED && attributes[start] != ATTR_TARGET_NOTCONVERTED) ++start;
             std::size_t end = start;
             while (end < attributes.size() && (attributes[end] == ATTR_TARGET_CONVERTED || attributes[end] == ATTR_TARGET_NOTCONVERTED)) ++end;
-            composition.selectionStart = Scalars(text, start);
-            composition.selectionLength = Scalars(text, end) - composition.selectionStart;
+            composition.selectionStart = static_cast<std::uint32_t>(utf::Utf16ScalarOffset(text, start));
+            composition.selectionLength = static_cast<std::uint32_t>(utf::Utf16ScalarOffset(text, end)) - composition.selectionStart;
             const LONG clauseBytes = ImmGetCompositionStringW(context, GCS_COMPCLAUSE, nullptr, 0);
             std::vector<DWORD> clauses(clauseBytes > 0 ? static_cast<std::size_t>(clauseBytes) / sizeof(DWORD) : 0);
             if (!clauses.empty()) ImmGetCompositionStringW(context, GCS_COMPCLAUSE, clauses.data(), static_cast<DWORD>(clauses.size() * sizeof(DWORD)));
@@ -387,7 +372,9 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
                 const auto a = (std::min)(static_cast<std::size_t>(clauses[i - 1]), text.size());
                 const auto b = (std::min)(static_cast<std::size_t>(clauses[i]), text.size());
                 if (b < a) continue;
-                composition.clauses.push_back({Scalars(text, a), Scalars(text, b) - Scalars(text, a), a < end && b > start});
+                const auto scalarStart = static_cast<std::uint32_t>(utf::Utf16ScalarOffset(text, a));
+                const auto scalarEnd = static_cast<std::uint32_t>(utf::Utf16ScalarOffset(text, b));
+                composition.clauses.push_back({scalarStart, scalarEnd - scalarStart, a < end && b > start});
             }
             event.payload = std::move(composition); Queue(std::move(event)); composing_ = true;
         }
@@ -415,17 +402,23 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
         }
         if (uiHost_->text.active && wp == IMR_DOCUMENTFEED) {
             const auto& snapshot = uiHost_->text;
-            const auto surrounding = Utf16(snapshot.surroundingText);
+            const auto converted = utf::ToWide(snapshot.surroundingText);
+            if (!converted) { result = 0; return true; }
+            const auto& surrounding = *converted;
+            // RECONVERTSTRING sizes and byte offsets are DWORDs.
+            if (surrounding.size() > ((std::numeric_limits<DWORD>::max)() - sizeof(RECONVERTSTRING)) / sizeof(wchar_t) - 1) {
+                result = 0; return true;
+            }
             const auto bytes = sizeof(RECONVERTSTRING) + (surrounding.size() + 1) * sizeof(wchar_t);
             result = static_cast<LRESULT>(bytes);
             if (!lp) return true;
             auto* reconvert = reinterpret_cast<RECONVERTSTRING*>(lp);
             if (reconvert->dwSize < bytes) { result = 0; return true; }
-            const auto start = Units(surrounding, snapshot.selectionLength ? snapshot.selectionStart : snapshot.cursor);
-            const auto available = Scalars(surrounding, surrounding.size());
-            const auto selectionEnd = snapshot.selectionStart + (std::min)(snapshot.selectionLength,
-                available - (std::min)(available, snapshot.selectionStart));
-            const auto end = snapshot.selectionLength ? Units(surrounding, selectionEnd) : start;
+            const auto start = utf::Utf16UnitOffset(surrounding, snapshot.selectionLength ? snapshot.selectionStart : snapshot.cursor);
+            const auto available = utf::Utf16ScalarOffset(surrounding, surrounding.size());
+            const auto selectionStart = (std::min)(available, static_cast<std::size_t>(snapshot.selectionStart));
+            const auto selectionEnd = selectionStart + (std::min)(static_cast<std::size_t>(snapshot.selectionLength), available - selectionStart);
+            const auto end = snapshot.selectionLength ? utf::Utf16UnitOffset(surrounding, selectionEnd) : start;
             reconvert->dwVersion = 0;
             reconvert->dwStrLen = static_cast<DWORD>(surrounding.size());
             reconvert->dwStrOffset = sizeof(RECONVERTSTRING);

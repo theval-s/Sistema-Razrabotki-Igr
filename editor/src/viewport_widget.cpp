@@ -17,8 +17,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include <engine/input/InputSubsystem.hpp>
+#include <engine/core/Utf.hpp>
 #include <engine/input/Win32PhysicalKey.hpp>
 #include <editor/editor_camera.hpp>
 #include <editor/shortcut_registry.hpp>
@@ -407,20 +409,17 @@ void ViewportWidget::releaseCursor() {
 
 namespace {
 // Qt offsets count UTF-16 units; the engine boundary counts Unicode scalars.
-int units(const QString& text, std::uint64_t scalars) {
-    int i = 0;
-    while (scalars-- && i < text.size()) {
-        if (text[i].isHighSurrogate() && i + 1 < text.size() && text[i + 1].isLowSurrogate()) ++i;
-        ++i;
-    }
-    return i;
+std::u16string_view utf16View(const QString& text) {
+    return {QStringView(text).utf16(), static_cast<std::size_t>(text.size())};
 }
-std::uint32_t scalars(const QString& text, int offset) {
-    offset = std::clamp(offset, 0, static_cast<int>(text.size()));
-    std::uint32_t count = 0;
-    for (int i = 0; i < offset; ++i, ++count)
-        if (text[i].isHighSurrogate() && i + 1 < offset && text[i + 1].isLowSurrogate()) ++i;
-    return count;
+int units(const QString& text, std::uint64_t scalars) {
+    const auto offset = engine::utf::Utf16UnitOffset(utf16View(text),
+        static_cast<std::size_t>((std::min)(scalars, static_cast<std::uint64_t>(text.size()))));
+    return static_cast<int>((std::min)(offset, static_cast<std::size_t>((std::numeric_limits<int>::max)())));
+}
+std::uint32_t scalars(const QString& text, qsizetype offset) {
+    const auto count = engine::utf::Utf16ScalarOffset(utf16View(text), static_cast<std::size_t>((std::max)(qsizetype{0}, offset)));
+    return static_cast<std::uint32_t>((std::min)(count, static_cast<std::size_t>((std::numeric_limits<int>::max)())));
 }
 }
 
@@ -518,9 +517,9 @@ void ViewportWidget::inputMethodEvent(QInputMethodEvent* event) {
         const int cursor = units(text, text_input_.cursor);
         const auto start = std::clamp<qint64>(qint64(cursor) + event->replacementStart(), 0, text.size());
         const auto end = std::clamp<qint64>(start + event->replacementLength(), start, text.size());
-        c.replacementStart = static_cast<std::int32_t>(scalars(text, static_cast<int>(start))) -
+        c.replacementStart = static_cast<std::int32_t>(scalars(text, start)) -
                              static_cast<std::int32_t>(scalars(text, cursor));
-        c.replacementLength = scalars(text, static_cast<int>(end)) - scalars(text, static_cast<int>(start));
+        c.replacementLength = scalars(text, end) - scalars(text, start);
         queueUi({.payload = std::move(c)}, modifiers);
         composing_ = false;
     }
@@ -529,11 +528,11 @@ void ViewportWidget::inputMethodEvent(QInputMethodEvent* event) {
         engine::InputUiComposition c;
         c.phase = engine::InputUiCompositionPhase::Update;
         c.utf8 = preedit.toUtf8().toStdString();
-        c.cursor = scalars(preedit, static_cast<int>(preedit.size()));
+        c.cursor = scalars(preedit, preedit.size());
         for (const auto& attribute : event->attributes()) {
             const auto start = scalars(preedit, attribute.start);
-            const auto end = scalars(preedit, static_cast<int>(std::clamp<qint64>(
-                qint64(attribute.start) + attribute.length, 0, preedit.size())));
+            const auto end = scalars(preedit, std::clamp<qint64>(
+                qint64(attribute.start) + attribute.length, 0, preedit.size()));
             if (attribute.type == QInputMethodEvent::Cursor) c.cursor = start;
             if (attribute.type == QInputMethodEvent::TextFormat && end >= start) {
                 const auto format = qvariant_cast<QTextFormat>(attribute.value).toCharFormat();

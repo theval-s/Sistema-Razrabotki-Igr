@@ -1,4 +1,5 @@
 #include "UiModelStorage.hpp"
+#include <engine/core/Utf.hpp>
 #include <cmath>
 #include <limits>
 #include <algorithm>
@@ -17,16 +18,7 @@ bool VariableIdentifier(std::string_view s) {
 }
 }
 bool Utf8(std::string_view s) {
-    for (std::size_t i = 0; i < s.size();) {
-        auto c = static_cast<unsigned char>(s[i++]);
-        if (c < 0x80) continue;
-        unsigned n = c >= 0xf0 && c <= 0xf4 ? 3 : c >= 0xe0 && c <= 0xef ? 2 : c >= 0xc2 && c <= 0xdf ? 1 : 0;
-        if (!n || i + n > s.size()) return false;
-        std::uint32_t v = c & ((1u << (6 - n)) - 1);
-        for (unsigned j = 0; j < n; ++j) { c = static_cast<unsigned char>(s[i++]); if ((c & 0xc0) != 0x80) return false; v = (v << 6) | (c & 63); }
-        if ((n == 1 && v < 128) || (n == 2 && v < 2048) || (n == 3 && v < 65536) || v > 0x10ffff || (v >= 0xd800 && v <= 0xdfff)) return false;
-    }
-    return true;
+    return utf::IsValidUtf8(s);
 }
 namespace {
 bool Number(const StateValue& v, double& d) {

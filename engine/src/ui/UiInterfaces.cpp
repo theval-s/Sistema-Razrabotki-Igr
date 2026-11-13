@@ -3,6 +3,7 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/core/Log.hpp>
 #include <engine/core/PathUtils.hpp>
+#include <engine/core/Utf.hpp>
 #include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <RmlUi/Core/BaseXMLParser.h>
 #include <RmlUi/Core/StreamMemory.h>
@@ -16,7 +17,6 @@ namespace {
 bool Contained(const std::filesystem::path& path, const std::filesystem::path& root) {
     auto p = path.begin(); for (auto r = root.begin(); r != root.end(); ++r, ++p) if (p == path.end() || *p != *r) return false; return true;
 }
-std::size_t Scalars(std::string_view s) { std::size_t n = 0; for (unsigned char c : s) if ((c & 0xc0) != 0x80) ++n; return n; }
 }
 bool ResolveAsset(std::string_view url, std::filesystem::path& physical, std::string& logical) {
     try {
@@ -104,17 +104,21 @@ void System::Publish(Rml::Context* context) {
     host->SetTextInput(snapshot);
 }
 void System::Compose(const InputUiComposition& e) {
-    if (!text || !Utf8(e.utf8)) return;
+    if (!text) return;
+    const auto scalarCount = utf::Utf8ScalarCount(e.utf8);
+    if (!scalarCount) return;
     if (e.phase == InputUiCompositionPhase::Cancel) { Cancel(); return; }
     int a = 0, b = 0; text->GetSelectionRange(a, b);
-    auto count = Scalars(e.utf8);
+    const auto count = *scalarCount;
     if (count > static_cast<std::size_t>(std::numeric_limits<int>::max()) || e.cursor > count || e.selectionStart > count || e.selectionLength > count - e.selectionStart) return;
     for (auto& clause : e.clauses) if (clause.start > count || clause.length > count - clause.start) return;
     if (!composing) {
         compositionStart = std::min(a, b); compositionEnd = std::max(a, b);
         if (e.replacementStart || e.replacementLength) {
             auto start = static_cast<std::int64_t>(b) + e.replacementStart;
-            if (start < 0 || start + e.replacementLength > static_cast<std::int64_t>(Scalars(snapshot.surroundingText))) return;
+            const auto available = utf::Utf8ScalarCount(snapshot.surroundingText);
+            const auto end = start + e.replacementLength;
+            if (!available || start < 0 || end > INT_MAX || static_cast<std::uint64_t>(end) > *available) return;
             compositionStart = static_cast<int>(start); compositionEnd = compositionStart + static_cast<int>(e.replacementLength);
         }
         composing = true;
