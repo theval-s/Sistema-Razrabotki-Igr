@@ -15,7 +15,8 @@
         "gtest",
         "sol2",
         "lua",
-        "joltphysics"
+        "joltphysics",
+        "recastnavigation"
     ],
     "builtin-baseline": "8a9d7414691554ff6c7e1f5e957872d6a033df26",
     "overrides": [

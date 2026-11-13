@@ -244,6 +244,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(nlohmann_json_schema_validator CONFIG REQUIRED)
 find_package(stduuid CONFIG REQUIRED)
 find_package(Jolt CONFIG REQUIRED)
+find_package(recastnavigation CONFIG REQUIRED)
 
 # Embed the schema so material parsing does not depend on runtime file locations.
 set(MATERIAL_SCHEMA_FILE "${CMAKE_CURRENT_SOURCE_DIR}/schemas/material.schema.json")
@@ -252,6 +253,7 @@ file(READ "${MATERIAL_SCHEMA_FILE}" MATERIAL_SCHEMA_JSON)
 configure_file(cmake/MaterialSchema.hpp.in generated/MaterialSchema.hpp @ONLY)
 
 set(ENGINE_CORE_HEADERS
+    include/engine/navigation/NavigationMesh.hpp
     include/engine/input/InputSubsystem.hpp
     include/engine/input/InputTypes.hpp
     include/engine/input/Win32InputHost.hpp
@@ -290,6 +292,7 @@ set(ENGINE_CORE_HEADERS
 )
 
 set(ENGINE_CORE_SOURCES
+    src/navigation/NavigationMesh.cpp
     src/rendering/RenderingSubsystem.cpp
     src/input/InputSubsystem.cpp
     src/input/Win32InputHost.cpp
@@ -327,7 +330,7 @@ foreach(engine_target IN ITEMS engine engine_static)
         target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
         # Assimp is PRIVATE on purpose: AssimpMeshImporter.cpp is its only user and no
         # public header mentions it. Static consumers still get it via the link-only interface.
-        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid Lua::Lua sol2::sol2 Jolt::Jolt)
+        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid Lua::Lua sol2::sol2 Jolt::Jolt RecastNavigation::Recast RecastNavigation::Detour)
     endif()
 endforeach()
 
