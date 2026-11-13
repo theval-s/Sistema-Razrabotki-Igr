@@ -80,6 +80,14 @@ tree starts from its root. `OnExit` runs once for each entered action with
 
 ## Attach and control agents
 
+In the editor, select an entity and choose **Add Component → Behavior Tree**.
+Select the `.bt.lua` asset in **Tree**. Use **Enabled** to start or stop the
+tree and **Apply Parameters** to apply the entity's JSON overrides. For the
+pulse demo, enter `{"pulseEnabled": true, "seconds": 1}`. Save the scene to
+keep the attachment and its settings. To create a Lua definition with metadata,
+use **New → Behavior Tree** in the content browser and update the starter
+action's script path before Play.
+
 From a gameplay script, attach the same tree to two scene entities.
 
 ```lua

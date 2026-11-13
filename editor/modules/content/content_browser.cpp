@@ -74,6 +74,7 @@ constexpr engine::CatalogAssetKind FilterKinds[] = {
     engine::CatalogAssetKind::Texture,  engine::CatalogAssetKind::Material,
     engine::CatalogAssetKind::MaterialInstance, engine::CatalogAssetKind::Shader,
     engine::CatalogAssetKind::Script,
+    engine::CatalogAssetKind::BehaviorTree,
 };
 
 /// Files dragged in from outside the editor are copied, whatever the drag proposed: reporting
@@ -412,6 +413,8 @@ void ContentBrowser::buildActions() {
                          &ContentBrowser::newScene);
     new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::Script), tr("Script..."), this,
                          &ContentBrowser::newScript);
+    new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::BehaviorTree), tr("Behavior Tree..."), this,
+                         &ContentBrowser::newBehaviorTree);
     new_button_->setMenu(new_menu_.get());
 }
 
@@ -930,6 +933,14 @@ void ContentBrowser::newScript() {
     // No spaces by default: require() names map onto file names.
     NewAssetDialog dialog(tr("New Script"), folder_, QStringLiteral(".lua"), QStringLiteral("NewScript"), window());
     if (dialog.exec() == QDialog::Accepted && operations_.createScript(dialog.path())) {
+        select({dialog.path()});
+    }
+}
+
+void ContentBrowser::newBehaviorTree() {
+    NewAssetDialog dialog(tr("New Behavior Tree"), folder_, QStringLiteral(".bt.lua"),
+                          QStringLiteral("NewTree"), window());
+    if (dialog.exec() == QDialog::Accepted && operations_.createBehaviorTree(dialog.path())) {
         select({dialog.path()});
     }
 }

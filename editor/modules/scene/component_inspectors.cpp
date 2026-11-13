@@ -2,6 +2,8 @@
 
 #include <QAbstractItemView>
 #include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QTextDocument>
 #include <QObject>
 #include <QSignalBlocker>
 #include <QStringList>
@@ -602,57 +604,119 @@ void addScriptProperties(PropertyForm& form, editor::EditorContext& context, con
     });
 }
 
-void buildScript(PropertyForm& form, editor::EditorContext& context, entt::entity entity) {
+template<class Component>
+void addLuaAssetPicker(PropertyForm& form, editor::EditorContext& context, entt::entity entity,
+                       engine::AssetReference Component::* reference, engine::CatalogAssetKind kind,
+                       const QString& label, const QString& editLabel, const QString& openLabel) {
     auto& scene = context.scene();
     auto& catalog = context.engine().GetAssets().GetCatalog();
-    form.addBool(QObject::tr("Enabled"), field(scene, entity, &engine::ScriptComponent::enabled));
-    auto* picker = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Script, QObject::tr("None"));
+    auto* picker = new editor::AssetPicker(catalog, kind, QObject::tr("None"));
     picker->setMinimumContentsLength(12);  // as in addAssetSlot: a wider row widens every component's form
-    QObject::connect(picker, &QComboBox::currentIndexChanged, picker, [&context, &scene, entity, picker](const int index) {
-        const auto* component = std::as_const(scene).TryGetComponent<engine::ScriptComponent>(entity);
+    QObject::connect(picker, &QComboBox::currentIndexChanged, picker,
+                     [&context, &scene, entity, picker, reference, editLabel](const int index) {
+        const auto* component = std::as_const(scene).TryGetComponent<Component>(entity);
         // -1 means nothing is chosen
         if (component == nullptr || index < 0) {
             return;
         }
         // "None" is chosen, so no reference.
         const engine::AssetReference chosen = picker->reference().value_or(engine::AssetReference{});
-        if (chosen.id == component->script.id) {
+        if (chosen.id == (component->*reference).id) {
             return;
         }
-        context.history().edit(QObject::tr("Change Script"), [&] {
-            scene.Modify<engine::ScriptComponent>(entity, [&chosen](engine::ScriptComponent& changed) {
-                changed.script = chosen;
-                changed.properties.clear();
+        context.history().edit(editLabel, [&] {
+            scene.Modify<Component>(entity, [&](Component& changed) {
+                changed.*reference = chosen;
+                if constexpr (std::is_same_v<Component, engine::ScriptComponent>) changed.properties.clear();
             });
         });
     });
-    form.addRow(QObject::tr("Script"), picker, [&scene, entity, picker] {
-        const auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity);
+    form.addRow(label, picker, [&scene, entity, picker, reference] {
+        const auto* component = scene.TryGetComponent<Component>(entity);
         if (!component || picker->hasFocus() || picker->lineEdit()->hasFocus() || picker->view()->isVisible()) {
             return;
         }
         const QSignalBlocker blocker(picker);
-        if (!component->script.id.IsValid()) {
+        const auto& asset = component->*reference;
+        if (!asset.id.IsValid()) {
             picker->setCurrentIndex(0);  // "None"
             return;
         }
-        if (!picker->selectId(component->script.id)) {
+        if (!picker->selectId(asset.id)) {
             picker->setCurrentIndex(-1);
             picker->lineEdit()->setPlaceholderText(QObject::tr("%1 (missing)").arg(
-                QString::fromStdString(component->script.path.empty() ? component->script.id.ToString() : component->script.path)));
+                QString::fromStdString(asset.path.empty() ? asset.id.ToString() : asset.path)));
         }
     });
-    auto* open = new QPushButton(QObject::tr("Open script"));
-    QObject::connect(open, &QPushButton::clicked, open, [&scene, &catalog, entity] {
-        if (const auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity))
-            if (const auto* entry = catalog.Find(component->script.id, engine::CatalogAssetKind::Script))
+    auto* open = new QPushButton(openLabel);
+    QObject::connect(open, &QPushButton::clicked, open, [&scene, &catalog, entity, reference, kind] {
+        if (const auto* component = scene.TryGetComponent<Component>(entity))
+            if (const auto* entry = catalog.Find((component->*reference).id, kind))
                 QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromStdString(engine::ToUtf8(entry->source))));
     });
-    form.addRow({}, open, [&scene, &catalog, entity, open] {
-        const auto* component = scene.TryGetComponent<engine::ScriptComponent>(entity);
-        open->setEnabled(component && catalog.Find(component->script.id, engine::CatalogAssetKind::Script));
+    form.addRow({}, open, [&scene, &catalog, entity, open, reference, kind] {
+        const auto* component = scene.TryGetComponent<Component>(entity);
+        open->setEnabled(component && catalog.Find((component->*reference).id, kind));
     });
+}
+
+void buildScript(PropertyForm& form, editor::EditorContext& context, entt::entity entity) {
+    form.addBool(QObject::tr("Enabled"), field(context.scene(), entity, &engine::ScriptComponent::enabled));
+    addLuaAssetPicker(form, context, entity, &engine::ScriptComponent::script, engine::CatalogAssetKind::Script,
+                      QObject::tr("Script"), QObject::tr("Change Script"), QObject::tr("Open script"));
     addScriptProperties(form, context, entity);
+}
+
+void buildBehaviorTree(PropertyForm& form, editor::EditorContext& context, entt::entity entity) {
+    using Component = engine::ai::BehaviorTreeComponent;
+    auto& scene = context.scene();
+    form.addBool(QObject::tr("Enabled"), field(scene, entity, &Component::enabled));
+    addLuaAssetPicker(form, context, entity, &Component::tree, engine::CatalogAssetKind::BehaviorTree,
+                      QObject::tr("Tree"), QObject::tr("Change Behavior Tree"), QObject::tr("Open Lua source"));
+
+    auto* panel = new QWidget;
+    auto* layout = new QVBoxLayout(panel);
+    layout->setContentsMargins(0, 0, 0, 0);
+    auto* edit = new QPlainTextEdit;
+    edit->setMaximumHeight(100);
+    edit->setPlaceholderText(QStringLiteral(R"({"seconds": 1, "pulseEnabled": true})"));
+    auto* apply = new QPushButton(QObject::tr("Apply Parameters"));
+    auto* message = new QLabel;
+    message->setWordWrap(true);
+    layout->addWidget(edit);
+    layout->addWidget(apply);
+    layout->addWidget(message);
+    auto shown = std::make_shared<std::optional<engine::ScriptPropertyMap>>();
+    QObject::connect(apply, &QPushButton::clicked, panel, [&context, &scene, entity, edit, message, shown] {
+        engine::StateValue value;
+        std::string error;
+        if (!engine::ParseStateValue(edit->toPlainText().toStdString(), value, error) ||
+            !std::holds_alternative<engine::StateValue::Object>(value.value)) {
+            message->setText(error.empty() ? QObject::tr("Enter a JSON object.") : QString::fromStdString(error));
+            return;
+        }
+        if (!engine::ValidateScriptProperties(value.Fields(), error)) {
+            message->setText(QString::fromStdString(error));
+            return;
+        }
+        context.history().edit(QObject::tr("Change Behavior Tree Parameters"), [&] {
+            scene.Modify<Component>(entity, [&](Component& component) { component.parameters = value.Fields(); });
+        });
+        message->clear();
+        shown->reset();
+        edit->document()->setModified(false);
+    });
+    form.addRow(QObject::tr("Parameters (JSON)"), panel, [&scene, entity, edit, message, shown] {
+        const auto* component = scene.TryGetComponent<Component>(entity);
+        if (!component || edit->document()->isModified() || *shown == component->parameters) return;
+        std::string json, error;
+        if (engine::SerializeStateValue(engine::StateValue(component->parameters), json, error)) {
+            edit->setPlainText(QString::fromStdString(json));
+            edit->document()->setModified(false);
+            *shown = component->parameters;
+            message->clear();
+        }
+    });
 }
 
 /// Default-constructed, through Scene: it counts as a structural change, so the scene is dirty.
@@ -716,6 +780,8 @@ std::span<const ComponentInspector> componentInspectors() {
     static const std::vector<ComponentInspector> inspectors{
         {entt::type_hash<engine::ScriptComponent>::value(), QObject::tr("Script"), buildScript,
          addComponent<engine::ScriptComponent>, removeComponent<engine::ScriptComponent>},
+        {entt::type_hash<engine::ai::BehaviorTreeComponent>::value(), QObject::tr("Behavior Tree"), buildBehaviorTree,
+         addComponent<engine::ai::BehaviorTreeComponent>, removeComponent<engine::ai::BehaviorTreeComponent>},
         {entt::type_hash<engine::Transform>::value(), QObject::tr("Transform"), buildTransform},
         {entt::type_hash<engine::Tags>::value(), QObject::tr("Tags"), buildTags},
         {entt::type_hash<engine::MeshRenderer>::value(), QObject::tr("Mesh Renderer"), buildMeshRenderer,

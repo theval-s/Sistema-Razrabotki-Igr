@@ -115,6 +115,7 @@ private:
     void newMaterialInstance(const QString& albedo = {});
     void newScene();
     void newScript();
+    void newBehaviorTree();
 
     editor::EditorContext& context_;
     AssetOperations operations_;

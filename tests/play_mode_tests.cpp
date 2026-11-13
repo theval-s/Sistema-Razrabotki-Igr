@@ -132,6 +132,7 @@ TEST(PlayMode, BehaviorTreesShareDefinitionsAndKeepIndependentState) {
     scene.CreateEntity("second");
     scene.CreateEntity("third");
     scene.CreateEntity("runaway");
+    scene.AddComponent<engine::ai::BehaviorTreeComponent>(scene.CreateEntity("unassigned"));
     const auto* catalogEntry = f.host.GetAssets().GetCatalog().FindPath("game/agent.bt.lua");
     ASSERT_NE(catalogEntry, nullptr);
     const auto authored = engine::ai::BehaviorTreeComponent{
@@ -157,6 +158,7 @@ TEST(PlayMode, BehaviorTreesShareDefinitionsAndKeepIndependentState) {
         assert(first:GetPosition().x == 1 and second:GetPosition().x == 1)
         assert(BT.GetStatus(third) == BT.Failure)
         assert(BT.GetStatus(runaway) == "Faulted")
+        assert(BT.GetStatus(Scene.FindByName("unassigned")) == "Stopped")
         BT.SetParameters(first, {ready = true, limit = 2})
         BT.Detach(second)
     )", "edit agents", error)) << error;
@@ -182,6 +184,9 @@ TEST(PlayMode, BehaviorTreesShareDefinitionsAndKeepIndependentState) {
     const auto* restored = scene.TryGetComponent<engine::ai::BehaviorTreeComponent>(scene.FindFirstByName("third"));
     ASSERT_NE(restored, nullptr);
     EXPECT_EQ(*restored, authored);
+    const auto* empty = scene.TryGetComponent<engine::ai::BehaviorTreeComponent>(scene.FindFirstByName("unassigned"));
+    ASSERT_NE(empty, nullptr);
+    EXPECT_FALSE(empty->tree.id.IsValid());
 }
 
 TEST(PlayMode, StopRestoresUnsavedEntitiesAndRemovesRuntimeChanges) {

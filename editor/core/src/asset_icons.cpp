@@ -34,6 +34,8 @@ Style styleOf(const engine::CatalogAssetKind kind) {
         return {"SCN", QColor(0xc4, 0x44, 0x3c)};
     case engine::CatalogAssetKind::Script:
         return { "LUA", QColor(0x35, 0x58, 0xa8) };
+    case engine::CatalogAssetKind::BehaviorTree:
+        return { "BT", QColor(0x35, 0x58, 0xa8) };
     }
     return {"?", Qt::gray};
 }
@@ -107,6 +109,8 @@ QString assetKindName(const engine::CatalogAssetKind kind) {
         return QObject::tr("Scenes");
     case engine::CatalogAssetKind::Script:
         return QObject::tr("Scripts");
+    case engine::CatalogAssetKind::BehaviorTree:
+        return QObject::tr("Behavior Trees");
     }
     return {};
 }

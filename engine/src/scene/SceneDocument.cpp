@@ -169,7 +169,9 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
     if (components.contains("BehaviorTree")) {
         const auto& data = components.at("BehaviorTree");
         Fields(data, {"tree", "enabled", "parameters"});
-        ai::BehaviorTreeComponent value{Reference(data.at("tree")), data.value("enabled", true), {}};
+        ai::BehaviorTreeComponent value;
+        if (!data.at("tree").is_null()) value.tree = Reference(data.at("tree"));
+        value.enabled = data.value("enabled", true);
         if (data.contains("parameters")) {
             StateValue parameters;
             std::string error;
@@ -424,12 +426,14 @@ Json Encode(const SceneDocument& document) {
         }
         if (entity.behaviorTree) {
             const auto& behavior = *entity.behaviorTree;
-            if (!behavior.tree.id.IsValid()) throw std::invalid_argument("invalid BehaviorTree reference");
+            if (!behavior.tree.id.IsValid() && !behavior.tree.path.empty())
+                throw std::invalid_argument("invalid BehaviorTree reference");
             std::string parameters, error;
             if (!ValidateScriptProperties(behavior.parameters, error) ||
                 !SerializeStateValue(StateValue(behavior.parameters), parameters, error))
                 throw std::invalid_argument(error);
-            components["BehaviorTree"] = {{"tree", Encode(behavior.tree)}, {"enabled", behavior.enabled},
+            components["BehaviorTree"] = {{"tree", behavior.tree.id.IsValid() ? Encode(behavior.tree) : Json(nullptr)},
+                                           {"enabled", behavior.enabled},
                                            {"parameters", Json::parse(parameters)}};
         }
         Json encoded = {{"id", entity.id.ToString()}, {"name", entity.name}, {"tags", entity.tags},

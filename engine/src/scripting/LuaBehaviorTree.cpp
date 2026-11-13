@@ -262,7 +262,8 @@ void LuaBehaviorTree::Register(LuaBindingsContext& bindings) {
         const auto handle = checked(entity);
         const auto* component = handle.GetScene()->TryGetComponent<BehaviorTreeComponent>(handle.Resolve());
         const auto it = agents_.find(handle.Resolve());
-        if (!component || !component->enabled) return std::make_tuple(std::string("Stopped"), std::string{});
+        if (!component || !component->enabled || !component->tree.id.IsValid())
+            return std::make_tuple(std::string("Stopped"), std::string{});
         if (it == agents_.end()) return std::make_tuple(std::string("Pending"), std::string{});
         const auto* node = it->second.tree ? it->second.tree->ActiveAction() : nullptr;
         return std::make_tuple(it->second.status, node ? node->id : std::string{});
@@ -273,7 +274,7 @@ void LuaBehaviorTree::Tick(Scene& scene, double dt) {
     time_ += dt;
     std::vector<entt::entity> entities;
     scene.ForEach<BehaviorTreeComponent>([&](entt::entity id, const BehaviorTreeComponent& component) {
-        if (component.enabled) entities.push_back(id);
+        if (component.enabled && component.tree.id.IsValid()) entities.push_back(id);
         else Remove(id);
     });
     if (dt <= 0 || entities.empty()) return;

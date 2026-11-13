@@ -414,6 +414,18 @@ bool AssetOperations::updateMaterialInstance(const QString& path,
     return errors.isEmpty();
 }
 
+bool AssetOperations::createBehaviorTree(const QString& path) {
+    constexpr auto source = R"(-- Point script to a cataloged Lua file that returns a table with Tick(ctx, dt).
+return {
+    root = "action",
+    nodes = {
+        { id = "action", kind = "Action", script = "game/MyAction.lua" },
+    },
+}
+)";
+    return createFile(tr("New Behavior Tree"), path, source, engine::CatalogAssetKind::BehaviorTree);
+}
+
 bool AssetOperations::createScript(const QString& path) {
     // "name.d.lua" would be a LuaLS declaration file, which the catalog skips.
     if (engine::CatalogKindForFile(editor::toPath(path)) != engine::CatalogAssetKind::Script) {
