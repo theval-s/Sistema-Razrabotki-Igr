@@ -1,63 +1,51 @@
-# Navigation
+# NavMesh и DetourCrowd
 
-1. Choose **Add → NavMesh** in the scene hierarchy.
-   Move the entity to the center of the play area and set **Half extents** so
-   the box encloses the floor and the obstacles. The box uses world axes and
-   follows the entity position. Rotation and scale do not affect it.
-2. Add **Navigation Source** to each floor, wall or obstacle that should affect
-   the bake. Leave **Use Collider** enabled for objects with a static Rigid Body
-   and Collider. Turn it off to use the object's Mesh Renderer, for example for
-   an imported level. Unmarked objects, triggers and moving rigid bodies are
-   excluded.
-3. Select the NavMesh object and click **Bake Navigation Mesh**. The viewport shows the
-   region box and the turquoise edges of the resulting navigation polygons.
-   If baking fails, check that the region encloses the floor, source meshes have
-   loaded, and the agent fits through the intended passages.
-4. In the Content Browser choose **New → Navigation Follower Script** and attach
-   the script to a visible object without a dynamic rigid body. Place it over
-   the baked mesh. In **Script → Properties**, set the destination, speed and
-   pivot height above the floor. Set **navMeshName** to the name of a specific
-   NavMesh, or leave it empty for automatic selection. Press **Play**.
+## Первый запуск в редакторе
 
-Source assignments and NavMesh settings are saved with the scene. Create and
-rename as many NavMesh objects as needed, then bake each one separately. For
-example, two overlapping objects can use different agent radii. The bakes live
-in memory. Bake again after reopening the scene or editing its geometry. Play
-uses the current bakes and Stop restores the editor bakes.
+1. Создай пол, например куб с масштабом `(20, 1, 20)` и позицией `(0, -0.5, 0)`. Верхняя грань будет на высоте `Y = 0`. Добавь **Rigid Body** с типом **Static**, **Collider → Box** и **Navigation Source**. Оставь **Use Collider** включённым.
+2. В дереве сцены выбери **Add → NavMesh**. Поставь объект в `(0, 1, 0)`, укажи **Half extents** `(10, 3, 10)` и нажми **Bake Navigation Mesh**. В режиме редактирования бирюзовые линии покажут сетку. Рамка выбранного NavMesh идёт по мировым осям и перемещается вместе с объектом. Размер задаётся через **Half extents**.
+3. В браузере ресурсов выбери **New → Navigation Follower Script**. Прикрепи созданный скрипт к кубу без динамического тела и поставь куб в `(-5, 0.5, 0)`. В **Script → Properties** задай `navMeshName = "NavMesh"`, `goalX = 5`, `goalY = 0`, `goalZ = 0` и `heightOffset = 0.5`.
+4. Нажми **Play**. Куб пройдёт к цели. Чтобы проверить обход, добавь между ним и целью высокую стену со статическим коллайдером и **Navigation Source**, оставь проход по бокам и повтори Bake.
 
-In Lua, pass world-space positions. To select a specific NavMesh, pass its entity as the third argument:
+## Что попадает в сетку
+
+| Настройка | Геометрия для запекания |
+| --- | --- |
+| **Navigation Source → Use Collider** включён | Статический коллайдер. Удобно для пола, стен и крупных препятствий. |
+| **Navigation Source → Use Collider** выключен | Загруженный меш из **Mesh Renderer**. Удобно для импортированного уровня. |
+
+В область NavMesh должна попадать проходимая геометрия хотя бы одного источника. Достаточно, чтобы область пересекала геометрию, даже если центр объекта находится снаружи. Триггеры, динамические и кинематические тела, а также объекты без **Navigation Source** исключаются. Объекту, который будет двигаться по сетке, этот компонент не нужен.
+
+**Agent radius** задаёт зазор от препятствий, **Agent height** — нужную высоту прохода. **Maximum step** и **Maximum slope** ограничивают ступени и уклоны. Размеры ячейки определяют точность и стоимость запекания. Если сетка не появилась, проверь границы, источник пола и размеры агента. Если меш источника ещё грузится, дождись загрузки и повтори Bake.
+
+## Несколько NavMesh и Lua
+
+Каждый объект NavMesh запекается отдельно и может иметь свой размер агента. Сохраняются объекты, параметры и источники. Запечённые сетки хранятся в памяти. После открытия сцены или изменения геометрии повтори Bake. При входе в Play доступны текущие сетки редактора.
+
+В Lua укажи нужный объект по уникальному имени. Точки задаются в мировых координатах на уровне пола.
 
 ```lua
-local start = entity:GetWorldPosition()
-local goal = Vector3.new(8, 0, 5)
-local mesh = Scene.FindByName("Large Agent NavMesh")
-local points = Navigation.FindPath(start, goal, mesh)
+local mesh = Scene.FindByName("NavMesh")
+local points = Navigation.FindPath(Vector3.new(-5, 0, 0), Vector3.new(5, 0, 0), mesh)
 if #points == 0 then
-    Log.warning("No route")
+    Log.warning("Маршрут не найден")
 end
 ```
 
-The returned table contains projected endpoints and intermediate waypoints. An
-empty table means there is no complete path on the requested mesh. Omit the
-third argument to select the shortest complete route on a single baked mesh.
-Routes do not cross from one NavMesh object to another. The
-generated follower script demonstrates moving an object along these points.
+Результат — точки полного маршрута на одной сетке. Без третьего аргумента движок выберет кратчайший из найденных полных маршрутов. Маршруты между разными сетками пока не строятся.
 
-## Crowd agents in Lua
+## Движение толпы
 
-Use a unique name for the NavMesh and bake it with a positive agent radius.
-The crowd uses the height and radius of that bake. Each NavMesh has its own
-crowd with up to 128 agents. Agents avoid other agents on the same NavMesh.
-The position returned by Detour is at floor level.
+**Navigation Follower Script** идёт по точкам маршрута. Для взаимного обхода зарегистрируй объекты в одной сетке через **DetourCrowd**. Следующий скрипт можно вставить в обычный Lua-ассет и прикрепить к нескольким объектам. Размести их в разных стартовых точках и задай разные цели в инспекторе.
 
 ```lua
 Properties = {
     navMeshName = "NavMesh",
     speed = 3,
     heightOffset = 0.5,
-    goalX = 8,
+    goalX = 5,
     goalY = 0,
-    goalZ = 5,
+    goalZ = 0,
 }
 
 local mesh
@@ -69,12 +57,12 @@ function OnStart()
     feet.y = feet.y - Properties.heightOffset
     registered = Navigation.RegisterAgent(mesh, entity, feet, Properties.speed)
     if not registered then
-        Log.warning("Could not register on the baked NavMesh")
+        Log.warning("Проверь имя NavMesh, запекание и стартовую точку")
         return
     end
     local goal = Vector3.new(Properties.goalX, Properties.goalY, Properties.goalZ)
     if not Navigation.SetAgentGoal(mesh, entity, goal) then
-        Log.warning("Could not set a crowd goal")
+        Log.warning("Цель не принята")
     end
 end
 
@@ -92,6 +80,4 @@ function OnDestroy()
 end
 ```
 
-Attach the script to an object whose transform can be controlled by Lua.
-The goal call submits a request and does not guarantee arrival. Destroyed
-entities are removed automatically. Stopping Play clears its agents.
+DetourCrowd поддерживает до 128 агентов на сетку и использует высоту и положительный радиус из её настроек. `SetAgentGoal` сообщает, принят ли запрос. Успешный запрос не гарантирует прибытия. Stop очищает агентов.
