@@ -14,7 +14,6 @@
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/input/Win32PhysicalKey.hpp>
 #include <engine/window.hpp>
-#include <engine/ui/UiSubsystem.hpp>
 
 #pragma comment(lib, "imm32.lib")
 
@@ -57,6 +56,9 @@ public:
     UiTextInputState text;
     HCURSOR cursor = LoadCursorW(nullptr, IDC_ARROW);
     HWND Window() const { return owner && IsWindow(owner->window_) ? owner->window_ : nullptr; }
+    std::optional<UiSurfaceMetrics> GetSurfaceMetrics() const override {
+        return Window() ? owner->GetSurfaceMetrics() : UiSurfaceMetrics{};
+    }
     bool ReadClipboard(std::string& utf8, std::string& error) override {
         error.clear();
         const HWND window = Window();
@@ -451,7 +453,6 @@ void Win32InputHost::Update(const FrameContext&) {
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
-    if (auto* ui = GetEngine().GetSubsystem<UiSubsystem>()) ui->SetSurfaceMetrics(GetSurfaceMetrics());
     if (!IsWindow(window_) || GetForegroundWindow() != window_) {
         if (focused_) { focused_ = false; input_->OnFocusLost(); uiHost_->CancelComposition(); }
         SetRelativeMouseMode(false); hasCursorPosition_ = false; return;

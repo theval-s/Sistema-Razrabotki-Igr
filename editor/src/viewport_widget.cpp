@@ -78,6 +78,11 @@ std::optional<engine::MouseButton> toEngineButton(const Qt::MouseButton button) 
 class ViewportWidget::HostBridge final : public engine::UiHost {
 public:
     explicit HostBridge(ViewportWidget* widget) : widget_(widget) {}
+    std::optional<engine::UiSurfaceMetrics> GetSurfaceMetrics() const override {
+        if (!widget_ || !widget_->testAttribute(Qt::WA_WState_Created) || widget_->window()->isMinimized())
+            return engine::UiSurfaceMetrics{};
+        return widget_->uiMetrics();
+    }
     bool ReadClipboard(std::string& text, std::string& error) override {
         if (!widget_) { error = "Viewport is unavailable"; return false; }
         text = QGuiApplication::clipboard()->text().toUtf8().toStdString();

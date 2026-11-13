@@ -553,6 +553,13 @@ bool UiSubsystem::Initialize() {
             std::string error; p.renderer = CreateUiDx11Renderer(p.rendering->GetContext(), error); if (!p.renderer) throw std::runtime_error(error);
             auto& surface = p.rendering->GetSurface(); p.metrics.pixelWidth = surface.width; p.metrics.pixelHeight = surface.height;
         }
+        if (auto metrics = p.system->host->GetSurfaceMetrics()) {
+            p.metrics = *metrics;
+            if (p.rendering && p.metrics.pixelWidth && p.metrics.pixelHeight) {
+                const auto& surface = p.rendering->GetSurface();
+                p.metrics.pixelWidth = surface.width; p.metrics.pixelHeight = surface.height;
+            }
+        }
         Rml::SetSystemInterface(p.system.get()); Rml::SetFileInterface(p.files.get()); Rml::SetRenderInterface(p.renderer.get()); Rml::SetTextInputHandler(p.system.get());
         if (!Rml::Initialise()) throw std::runtime_error("RmlUi initialization failed"); p.core = true;
         p.context = Rml::CreateContext("engine-ui", {static_cast<int>(std::min(p.metrics.pixelWidth, std::uint32_t(INT_MAX))), static_cast<int>(std::min(p.metrics.pixelHeight, std::uint32_t(INT_MAX)))});
@@ -616,11 +623,15 @@ void UiSubsystem::SetSurfaceMetrics(UiSurfaceMetrics metrics) {
 UiCaptureState UiSubsystem::GetCaptureState() const noexcept { return impl_->capture; }
 void UiSubsystem::Update(const FrameContext& frame) {
     auto& p = *impl_; if (!p.initialized) return; if (p.stopping) { Shutdown(); return; }
-    if (p.rendering) {
+    auto metrics = p.metrics;
+    const auto hostMetrics = p.system->host->GetSurfaceMetrics();
+    if (hostMetrics) metrics = *hostMetrics;
+    if (p.rendering && (!hostMetrics || (metrics.pixelWidth && metrics.pixelHeight))) {
         const auto& surface = p.rendering->GetSurface();
-        if (p.metrics.pixelWidth != surface.width || p.metrics.pixelHeight != surface.height)
-            SetSurfaceMetrics({surface.width, surface.height, p.metrics.dpRatio});
+        metrics.pixelWidth = surface.width; metrics.pixelHeight = surface.height;
     }
+    if (metrics.pixelWidth != p.metrics.pixelWidth || metrics.pixelHeight != p.metrics.pixelHeight || metrics.dpRatio != p.metrics.dpRatio)
+        SetSurfaceMetrics(metrics);
     p.system->time = frame.realTimeSeconds; p.Drain();
     std::deque<Impl::QueuedEvent> wave; wave.swap(p.events); p.Dispatch(std::move(wave)); p.Drain();
     if (!p.stopping && p.input) {

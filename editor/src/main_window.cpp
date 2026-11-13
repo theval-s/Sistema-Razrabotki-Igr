@@ -238,7 +238,6 @@ void MainWindow::startEngine() {
         return;
     }
     viewport_->setCamera(camera_);
-    engine_.GetSubsystem<engine::UiSubsystem>()->SetSurfaceMetrics(viewport_->uiMetrics());
     context_->startupScene().open();
 
     tick_timer_->start(16);
@@ -258,7 +257,6 @@ void MainWindow::tickEngine() {
     const auto& surface = engine_.GetSurface();
     if (surface.width != metrics.pixelWidth || surface.height != metrics.pixelHeight)
         engine_.ResizeSurface(metrics.pixelWidth, metrics.pixelHeight);
-    if (auto* ui = engine_.GetSubsystem<engine::UiSubsystem>()) ui->SetSurfaceMetrics(metrics);
     engine_.Tick();
     refreshStatus();
 }

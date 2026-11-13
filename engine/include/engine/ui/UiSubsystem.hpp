@@ -48,6 +48,8 @@ public:
     // Expires at Shutdown (also on failed Initialize), renewed for each successful runtime.
     // Main-thread adapters pair this with a borrowed UiSubsystem pointer and check before use.
     [[nodiscard]] std::weak_ptr<void> GetLifetimeToken() const noexcept;
+    // For offscreen/custom hosts. A host-provided snapshot supersedes this on the
+    // next update; DX11 dimensions are constrained to the rendering surface.
     void SetSurfaceMetrics(UiSurfaceMetrics metrics);
     [[nodiscard]] UiCaptureState GetCaptureState() const noexcept;
 

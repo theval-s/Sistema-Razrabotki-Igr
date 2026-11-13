@@ -2,6 +2,7 @@
 #include <engine/core/Uuid.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/engine.hpp>
+#include <engine/input/Win32InputHost.hpp>
 #include <engine/rendering/RenderingContext.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
@@ -25,6 +26,56 @@
 namespace {
 using namespace engine;
 using Microsoft::WRL::ComPtr;
+
+struct MetricsHost final : UiHost {
+    std::optional<UiSurfaceMetrics> metrics;
+    std::optional<UiSurfaceMetrics> GetSurfaceMetrics() const override { return metrics; }
+    bool ReadClipboard(std::string&, std::string&) override { return false; }
+    bool WriteClipboard(std::string_view, std::string&) override { return false; }
+    void SetCursor(std::string_view) override {}
+    void SetTextInput(const UiTextInputState&) override {}
+    void CancelComposition() override {}
+    void SetCapture(const UiCaptureState&) override {}
+};
+
+TEST(UiSurfaceMetricsTest, HostSnapshotsAndExplicitFallbackReachContext) {
+    auto platform = std::make_shared<MetricsHost>();
+    platform->metrics = UiSurfaceMetrics{640, 480, 1.5f};
+    Engine host{EngineConfig{.taskThreads = 1}};
+    auto* ui = host.AddSubsystem<UiSubsystem>(UiSubsystemConfig{
+        .renderer = UiRendererBackend::Null, .host = platform, .nullSurface = {800, 600, 1.0f}});
+    ASSERT_TRUE(host.Initialize());
+    auto* context = Rml::GetContext("engine-ui");
+    ASSERT_NE(context, nullptr);
+    auto check = [&](int w, int h, float dpi) {
+        EXPECT_EQ(context->GetDimensions(), Rml::Vector2i(w, h));
+        EXPECT_FLOAT_EQ(context->GetDensityIndependentPixelRatio(), dpi);
+    };
+    check(640, 480, 1.5f);
+    platform->metrics = UiSurfaceMetrics{640, 480, 2.0f}; host.Tick(); check(640, 480, 2.0f);
+    platform->metrics = UiSurfaceMetrics{900, 700, 2.0f}; host.Tick(); check(900, 700, 2.0f);
+    platform->metrics = UiSurfaceMetrics{}; host.Tick(); check(0, 0, 1.0f);
+    platform->metrics = UiSurfaceMetrics{900, 700, 2.0f}; host.Tick(); check(900, 700, 2.0f);
+    platform->metrics.reset();
+    ui->SetSurfaceMetrics({320, 200, 1.25f}); host.Tick(); check(320, 200, 1.25f);
+    host.Shutdown();
+}
+
+TEST(UiSurfaceMetricsTest, Win32BridgeReportsLostWindowAndRevokedOwner) {
+    HWND window = CreateWindowExW(0, L"STATIC", L"metrics", WS_OVERLAPPEDWINDOW,
+                                  0, 0, 320, 240, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    ASSERT_NE(window, nullptr);
+    std::shared_ptr<UiHost> bridge;
+    {
+        Win32InputHost native(window);
+        bridge = native.GetUiHost();
+        ASSERT_GT(bridge->GetSurfaceMetrics()->pixelWidth, 0u);
+        DestroyWindow(window);
+        EXPECT_EQ(bridge->GetSurfaceMetrics()->pixelWidth, 0u);
+    }
+    ASSERT_TRUE(bridge->GetSurfaceMetrics());
+    EXPECT_EQ(bridge->GetSurfaceMetrics()->pixelHeight, 0u);
+}
 
 // This suite deliberately uses the production hardware/device/debug-layer path.
 // A missing device or Graphics Tools installation is a test failure, not a skip.
@@ -427,7 +478,8 @@ protected:
     Engine host{EngineConfig{.taskThreads = 1}};
     HWND window = nullptr;
     RenderingSubsystem* rendering = host.AddSubsystem<RenderingSubsystem>();
-    UiSubsystem* ui = host.AddSubsystem<UiSubsystem>();
+    std::shared_ptr<MetricsHost> platform = std::make_shared<MetricsHost>();
+    UiSubsystem* ui = host.AddSubsystem<UiSubsystem>(UiSubsystemConfig{.host = platform});
     ScriptSubsystem* scripts = host.AddSubsystem<ScriptSubsystem>();
     ComPtr<ID3D11InfoQueue> messages;
     std::string error;
@@ -476,6 +528,23 @@ protected:
         std::filesystem::remove_all(root, ignored);
     }
 };
+
+TEST_F(UiDx11SubsystemTest, HostDpiUsesRenderSurfaceDimensionsAndZeroSuspends) {
+    auto* context = Rml::GetContext("engine-ui");
+    ASSERT_NE(context, nullptr);
+    platform->metrics = UiSurfaceMetrics{800, 600, 2.0f};
+    host.Tick();
+    EXPECT_EQ(context->GetDimensions(), Rml::Vector2i(320, 240));
+    EXPECT_FLOAT_EQ(context->GetDensityIndependentPixelRatio(), 2.0f);
+    platform->metrics = UiSurfaceMetrics{};
+    host.Tick();
+    EXPECT_EQ(context->GetDimensions(), Rml::Vector2i(0, 0));
+    platform->metrics = UiSurfaceMetrics{400, 300, 1.5f};
+    host.ResizeSurface(400, 300);
+    host.Tick();
+    EXPECT_EQ(context->GetDimensions(), Rml::Vector2i(400, 300));
+    EXPECT_FLOAT_EQ(context->GetDensityIndependentPixelRatio(), 1.5f);
+}
 
 TEST_F(UiDx11SubsystemTest, PublicLifecycleRendersOverlayResizesAndDetachesBeforeShutdown) {
     UiSession session;

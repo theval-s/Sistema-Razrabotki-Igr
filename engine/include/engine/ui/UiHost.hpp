@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <engine/engine_export.hpp>
@@ -28,6 +29,9 @@ struct UiTextInputState {
 class ENGINE_API UiHost {
 public:
     virtual ~UiHost() = default;
+    // nullopt leaves explicitly configured metrics in control; zero dimensions mean
+    // that a platform surface is unavailable (including while minimized).
+    virtual std::optional<UiSurfaceMetrics> GetSurfaceMetrics() const { return std::nullopt; }
     virtual bool ReadClipboard(std::string& utf8, std::string& error) = 0;
     virtual bool WriteClipboard(std::string_view utf8, std::string& error) = 0;
     virtual void SetCursor(std::string_view rmlCursorName) = 0;
