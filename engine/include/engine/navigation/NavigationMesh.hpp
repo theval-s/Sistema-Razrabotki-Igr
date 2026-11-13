@@ -1,6 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <optional>
+#include <engine/core/Uuid.hpp>
 #include <span>
 #include <vector>
 #include <SimpleMath.h>
@@ -44,6 +46,12 @@ public:
     [[nodiscard]] bool BuildRegion(std::span<const DirectX::SimpleMath::Vector3> vertices,
         std::span<const int> indices, const NavigationSettings& settings,
         DirectX::SimpleMath::Vector3 minimum, DirectX::SimpleMath::Vector3 maximum);
+    bool RegisterAgent(EntityUuid agent, DirectX::SimpleMath::Vector3 position, float speed) const;
+    bool SetAgentGoal(EntityUuid agent, DirectX::SimpleMath::Vector3 goal) const;
+    std::optional<DirectX::SimpleMath::Vector3> GetAgentPosition(EntityUuid agent) const;
+    void RemoveAgent(EntityUuid agent) const;
+    void UpdateCrowd(float dt, const class Scene& scene) const;
+    void ClearCrowd() const;
     void Clear();
     void Draw(DebugDraw& draw) const;
 

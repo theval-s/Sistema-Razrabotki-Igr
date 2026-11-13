@@ -341,6 +341,13 @@ public:
         menu->addAction(QObject::tr("Empty Entity"), this, [this] { record(QObject::tr("Add Entity"), [this] { addEmpty(); }); });
         menu->addAction(QObject::tr("Cube"), this, [this] { record(QObject::tr("Add Cube"), [this] { addCube(); }); });
         menu->addSeparator();
+        menu->addAction(QObject::tr("NavMesh"), this, [this] {
+            record(QObject::tr("Add NavMesh"), [this] {
+                const auto entity = createAtSpawnPoint("NavMesh");
+                context_.scene().AddComponent<engine::NavigationRegion>(entity);
+                context_.selection().select(entity);
+            });
+        });
         menu->addAction(QObject::tr("Folder"), this, [this] { record(QObject::tr("Add Folder"), [this] { addFolder(); }); });
 
         const editor::EditActions& edit = context.editActions();

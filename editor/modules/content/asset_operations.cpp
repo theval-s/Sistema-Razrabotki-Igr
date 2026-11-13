@@ -68,6 +68,7 @@ end)";
 constexpr std::string_view NavigationScriptTemplate = R"lua(-- Bake the Navigation Region in the Inspector before Play.
 -- Attach this script to an object without a dynamic rigid body.
 Properties = {
+    navMeshName = "",
     goalX = 8,
     goalY = 0,
     goalZ = 5,
@@ -82,7 +83,15 @@ function OnStart()
     local start = entity:GetWorldPosition()
     start.y = start.y - Properties.heightOffset
     local goal = Vector3.new(Properties.goalX, Properties.goalY, Properties.goalZ)
-    points = Navigation.FindPath(start, goal)
+    local mesh
+    if Properties.navMeshName ~= "" then
+        mesh = Scene.FindByName(Properties.navMeshName)
+        if not mesh:IsValid() then
+            Log.warning("Navigation: NavMesh not found: " .. Properties.navMeshName)
+            return
+        end
+    end
+    points = Navigation.FindPath(start, goal, mesh)
     nextPoint = 1
     if #points == 0 then
         Log.warning("Navigation: no route. Build the mesh and check the start and goal.")

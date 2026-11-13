@@ -275,11 +275,40 @@ void RegisterGameplayBindings(sol::state& lua, LuaBindingsContext& context) {
         return PhysicsCommand(context, e, v, q, 3);
     });
     auto navigation = lua.create_named_table("Navigation");
-    navigation.set_function("FindPath", [&context](Vector3 start, Vector3 goal) {
-        return sol::as_table(context.engine
-            ? context.engine->GetNavigationMesh().FindPath(start, goal)
-            : std::vector<Vector3>{});
+    navigation.set_function("FindPath", [&context](Vector3 start, Vector3 goal, sol::optional<LuaEntityHandle> region) {
+        if (!context.engine || (region && (!region->IsValid() || !region->BelongsTo(context.engine->GetScene()))))
+            return sol::as_table(std::vector<Vector3>{});
+        return sol::as_table(context.engine->FindNavigationPath(start, goal, region ? region->Resolve() : entt::null));
     });
+    const auto resolveMesh = [&context](const LuaEntityHandle& region) -> const NavigationMesh* {
+        auto* host = context.engine;
+        if (!host || !host->IsPlaying() || !region.IsValid() || !region.BelongsTo(host->GetScene())) return nullptr;
+        return host->GetNavigationMesh(region.Resolve());
+    };
+    const auto resolveAgent = [&context](const LuaEntityHandle& agent) -> EntityUuid {
+        if (!context.engine || !agent.IsValid() || !agent.BelongsTo(context.engine->GetScene())) return {};
+        return context.engine->GetScene().GetId(agent.Resolve());
+    };
+    navigation.set_function("RegisterAgent", [resolveMesh, resolveAgent](const LuaEntityHandle& region,
+        const LuaEntityHandle& agent, Vector3 position, float speed) {
+        const auto* mesh = resolveMesh(region);
+        return mesh && mesh->RegisterAgent(resolveAgent(agent), position, speed);
+    });
+    navigation.set_function("SetAgentGoal", [resolveMesh, resolveAgent](const LuaEntityHandle& region,
+        const LuaEntityHandle& agent, Vector3 goal) {
+        const auto* mesh = resolveMesh(region);
+        return mesh && mesh->SetAgentGoal(resolveAgent(agent), goal);
+    });
+    navigation.set_function("GetAgentPosition", [resolveMesh, resolveAgent](const LuaEntityHandle& region,
+        const LuaEntityHandle& agent) -> std::optional<Vector3> {
+        const auto* mesh = resolveMesh(region);
+        return mesh ? mesh->GetAgentPosition(resolveAgent(agent)) : std::nullopt;
+    });
+    navigation.set_function("RemoveAgent", [resolveMesh, resolveAgent](const LuaEntityHandle& region,
+        const LuaEntityHandle& agent) {
+        if (const auto* mesh = resolveMesh(region)) mesh->RemoveAgent(resolveAgent(agent));
+    });
+
     auto time = lua.create_named_table("Time");
     time.set_function("Delta", [&context] { return context.engine ? context.engine->GetFrame().deltaSeconds : 0.; });
     time.set_function("SimulationTime", [&context] { return context.engine ? context.engine->GetFrame().simulationTimeSeconds : 0.; });

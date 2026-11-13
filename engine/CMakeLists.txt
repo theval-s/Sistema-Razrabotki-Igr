@@ -330,7 +330,7 @@ foreach(engine_target IN ITEMS engine engine_static)
         target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
         # Assimp is PRIVATE on purpose: AssimpMeshImporter.cpp is its only user and no
         # public header mentions it. Static consumers still get it via the link-only interface.
-        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid Lua::Lua sol2::sol2 Jolt::Jolt RecastNavigation::Recast RecastNavigation::Detour)
+        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid Lua::Lua sol2::sol2 Jolt::Jolt RecastNavigation::Recast RecastNavigation::Detour RecastNavigation::DetourCrowd)
     endif()
 endforeach()
 

@@ -6,6 +6,9 @@
 #include <DetourNavMesh.h>
 #include <DetourNavMeshBuilder.h>
 #include <DetourNavMeshQuery.h>
+#include <DetourCrowd.h>
+#include <engine/scene/Scene.hpp>
+#include <unordered_map>
 
 #include <algorithm>
 #include <array>
@@ -24,8 +27,11 @@ constexpr int QueryCapacity = 2048;
 }
 
 struct NavigationMesh::Impl {
+    NavigationSettings settings;
+    std::unordered_map<EntityUuid, int, EntityUuidHash> agents;
     std::unique_ptr<dtNavMesh, decltype(&dtFreeNavMesh)> mesh{dtAllocNavMesh(), dtFreeNavMesh};
     std::unique_ptr<dtNavMeshQuery, decltype(&dtFreeNavMeshQuery)> query{dtAllocNavMeshQuery(), dtFreeNavMeshQuery};
+    std::unique_ptr<dtCrowd, decltype(&dtFreeCrowd)> crowd{nullptr, dtFreeCrowd};
 };
 
 NavigationMesh::NavigationMesh() = default;
@@ -169,8 +175,83 @@ bool NavigationMesh::BuildRegion(std::span<const Vector3> vertices, std::span<co
     if (dtStatusFailed(next->query->init(next->mesh.get(), QueryCapacity))) {
         return false;
     }
+    next->settings = settings;
     impl_ = std::move(next);
     return true;
+}
+
+bool NavigationMesh::RegisterAgent(EntityUuid agent, Vector3 position, float speed) const {
+    if (!impl_ || !agent.IsValid() || !IsFinite(position) || !std::isfinite(speed) ||
+        speed <= 0 || speed > 100 || impl_->settings.agentRadius <= 0) return false;
+    if (impl_->agents.contains(agent)) return true;
+    if (!impl_->crowd) {
+        std::unique_ptr<dtCrowd, decltype(&dtFreeCrowd)> crowd{dtAllocCrowd(), dtFreeCrowd};
+        if (!crowd || !crowd->init(128, impl_->settings.agentRadius, impl_->mesh.get())) return false;
+        impl_->crowd = std::move(crowd);
+    }
+    dtCrowdAgentParams params{};
+    params.radius = impl_->settings.agentRadius;
+    params.height = impl_->settings.agentHeight;
+    params.maxAcceleration = 8.0f;
+    params.maxSpeed = speed;
+    params.collisionQueryRange = params.radius * 12;
+    params.pathOptimizationRange = params.radius * 30;
+    params.separationWeight = 2.0f;
+    params.updateFlags = DT_CROWD_ANTICIPATE_TURNS | DT_CROWD_OBSTACLE_AVOIDANCE |
+        DT_CROWD_SEPARATION | DT_CROWD_OPTIMIZE_VIS | DT_CROWD_OPTIMIZE_TOPO;
+    const float point[]{position.x, position.y, position.z};
+    const int index = impl_->crowd->addAgent(point, &params);
+    if (index < 0) return false;
+    if (impl_->crowd->getAgent(index)->state == DT_CROWDAGENT_STATE_INVALID) {
+        impl_->crowd->removeAgent(index);
+        return false;
+    }
+    impl_->agents.emplace(agent, index);
+    return true;
+}
+
+bool NavigationMesh::SetAgentGoal(EntityUuid agent, Vector3 goal) const {
+    if (!impl_ || !IsFinite(goal)) return false;
+    const auto found = impl_->agents.find(agent);
+    if (found == impl_->agents.end()) return false;
+    const float point[]{goal.x, goal.y, goal.z};
+    float nearest[3];
+    dtPolyRef polygon = 0;
+    return dtStatusSucceed(impl_->query->findNearestPoly(point, impl_->crowd->getQueryExtents(),
+        impl_->crowd->getFilter(0), &polygon, nearest)) && polygon &&
+        impl_->crowd->requestMoveTarget(found->second, polygon, nearest);
+}
+
+std::optional<Vector3> NavigationMesh::GetAgentPosition(EntityUuid agent) const {
+    if (!impl_) return std::nullopt;
+    const auto found = impl_->agents.find(agent);
+    if (found == impl_->agents.end()) return std::nullopt;
+    const auto* position = impl_->crowd->getAgent(found->second)->npos;
+    return Vector3{position[0], position[1], position[2]};
+}
+
+void NavigationMesh::RemoveAgent(EntityUuid agent) const {
+    if (!impl_) return;
+    const auto found = impl_->agents.find(agent);
+    if (found == impl_->agents.end()) return;
+    impl_->crowd->removeAgent(found->second);
+    impl_->agents.erase(found);
+}
+
+void NavigationMesh::UpdateCrowd(float dt, const Scene& scene) const {
+    if (!impl_ || !impl_->crowd) return;
+    std::erase_if(impl_->agents, [&](const auto& entry) {
+        if (scene.FindByUuid(entry.first) != entt::null) return false;
+        impl_->crowd->removeAgent(entry.second);
+        return true;
+    });
+    if (!impl_->agents.empty()) impl_->crowd->update(dt, nullptr);
+}
+
+void NavigationMesh::ClearCrowd() const {
+    if (!impl_) return;
+    impl_->agents.clear();
+    impl_->crowd.reset();
 }
 
 void NavigationMesh::Clear() {

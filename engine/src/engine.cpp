@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <deque>
 #include <optional>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -57,7 +58,7 @@ struct Engine::Impl {
     explicit Impl(EngineConfig engineConfig) : config(std::move(engineConfig)) {}
 
     EngineConfig config;
-    NavigationMesh navigation;
+    std::unordered_map<EntityUuid, NavigationMesh, EntityUuidHash> navigation;
     // Registration order == Initialize/Update/Render order. Accessed by index
     // everywhere so subsystems may register more subsystems while running.
     std::vector<Entry> subsystems;
@@ -99,7 +100,7 @@ struct Engine::Impl {
     };
     std::deque<GameRequest> gameRequests;
     struct PlaySnapshot {
-        NavigationMesh navigation;
+        std::unordered_map<EntityUuid, NavigationMesh, EntityUuidHash> navigation;
         SceneDocument scene, baseline;
         AssetReference reference;
         bool hasReference = false;
@@ -303,6 +304,10 @@ void Engine::Tick() {
             for (std::size_t i = 0; i < impl_->subsystems.size(); ++i)
                 impl_->subsystems[i].subsystem->FixedUpdate(step);
             impl_->inCallbacks = false;
+            impl_->scene.ForEach<NavigationRegion>([&](entt::entity region, const NavigationRegion&) {
+                if (const auto* mesh = GetNavigationMesh(region))
+                    mesh->UpdateCrowd(static_cast<float>(step.deltaSeconds), impl_->scene);
+            });
             ++impl_->fixedStep.stepIndex;
             ++steps;
             if (impl_->queuedScene) {
@@ -468,6 +473,7 @@ void Engine::StopPlay() {
     impl_->sceneBaseline = impl_->playSnapshot->baseline;
     impl_->sceneReference = impl_->playSnapshot->reference;
     impl_->hasSceneReference = impl_->playSnapshot->hasReference;
+    for (const auto& entry : impl_->navigation) entry.second.ClearCrowd();
     impl_->playSnapshot.reset();
     impl_->sessionRoot.clear();
     impl_->autoloads.clear();
@@ -522,6 +528,7 @@ void Engine::StopGame() {
     }
     impl_->scene.SetControllersActive(false);
     ResetSimulation();
+    for (const auto& entry : impl_->navigation) entry.second.ClearCrowd();
     impl_->standalonePlaying = false;
     CancelGameRequests();
     impl_->queuedScene.reset();
@@ -622,7 +629,7 @@ void Engine::ResetSimulation() {
 }
 
 void Engine::CommitScene(const SceneDocument& document) {
-    impl_->navigation.Clear();
+    impl_->navigation.clear();
     ResetSimulation();
     if (auto* scripting = GetSubsystem<ScriptSubsystem>()) {
         scripting->ClearSceneScripts();
@@ -973,8 +980,44 @@ AssetSystem& Engine::GetAssets() noexcept {
     return *impl_->assets;
 }
 
-NavigationMesh& Engine::GetNavigationMesh() noexcept {
-    return impl_->navigation;
+const NavigationMesh* Engine::GetNavigationMesh(entt::entity region) const {
+    const auto& scene = impl_->scene;
+    if (!scene.HasComponent<NavigationRegion>(region)) return nullptr;
+    const auto found = impl_->navigation.find(scene.GetId(region));
+    return found == impl_->navigation.end() ? nullptr : &found->second;
+}
+
+void Engine::DrawNavigationMeshes(DebugDraw& draw) const {
+    impl_->scene.ForEach<NavigationRegion>([&](entt::entity region, const NavigationRegion&) {
+        if (const auto* mesh = GetNavigationMesh(region)) mesh->Draw(draw);
+    });
+}
+
+std::vector<DirectX::SimpleMath::Vector3> Engine::FindNavigationPath(
+    DirectX::SimpleMath::Vector3 start, DirectX::SimpleMath::Vector3 goal, entt::entity region) const {
+    if (region != entt::null) {
+        const auto* mesh = GetNavigationMesh(region);
+        return mesh ? mesh->FindPath(start, goal) : std::vector<DirectX::SimpleMath::Vector3>{};
+    }
+
+    std::vector<DirectX::SimpleMath::Vector3> best;
+    float bestLength = std::numeric_limits<float>::infinity();
+    EntityUuid bestId{};
+    impl_->scene.ForEach<NavigationRegion>([&](entt::entity candidate, const NavigationRegion&) {
+        const auto* mesh = GetNavigationMesh(candidate);
+        if (!mesh) return;
+        auto path = mesh->FindPath(start, goal);
+        if (path.empty()) return;
+        float length = (path.front() - start).Length() + (goal - path.back()).Length();
+        for (std::size_t i = 1; i < path.size(); ++i) length += (path[i] - path[i - 1]).Length();
+        const auto id = impl_->scene.GetId(candidate);
+        if (length < bestLength || (length == bestLength && id < bestId)) {
+            bestLength = length;
+            bestId = id;
+            best = std::move(path);
+        }
+    });
+    return best;
 }
 
 bool Engine::BuildNavigation(entt::entity entity, std::string& error) {
@@ -1041,10 +1084,12 @@ bool Engine::BuildNavigation(entt::entity entity, std::string& error) {
         error = "Add a Navigation Source to the floor and any walls that affect movement";
         return false;
     }
-    if (!impl_->navigation.BuildRegion(vertices, indices, region->settings, minimum, maximum)) {
+    NavigationMesh mesh;
+    if (!mesh.BuildRegion(vertices, indices, region->settings, minimum, maximum)) {
         error = "No walkable mesh was built. Check the region bounds, geometry and agent settings.";
         return false;
     }
+    impl_->navigation.insert_or_assign(scene.GetId(entity), mesh);
     return true;
 }
 
