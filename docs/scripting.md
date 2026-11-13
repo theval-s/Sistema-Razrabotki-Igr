@@ -13,8 +13,10 @@ stops the game before offering to save the restored editing scene.
 During Play the scene camera drives rendering. When a level has no camera the
 renderer retains the last viewpoint (the editor viewpoint on initial Play), with
 a warning on initial startup. The editor viewpoint is restored on Stop. Escape
-releases viewport focus; right-click no longer captures the editor navigation
-cursor during gameplay.
+releases game input; click the Play viewport to reacquire it. That click is consumed
+by the editor. Right-click no longer captures the editor navigation cursor during
+gameplay. Pause leaves game UI interactive; resuming does not reacquire explicitly
+released input. Play controls remain available while the gameplay cursor is locked.
 
 Lua can request a level change:
 
@@ -578,7 +580,41 @@ Polling uses **binding names**, not physical key constants.
 Escape, Backspace, Tab, Space, Delete, Right, Left, Down, Up, NumpadEnter,
 LeftControl, LeftShift, LeftAlt, LeftMeta, RightControl, RightShift, RightAlt,
 RightMeta. `MouseButton` (also `Input.MouseButton`) exposes Left, Right, Middle.
-There is currently no Lua gamepad, text-input, or cursor lock API.
+There is currently no Lua gamepad or raw text-input polling API; text entry is
+handled through UI controls.
+
+### Cursor modes
+
+`Input.SetCursorMode(mode)` requests a cursor mode for the game in both standalone
+and editor Play. `CursorMode` and `Input.CursorMode` refer to the same constants:
+
+| Mode | Behavior while gameplay owns the pointer |
+| --- | --- |
+| `Normal` | Visible pointer with absolute position and movement. |
+| `Hidden` | Invisible pointer that still moves freely. |
+| `Locked` | Invisible pointer held in place for mouse-look; use `Input.MouseDelta()`. |
+
+```lua
+function OnStart()
+    Input.SetCursorMode(CursorMode.Locked)
+end
+```
+
+`Input.GetCursorMode()` returns the **requested** mode, even while UI or focus
+temporarily overrides it. An interactive menu, UI pointer capture, or text entry
+suspends gameplay hiding/locking; closing the UI restores the request automatically.
+A passive HUD does not override it. Releasing editor game input or losing window
+focus releases the cursor without forgetting the request.
+
+The request is shared by gameplay scripts and lasts until changed or the session
+ends. It survives `Scene.OpenLevel` and input-state resets. Stop and failed startup
+reset it to `Normal`. Loading a saved game also resets it before the replacement
+session's restore/start callbacks, which can request a new mode. The mode itself is
+not saved; request it from `OnStart` or derive it from restored game state.
+
+`SetCursorMode` returns no value and rejects an invalid mode with a Lua error.
+Without an input subsystem, setting a valid mode has no effect and the getter
+returns `CursorMode.Normal`.
 
 ### Time and physics
 

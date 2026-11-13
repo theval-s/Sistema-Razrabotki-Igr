@@ -33,7 +33,7 @@ metadata generation: [scene and asset guide](docs/scene-assets.md).
 
 RML/RCSS UI, the example HUD and menus, assets and preview workflow: [UI guide](docs/ui.md).
 The [Lua UI facade](docs/ui-lua-facade.md) documents the API and ownership rules;
-[UI performance](docs/ui-performance.md) records measurements and their limitations.
+[scripting](docs/scripting.md#cursor-modes) covers gameplay cursor modes and UI overrides.
 
 Imported meshes expose `MeshAsset::bounds` (`Aabb::min` / `max`) in mesh-local
 coordinates, after Assimp node transforms and optional `centerOnLoad`

@@ -1,9 +1,8 @@
-# UI implementation contract
+# UI native integration contract
 
-The integration is implemented. This document preserves the original native boundary
-and design rationale; its imperative wording describes the implementation contract,
-not an outstanding handoff. See `plan.md` for execution and remaining validation and
-`ui-lua-facade.md` for the author-facing API.
+This reference describes the native UI boundary, ownership rules and host integration.
+See [game UI authoring](ui.md) for RML/RCSS setup and [the Lua facade](ui-lua-facade.md)
+for script APIs.
 Public UI headers contain neither sol nor Rml types and follow the engine's exported,
 out-of-line PImpl convention. C++20 and the existing engine SDK ABI/toolchain apply;
 these STL-bearing interfaces are not a cross-compiler binary protocol.
@@ -103,8 +102,9 @@ same owner validation and scene external-callback guard; exceptions retire the o
 ## Frame protocol
 
 Register Input -> Rendering -> UI -> Script; standalone input host precedes Input.
-UI Update runs even while paused. First drain safe retirements, process prior-frame
-Rml events, and process the ordered input stream. For each host event, run its Rml
+UI Update runs even while paused. First query host surface metrics, drain safe
+retirements, process prior-frame Rml events, and process the ordered input stream.
+For each host event, run its Rml
 traversal to completion, copy listeners' payloads, exit traversal, then dispatch the
 resulting callbacks and apply safe operations before processing the next host event.
 This lets a click-opened modal capture later events in the same frame. Use a bounded
@@ -238,12 +238,26 @@ changes too. Composition selection/replacement/clause indices use Unicode scalar
 Win32/Qt UTF-16 offsets require conversion and bounds validation. Map Rml's 6.3 text
 input context and composition ranges, not just ProcessTextInput of preedit text.
 
+`UiHost::GetSurfaceMetrics()` returns an optional snapshot of physical dimensions
+and DPI. UI queries it during initialization and at the start of Update, after the
+host has processed window events. Return zero dimensions for an unavailable or
+minimized surface. Return `std::nullopt` for custom/offscreen hosts that use configured
+metrics or `UiSubsystem::SetSurfaceMetrics()` explicitly. For DX11, nonzero host
+snapshots supply DPI while the rendering surface determines dimensions, keeping UI
+and the render target synchronized. Native host lifetimes must be checked before
+querying the window; an expired host reports an unavailable surface.
+
 UiHost receives copied surrounding text/selection/caret snapshots for IME query and
 candidate placement. Convert caret pixels back to native/logical coordinates. Cancel
 composition on focus loss, owner teardown or session end. Host clipboard and cursor
-remain Qt-free. SetCapture requests releasing relative mouse lock and pointer
-visibility; recapture is host/game policy and must check consumed input. A null host
-uses an in-memory clipboard and no-op presentation requests for native tests.
+remain Qt-free. `SetCapture` supplies UI requirements to the host's cursor policy;
+it does not change the gameplay request stored in `InputSubsystem`. UI pointer
+capture, a visible-pointer requirement, or text entry overrides gameplay hiding and
+locking. A UI drag keeps its mouse capture independently of gameplay mode. When UI
+releases its requirements, the host reapplies the requested mode if it owns input.
+Focus loss or explicit editor input release frees capture without clearing that
+request. The recapture click is consumed by the editor. A null host uses an in-memory
+clipboard and no-op presentation requests.
 
 ## Renderer hook
 
@@ -254,7 +268,7 @@ lease, detached before UI shutdown; never capture an unguarded UiSubsystem point
 Call BeforeSurfaceResize before releasing/recreating the swap-chain target, including
 failed retry paths. Overlay executes only when RenderingSubsystem's surface is valid
 and resize succeeded. Borrow current RTV/context only during the call; retain no
-back-buffer COM refs across frames. SetSurfaceMetrics communicates physical dimensions
+back-buffer COM refs across frames. Host metrics communicate physical dimensions
 and dp ratio; the overlay does not independently present or resize the swap chain.
 
 Retain upstream 6.3 DX11 clip/transform/layer support. Restore touched D3D state AND
@@ -264,21 +278,9 @@ color-space treatment consistently for fonts, vertex colors, and decoded PNGs.
 Do not reuse forced-sRGB scene texture output without conversion/audit. Null backend
 requires neither RenderingSubsystem nor a native surface and still runs layout/input.
 
-## Verification considerations
+## SDK consumption
 
-Compile public headers standalone and consume from both shared/static builds; private
-UiRuntimeAccess needs export visibility for shared-engine test executables but is not
-installed API. See `plan.md` for completed checks and outstanding integration validation.
-
-Use Engine + Input + UiSubsystem(Null) for native logic tests, optionally Script for
-Lua tests. Inject events through InputSubsystem and Tick; QueueEventForTesting also
-only queues, never bypassing Update or owner validation. Inspect gives non-owning
-counts for teardown assertions; WriteModelForTesting uses the same form write path.
-Test slot reuse/session replacement, failed startup/faulted modal, self-disconnect/
-close/owner destruction, late-event deferral, pause, auto-retained subscriptions,
-reload rollback, stale elements, model array growth/zero/nested form writes, owner
-dependency rejection, and callback reference release before Lua state reset. Verify
-second-global-owner rejection and sequential engines. Run existing input/Lua/catalog/
-authoring regressions, especially games that never register UI. Automated graphics and
-native-null input coverage have since been run; actual OS IME and remaining host and
-full-scene validation are tracked in the execution record in `plan.md`.
+Installed SDK consumers use `find_package(Engine CONFIG REQUIRED)` and link
+`Engine::Engine`. In-tree standalone applications can link `Engine::EngineStatic`.
+Public UI headers live under `engine/ui/`; private `UiRuntimeAccess` is not installed
+API. Custom hosts implement `UiHost` and supply it through `UiSubsystemConfig::host`.
