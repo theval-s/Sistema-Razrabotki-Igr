@@ -2,6 +2,7 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/core/FileSystem.hpp>
+#include <engine/input/InputSubsystem.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
 #include <engine/scene/SceneDocument.hpp>
 #include <engine/core/FrameContext.hpp>
@@ -109,6 +110,23 @@ TEST(PlayMode, LuaOpenLevelIsDeferredAndAutoloadStateSurvivesAcrossScenes) {
     f.host.StopPlay();
     EXPECT_NE(f.host.GetScene().FindFirstByName("Editor original"), NullEntity);
     EXPECT_EQ(f.host.GetScene().FindFirstByName("Last"), NullEntity);
+}
+
+TEST(PlayMode, CursorModeFromOnStartLastsUntilStop) {
+    PlayFixture f;
+    auto* input = f.host.AddSubsystem<engine::InputSubsystem>();
+    const auto file = f.root / "Mouse.lua";
+    std::string error;
+    ASSERT_TRUE(engine::CreateNewFile(file, "return {OnStart = function(self) Input.SetCursorMode(CursorMode.Locked) end}", error));
+    const engine::AssetMetadata meta{engine::NewUuid(), engine::CatalogAssetKind::Script};
+    ASSERT_TRUE(engine::WriteAssetMetadata(file, meta, error));
+    ASSERT_TRUE(f.host.Initialize());
+    const std::vector<engine::AutoloadDefinition> autoloads{{"Mouse", {meta.id, "game/Mouse.lua"}, true}};
+    ASSERT_TRUE(f.host.PlayCurrentScene(f.root, autoloads, error)) << error;
+    f.host.Tick();
+    EXPECT_EQ(input->GetCursorMode(), engine::CursorMode::Locked);
+    f.host.StopPlay();
+    EXPECT_EQ(input->GetCursorMode(), engine::CursorMode::Normal);
 }
 
 TEST(PlayMode, StartupFailureRestoresSceneAndCancelsQueuedLevel) {

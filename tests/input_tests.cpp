@@ -97,3 +97,14 @@ TEST(Input, ContextCanOutliveItsSubsystem) {
     EXPECT_FLOAT_EQ(controls.Axis1D("Move"), 0);
     controls.Reset();
 }
+
+TEST(Input, CursorModeRequestOutlivesFocusLossAndReset) {
+    InputSubsystem input;
+    EXPECT_EQ(input.GetCursorMode(), CursorMode::Normal);
+    input.SetCursorMode(CursorMode::Locked);
+    // Hosts drop the cursor on focus loss, but put the request back when the focus returns.
+    input.OnFocusLost();
+    input.Reset();
+    input.Update(FrameContext{});
+    EXPECT_EQ(input.GetCursorMode(), CursorMode::Locked);
+}
