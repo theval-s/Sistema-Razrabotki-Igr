@@ -4,8 +4,13 @@
    Mesh Renderer components in world space.
 2. Choose **Navigation → Build Navigation Mesh** and set the voxel size and
    agent dimensions. The editor shows the resulting polygon edges in turquoise.
-3. Enter Play. Scripts can query the baked mesh with the API below.
-4. Rebuild after changing scene geometry. Opening another scene clears the mesh.
+3. In the Content Browser choose **New → Navigation Follower Script**.
+   Attach the generated script to a visible object with no dynamic rigid body.
+4. In **Script → Properties**, set the goal coordinates, speed, and the height
+   of the object's pivot above the floor. Place the object on the baked mesh.
+5. Enter Play. The object moves along the route. If it stays put, check the
+   Log and confirm both endpoints are near the turquoise mesh.
+6. Rebuild after changing scene geometry. Opening another scene clears the mesh.
    Stopping Play restores the mesh that was present when Play started.
 
 The bake lives in memory. In standalone games, call `Navigation.Build()` once
