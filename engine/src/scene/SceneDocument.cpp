@@ -93,7 +93,7 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         entity.editorFolder = j.at("editorFolder").get<std::string>();
     }
     const auto& components = j.at("components");
-    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "RigidBody", "Collider"});
+    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "BehaviorTree", "RigidBody", "Collider"});
     if (components.contains("RigidBody")) {
         const auto& body = components.at("RigidBody");
         Fields(body, {"motionType", "mass", "friction", "restitution"});
@@ -165,6 +165,21 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
             if (!ValidateScriptProperties(value.properties, error)) throw std::invalid_argument(error);
         }
         entity.script = std::move(value);
+    }
+    if (components.contains("BehaviorTree")) {
+        const auto& data = components.at("BehaviorTree");
+        Fields(data, {"tree", "enabled", "parameters"});
+        ai::BehaviorTreeComponent value{Reference(data.at("tree")), data.value("enabled", true), {}};
+        if (data.contains("parameters")) {
+            StateValue parameters;
+            std::string error;
+            if (!data.at("parameters").is_object() ||
+                !ParseStateValue(data.at("parameters").dump(), parameters, error))
+                throw std::invalid_argument("BehaviorTree parameters must be an object: " + error);
+            value.parameters = parameters.Fields();
+            if (!ValidateScriptProperties(value.parameters, error)) throw std::invalid_argument(error);
+        }
+        entity.behaviorTree = std::move(value);
     }
     if (components.contains("GamePersistence")) {
         const auto& persist = components.at("GamePersistence");
@@ -407,6 +422,16 @@ Json Encode(const SceneDocument& document) {
                 !SerializeStateValue(StateValue(entity.script->properties), properties, error)) throw std::invalid_argument(error);
             components["Script"]["properties"] = Json::parse(properties);
         }
+        if (entity.behaviorTree) {
+            const auto& behavior = *entity.behaviorTree;
+            if (!behavior.tree.id.IsValid()) throw std::invalid_argument("invalid BehaviorTree reference");
+            std::string parameters, error;
+            if (!ValidateScriptProperties(behavior.parameters, error) ||
+                !SerializeStateValue(StateValue(behavior.parameters), parameters, error))
+                throw std::invalid_argument(error);
+            components["BehaviorTree"] = {{"tree", Encode(behavior.tree)}, {"enabled", behavior.enabled},
+                                           {"parameters", Json::parse(parameters)}};
+        }
         Json encoded = {{"id", entity.id.ToString()}, {"name", entity.name}, {"tags", entity.tags},
                         {"parent", Encode(entity.parent)}, {"components", std::move(components)}};
         // Only when used, so scenes without folders keep their exact format.
@@ -450,6 +475,7 @@ SceneEntityDefinition CaptureDefinition(const Scene& scene, const AssetSystem& a
     if (const auto* bounds = scene.TryGetComponent<Bounds>(entity)) definition.bounds = *bounds;
     if (const auto* persistence = scene.TryGetComponent<GamePersistence>(entity)) definition.persistence = *persistence;
     if (const auto* script = scene.TryGetComponent<ScriptComponent>(entity)) definition.script = *script;
+    if (const auto* tree = scene.TryGetComponent<ai::BehaviorTreeComponent>(entity)) definition.behaviorTree = *tree;
     if (auto parent = scene.GetParent(entity); parent != entt::null)
         definition.parent = scene.GetId(parent);
     definition.editorFolder = scene.GetEditorFolder(entity);
@@ -506,6 +532,7 @@ void ApplyEntity(const SceneEntityDefinition& definition, AssetSystem& assets, S
     MatchComponent(destination, entity, definition.bounds);
     MatchComponent(destination, entity, definition.persistence);
     MatchComponent(destination, entity, definition.script);
+    MatchComponent(destination, entity, definition.behaviorTree);
     const auto* controller = destination.GetControllerDefinition(entity);
     if (!definition.controller) {
         if (controller) destination.RemoveController(entity);

@@ -21,6 +21,7 @@
 #include <engine/scene/Components.hpp>
 #include <engine/physics/PhysicsComponents.hpp>
 #include <engine/scripting/ScriptComponent.hpp>
+#include <engine/ai/BehaviorTreeComponent.hpp>
 #include <engine/scene/Controller.hpp>
 #include <engine/scene/SceneQueries.hpp>
 #include <engine/rendering/RenderComponents.hpp>
@@ -277,7 +278,8 @@ private:
     static constexpr bool IsSerializableComponent = std::is_same_v<T, MeshRenderer> ||
         std::is_same_v<T, Camera> || std::is_same_v<T, DirectionalLight> ||
         std::is_same_v<T, PointLight> || std::is_same_v<T, SpotLight> || std::is_same_v<T, Bounds> ||
-        std::is_same_v<T, GamePersistence> || std::is_same_v<T, RigidBody> || std::is_same_v<T, Collider> || std::is_same_v<T, ScriptComponent>;
+        std::is_same_v<T, GamePersistence> || std::is_same_v<T, RigidBody> || std::is_same_v<T, Collider> ||
+        std::is_same_v<T, ScriptComponent> || std::is_same_v<T, ai::BehaviorTreeComponent>;
     /// Logs and returns false for an invalid entity. `caller` names the public function.
     [[nodiscard]] bool CheckEntity(entt::entity entity, std::string_view caller) const;
     void Detach(entt::entity entity);

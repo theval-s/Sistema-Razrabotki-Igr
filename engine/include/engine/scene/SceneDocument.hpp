@@ -1,5 +1,6 @@
 #pragma once
 #include <engine/scripting/ScriptComponent.hpp>
+#include <engine/ai/BehaviorTreeComponent.hpp>
 
 #include <optional>
 #include <span>
@@ -46,6 +47,7 @@ struct SceneEntityDefinition {
     std::optional<Collider> collider;
     std::optional<GamePersistence> persistence;
     std::optional<ScriptComponent> script;
+    std::optional<ai::BehaviorTreeComponent> behaviorTree;
     bool operator==(const SceneEntityDefinition&) const = default;
 };
 

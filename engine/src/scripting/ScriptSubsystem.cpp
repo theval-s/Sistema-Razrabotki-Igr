@@ -1,4 +1,5 @@
 #include <engine/scripting/ScriptSubsystem.hpp>
+#include <engine/ai/BehaviorTreeComponent.hpp>
 
 #include <string>
 #include <exception>
@@ -181,11 +182,17 @@ void ScriptSubsystem::OnPhysicsContact(const PhysicsContactEvent& event) {
 void ScriptSubsystem::Update(const FrameContext& frame) {
     if (!playing_ || prepared_) return;
     runtime_.FlushSceneCommands();
-    if (frame.paused || frame.deltaSeconds <= 0.0) return;
+    if (frame.paused || frame.deltaSeconds <= 0.0) {
+        if (scene_) runtime_.TickBehaviorTrees(*scene_, 0);
+        runtime_.FlushSceneCommands();
+        return;
+    }
     std::string error;
     (void)ReconcileSceneScripts(error);
     runtime_.FlushSceneCommands();
     (void)runtime_.UpdateInstances(frame.deltaSeconds, error);  // Runtime logs instance diagnostics.
+    runtime_.FlushSceneCommands();
+    if (scene_) runtime_.TickBehaviorTrees(*scene_, frame.deltaSeconds);
     runtime_.FlushSceneCommands();
 }
 
@@ -213,6 +220,7 @@ void ScriptSubsystem::RemoveSceneScript(entt::entity entity) noexcept {
 
 void ScriptSubsystem::ClearSceneScripts() noexcept {
     runtime_.DiscardSceneCommands();
+    runtime_.ClearBehaviorTrees();
     if (scene_ && TryGetEngine()) {
         auto& events = GetEngine().GetEvents();
         events.sink<PhysicsContactEvent>().disconnect<&ScriptSubsystem::OnPhysicsContact>(*this);
@@ -247,6 +255,8 @@ void ScriptSubsystem::AssociateScene(Scene& scene) {
     }
     observer_ = scene.AddLifecycleObserver([this](Scene::LifecycleEvent event, entt::entity entity,
                                                  entt::id_type component) {
+        if (event == Scene::LifecycleEvent::EntityDestroying ||
+            component == entt::type_hash<ai::BehaviorTreeComponent>::value()) runtime_.RemoveBehaviorTree(*scene_, entity);
         if (event == Scene::LifecycleEvent::EntityDestroying ||
             component == entt::type_hash<ScriptComponent>::value()) RemoveSceneScript(entity);
     });

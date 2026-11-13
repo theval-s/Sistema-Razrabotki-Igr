@@ -1,5 +1,8 @@
 
 #include <engine/scripting/LuaRuntime.hpp>
+#include "LuaBehaviorTree.hpp"
+#include <engine/assets/AssetSystem.hpp>
+#include <chrono>
 
 #include <sol/sol.hpp>
 
@@ -201,6 +204,8 @@ namespace engine {
             }
         };
         std::unique_ptr<sol::state> state;
+        std::unique_ptr<ai::LuaBehaviorTree> behaviorTrees;
+        BehaviorTiming behaviorTiming;
         LevelLoader levelLoader;
         // Declared after state so all Lua references are released first, including at destruction.
         sol::table autoloads;
@@ -476,6 +481,43 @@ namespace engine {
             RegisterLuaBindings(*impl_->state, impl_->bindingsContext);
             RegisterGameplayBindings(*impl_->state, impl_->bindingsContext);
             RegisterSaveGameBindings(*impl_->state, impl_->bindingsContext);
+            if (auto* engine = impl_->bindingsContext.engine) {
+                const auto& catalog = engine->GetAssets().GetCatalog();
+                impl_->behaviorTrees = std::make_unique<ai::LuaBehaviorTree>(*impl_->state, catalog,
+                    [runtime = impl_.get(), &catalog](const AssetReference& reference, CatalogAssetKind kind) {
+                        const auto* entry = catalog.Find(reference.id, kind);
+                        if (!entry) throw std::runtime_error("Missing behavior asset " + reference.id.ToString());
+                        const auto source = std::filesystem::canonical(entry->source);
+                        if (runtime->moduleRoot.empty() || !IsUnderRoot(source, runtime->moduleRoot))
+                            throw std::runtime_error("Behavior asset is outside the project root");
+                        std::string text, error;
+                        if (!ReadTextFile(source, text, error)) throw std::runtime_error(error);
+                        auto loaded = runtime->state->load(text, "@" + ToUtf8(source), sol::load_mode::text);
+                        if (!loaded.valid()) {
+                            const sol::error failure = loaded;
+                            throw std::runtime_error(failure.what());
+                        }
+                        sol::environment environment(*runtime->state, sol::create, runtime->state->globals());
+                        environment["_G"] = environment;
+                        sol::protected_function chunk = loaded;
+                        sol::set_environment(environment, chunk);
+                        ai::LuaBehaviorBudget budget(runtime->state->lua_state());
+                        sol::protected_function_result result = chunk();
+                        if (!result.valid()) {
+                            const sol::error failure = result;
+                            throw std::runtime_error(failure.what());
+                        }
+                        if (result.return_count() != 1 || result.get_type() != sol::type::table)
+                            throw std::runtime_error("Behavior assets must return one table");
+                        return result.get<sol::table>();
+                    });
+                impl_->behaviorTrees->Register(impl_->bindingsContext);
+                sol::table behavior = (*impl_->state)["BT"];
+                behavior.set_function("GetTiming", [this] {
+                    const auto timing = GetBehaviorTiming();
+                    return std::make_tuple(timing.updates, timing.meanMilliseconds, timing.maxMilliseconds);
+                });
+            }
             sol::table entity = (*impl_->state)["Entity"];
             entity.set_function("HasScript", [this](const LuaEntityHandle& handle) { return HasScript(handle); });
             entity.set_function("HasScriptMethod", [this](const LuaEntityHandle& handle, const std::string& name) {
@@ -543,6 +585,7 @@ namespace engine {
         }
         if (impl_->shuttingDown) return;
         impl_->shuttingDown = true;
+        ClearBehaviorTrees();
         DiscardSceneCommands();
         // Destroy callbacks run while the state and the instance's table are still alive. Newest
         // first; CreateInstance refuses while shutting down, so this sees every instance.
@@ -559,6 +602,8 @@ namespace engine {
         }
         impl_->instances = {};  // All callbacks, tables and environments die before state.
         DiscardSceneCommands();
+        impl_->behaviorTrees.reset();
+        impl_->behaviorTiming = {};
         impl_->modules.clear();
         impl_->autoloads = sol::table{};
         impl_->loadingModules.clear();
@@ -575,6 +620,41 @@ namespace engine {
 
     void LuaRuntime::SetLevelLoader(LevelLoader loader) {
         impl_->levelLoader = std::move(loader);
+    }
+
+    void LuaRuntime::TickBehaviorTrees(Scene& scene, double dt) {
+        if (!impl_->behaviorTrees) return;
+        const auto start = std::chrono::steady_clock::now();
+        Impl::Scope scope(*impl_, &scene);
+        impl_->behaviorTrees->Tick(scene, dt);
+        if (dt > 0) {
+            const double elapsed = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - start).count();
+            auto& timing = impl_->behaviorTiming;
+            ++timing.updates;
+            timing.meanMilliseconds += (elapsed - timing.meanMilliseconds) / static_cast<double>(timing.updates);
+            timing.maxMilliseconds = std::max(timing.maxMilliseconds, elapsed);
+        }
+    }
+
+    LuaRuntime::BehaviorTiming LuaRuntime::GetBehaviorTiming() const noexcept {
+        return impl_->behaviorTiming;
+    }
+
+    void LuaRuntime::RemoveBehaviorTree(Scene& scene, entt::entity entity) noexcept {
+        if (!impl_->behaviorTrees) return;
+        try {
+            Impl::Scope scope(*impl_, &scene);
+            impl_->behaviorTrees->Remove(entity);
+        } catch (...) {}
+    }
+
+    void LuaRuntime::ClearBehaviorTrees() noexcept {
+        if (!impl_->behaviorTrees) return;
+        try {
+            Impl::Scope scope(*impl_);
+            impl_->behaviorTrees->Clear();
+        } catch (...) {}
     }
 
     void LuaRuntime::FlushSceneCommands() {

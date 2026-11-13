@@ -80,6 +80,15 @@ namespace engine {
         void SetLevelLoader(LevelLoader loader);
         /// Only call outside runtime callbacks and subsystem iteration/teardown.
         void FlushSceneCommands();
+        void TickBehaviorTrees(Scene& scene, double dt);
+        void RemoveBehaviorTree(Scene& scene, entt::entity entity) noexcept;
+        void ClearBehaviorTrees() noexcept;
+        struct BehaviorTiming {
+            std::size_t updates = 0;
+            double meanMilliseconds = 0;
+            double maxMilliseconds = 0;
+        };
+        [[nodiscard]] BehaviorTiming GetBehaviorTiming() const noexcept;
         void DiscardSceneCommands() noexcept;
         [[nodiscard]] bool HasScript(const LuaEntityHandle& entity) const;
         [[nodiscard]] bool HasScriptMethod(const LuaEntityHandle& entity, const std::string& method) const;
