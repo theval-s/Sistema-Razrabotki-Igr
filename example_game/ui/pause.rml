@@ -1,0 +1,2 @@
+<rml><head><title>Pause</title><link type="text/rcss" href="engine/ui/base.rcss"/><link type="text/rcss" href="theme.rcss"/></head>
+<body data-model="example_settings"><div class="panel dialog"><h1>Paused</h1><p>Settings</p><p>Volume: {{volume}}</p><input class="range" type="range" min="0" max="100" data-value="volume"/><p>Player name</p><input type="text" data-value="player"/><p class="hint">Settings are a UI demonstration.</p><button id="resume">Resume</button></div></body></rml>

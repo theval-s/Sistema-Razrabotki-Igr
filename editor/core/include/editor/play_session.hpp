@@ -10,6 +10,7 @@
 namespace engine {
 class Engine;
 struct Project;
+struct PauseChangedEvent;
 }  // namespace engine
 
 namespace editor {
@@ -28,6 +29,7 @@ class EDITOR_CORE_API PlaySession : public QObject {
 public:
     PlaySession(engine::Engine& engine, const engine::Project& project, Selection& selection,
                 SceneDocument& document);
+    ~PlaySession() override;
 
     [[nodiscard]] bool isPlaying() const;
     [[nodiscard]] bool isPaused() const;
@@ -44,6 +46,7 @@ signals:
     void pausedChanged(bool paused);
 
 private:
+    void onPauseChanged(const engine::PauseChangedEvent& event);
     void restoreSelection();
 
     engine::Engine& engine_;

@@ -1,0 +1,2 @@
+<rml><head><title>Inventory</title><link type="text/rcss" href="engine/ui/base.rcss"/><link type="text/rcss" href="theme.rcss"/></head>
+<body data-model="example_inventory"><div class="panel dialog"><h1>Inventory</h1><p class="hint">Hover an item for its description.</p><div class="list"><div class="row" data-for="item : items" title="{{item.description}}">{{item.name}} × {{item.count}}<div class="tooltip">{{item.description}}</div></div></div><button id="add">Add potion</button><button id="clear">Clear</button><button id="close">Close</button></div></body></rml>

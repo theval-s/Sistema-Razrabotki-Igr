@@ -1,0 +1,2 @@
+<rml><head><title>HUD</title><link type="text/rcss" href="engine/ui/base.rcss"/><link type="text/rcss" href="theme.rcss"/></head>
+<body data-model="example_hud"><div class="panel hud"><img class="badge" src="badge.png"/><div>{{player}}</div><div>Health: {{health}}</div><div>Time: {{seconds}}</div><div class="hint">P: pause · I: inventory</div></div></body></rml>

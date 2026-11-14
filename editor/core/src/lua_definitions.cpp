@@ -481,11 +481,19 @@ PhysicalKey = {}
 ---@field Middle integer
 ---@type MouseButtonConstants
 MouseButton = {}
+---@class CursorModeConstants
+---@field Normal integer
+---@field Hidden integer Invisible over the game; moves and reports its position as usual.
+---@field Locked integer Invisible and held in place, for mouse-look; read Input.MouseDelta().
+---@type CursorModeConstants
+CursorMode = {}
 Input = {}
 ---@type PhysicalKeyConstants
 Input.PhysicalKey = PhysicalKey
 ---@type MouseButtonConstants
 Input.MouseButton = MouseButton
+---@type CursorModeConstants
+Input.CursorMode = CursorMode
 ---Gets/defines and nonblockingly activates a named context; nil without an input subsystem.
 ---@param name string Nonempty context name.
 ---@return InputContext?
@@ -518,6 +526,13 @@ function Input.MouseDelta() end
 function Input.MousePosition() end
 ---@return number
 function Input.MouseWheel() end
+---Requests the gameplay cursor mode. Interactive UI and released input temporarily
+---override it. Preserved across levels; reset on Stop or LoadGame session replacement.
+---@param mode integer A CursorMode value.
+function Input.SetCursorMode(mode) end
+---Returns the requested mode, even while UI or focus temporarily overrides it.
+---@return integer
+function Input.GetCursorMode() end
 
 )"
 R"(Physics = {}
@@ -555,6 +570,124 @@ function Time.RealDelta() end
 function Time.RealTime() end
 ---@return boolean
 function Time.IsPaused() end
+---Changes engine pause state; UI callbacks continue while simulation is paused.
+---@param paused boolean
+---@return boolean success
+---@return string error Empty on success; unavailable without an Engine.
+function Time.SetPaused(paused) end
+
+---@alias UiSchema 'boolean'|'number'|'string'|{type:'object',fields:table<string,UiSchema>}|{type:'array',element:UiSchema}
+---@class UiEvent
+---@field document UiDocument
+---@field sourcePath string
+---@field targetId string
+---@field currentTargetId string
+---@field type string
+---@field inputSequence integer
+---@field parameters table<string, any> Copied event parameters.
+
+UI = {}
+---Requires a live started owner (normally OnStart). Required modules inherit the caller.
+---Models have fixed shapes; explicit array schema retains {} as an empty array in Set.
+---Values are copied booleans, finite exact numbers, strings, objects, or dense homogeneous arrays.
+---@param name string Context-wide unique model name.
+---@param initialValues table Root object; Lua arrays are 1-based, Rml expressions are 0-based.
+---@param schema? UiSchema Root must be object. Without schema, {} infers an empty object.
+---@return UiModel? model
+---@return string error Empty on success; useful unavailable error without UiSubsystem.
+function UI.CreateModel(name, initialValues, schema) end
+---Loads hidden, with dependencies on the current owner's models. Reference id is authoritative.
+---@param source string|{id:string,path?:string} Catalog logical path or AssetReference.
+---@return UiDocument? document
+---@return string error
+function UI.LoadDocument(source) end
+
+---@class UiDocument
+UiDocument = {}
+---@param mode? 'hud'|'interactive'|'modal' Default interactive; hud passes input through.
+---@return boolean success
+---@return string error
+function UiDocument:Show(mode) end
+---@return boolean success
+---@return string error
+function UiDocument:Hide() end
+---Idempotent for the same owner. Remaining UI is released automatically after OnDestroy.
+---@return boolean success
+---@return string error
+function UiDocument:Close() end
+---@return boolean
+function UiDocument:IsValid() end
+---@return boolean
+function UiDocument:IsVisible() end
+---Queues transactional reload; completion failures are logged. Old element handles expire on success.
+---@return boolean accepted
+---@return string error
+function UiDocument:Reload() end
+---@param id string
+---@return UiElement? element
+---@return string error
+function UiDocument:GetElement(id) end
+---Retained until disconnect/document close/owner teardown, even if the returned handle is discarded.
+---@param elementId string
+---@param eventName string
+---@param callback fun(event:UiEvent)
+---@return UiSubscription? subscription
+---@return string error
+function UiDocument:On(elementId, eventName, callback) end
+
+---@class UiModel
+UiModel = {}
+---@param variable string Top-level variable.
+---@return any value Deep copy, or nil on error.
+---@return string error
+function UiModel:Get(variable) end
+---@param variable string Top-level variable.
+---@param value any Must match the frozen schema exactly.
+---@return boolean success
+---@return string error
+function UiModel:Set(variable, value) end
+
+---@class UiElement
+UiElement = {}
+---@return boolean
+function UiElement:IsValid() end
+---Sets escaped plain text, invalidating removed descendant handles.
+---@param text string
+---@return boolean success
+---@return string error
+function UiElement:SetText(text) end
+---Explicit markup insertion; invalidates removed descendant handles.
+---@param rml string
+---@return boolean success
+---@return string error
+function UiElement:SetInnerRml(rml) end
+---@param value string Form value.
+---@return boolean success
+---@return string error
+function UiElement:SetValue(value) end
+---@return string? value Form value, or nil on error.
+---@return string error
+function UiElement:GetValue() end
+---@param name string
+---@param enabled boolean
+---@return boolean success
+---@return string error
+function UiElement:SetClass(name, enabled) end
+---@param name string RCSS property.
+---@param value string
+---@return boolean success
+---@return string error
+function UiElement:SetProperty(name, value) end
+---@return boolean success
+---@return string error
+function UiElement:Focus() end
+
+---@class UiSubscription
+UiSubscription = {}
+---Idempotent for the same owner; handle garbage collection does not disconnect.
+---@return boolean success
+---@return string error
+function UiSubscription:Disconnect() end
 
 ---@class SaveGameRequest
 SaveGameRequest = {}

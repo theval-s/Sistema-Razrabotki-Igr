@@ -34,6 +34,10 @@ Style styleOf(const engine::CatalogAssetKind kind) {
         return {"SCN", QColor(0xc4, 0x44, 0x3c)};
     case engine::CatalogAssetKind::Script:
         return { "LUA", QColor(0x35, 0x58, 0xa8) };
+    case engine::CatalogAssetKind::UiDocument: return {"RML", QColor(0x35, 0x85, 0x85)};
+    case engine::CatalogAssetKind::UiStylesheet: return {"RCSS", QColor(0x62, 0x85, 0x35)};
+    case engine::CatalogAssetKind::UiTemplate: return {"RMLT", QColor(0x55, 0x75, 0x95)};
+    case engine::CatalogAssetKind::Font: return {"FONT", QColor(0x85, 0x65, 0x55)};
     }
     return {"?", Qt::gray};
 }
@@ -107,6 +111,10 @@ QString assetKindName(const engine::CatalogAssetKind kind) {
         return QObject::tr("Scenes");
     case engine::CatalogAssetKind::Script:
         return QObject::tr("Scripts");
+    case engine::CatalogAssetKind::UiDocument: return QObject::tr("UI Documents");
+    case engine::CatalogAssetKind::UiStylesheet: return QObject::tr("UI Stylesheets");
+    case engine::CatalogAssetKind::UiTemplate: return QObject::tr("UI Templates");
+    case engine::CatalogAssetKind::Font: return QObject::tr("Fonts");
     }
     return {};
 }

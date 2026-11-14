@@ -1,9 +1,38 @@
 find_package(GTest CONFIG REQUIRED)
 
+# Exercise both generated export-header modes against the same utility contract.
+foreach(utf_target IN ITEMS utf_tests utf_shared_tests)
+    add_executable(${utf_target} utf_tests.cpp)
+    if(utf_target STREQUAL "utf_shared_tests")
+        target_link_libraries(${utf_target} PRIVATE Engine::Engine GTest::gtest_main)
+    else()
+        target_link_libraries(${utf_target} PRIVATE Engine::EngineStatic GTest::gtest_main)
+    endif()
+    set_project_warnings(${utf_target})
+    set_target_properties(${utf_target} PROPERTIES FOLDER tests)
+    add_custom_command(TARGET ${utf_target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:${utf_target}> $<TARGET_FILE_DIR:${utf_target}>
+        COMMAND_EXPAND_LISTS VERBATIM
+    )
+    add_test(NAME ${utf_target} COMMAND ${utf_target})
+endforeach()
+
 add_executable(input_tests input_tests.cpp)
 target_link_libraries(input_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(input_tests)
 set_target_properties(input_tests PROPERTIES FOLDER tests)
+add_test(NAME input_tests COMMAND input_tests)
+
+add_executable(win32_input_tests win32_input_tests.cpp)
+target_link_libraries(win32_input_tests PRIVATE Engine::EngineStatic GTest::gtest_main user32)
+set_project_warnings(win32_input_tests)
+set_target_properties(win32_input_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET win32_input_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:win32_input_tests> $<TARGET_FILE_DIR:win32_input_tests>
+    COMMAND_EXPAND_LISTS VERBATIM)
+add_test(NAME win32_input_tests COMMAND win32_input_tests)
 
 add_executable(project_tests project_tests.cpp)
 target_link_libraries(project_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
@@ -17,7 +46,7 @@ add_custom_command(TARGET project_tests POST_BUILD
 add_test(NAME project_tests COMMAND project_tests)
 
 if(SRI_BUILD_EDITOR)
-    find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+    find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Test)
     find_package(spdlog CONFIG REQUIRED)
     add_executable(autoload_dialog_tests
         autoload_dialog_tests.cpp
@@ -47,6 +76,49 @@ if(SRI_BUILD_EDITOR)
     )
     add_test(NAME transform_gizmo_tests COMMAND transform_gizmo_tests)
 
+    add_executable(shortcut_registry_tests shortcut_registry_tests.cpp)
+    target_link_libraries(shortcut_registry_tests PRIVATE editor_core GTest::gtest Qt6::Widgets)
+    set_project_warnings(shortcut_registry_tests)
+    set_target_properties(shortcut_registry_tests PROPERTIES FOLDER tests)
+    add_custom_command(TARGET shortcut_registry_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:shortcut_registry_tests> $<TARGET_FILE_DIR:shortcut_registry_tests>
+        COMMAND_EXPAND_LISTS VERBATIM
+    )
+    add_test(NAME shortcut_registry_tests COMMAND shortcut_registry_tests)
+
+    add_executable(preferences_dialog_tests
+        preferences_dialog_tests.cpp
+        ../editor/src/preferences_dialog.cpp
+        ../editor/include/editor/preferences_dialog.hpp
+    )
+    target_include_directories(preferences_dialog_tests PRIVATE ../editor/include)
+    target_link_libraries(preferences_dialog_tests PRIVATE editor_core GTest::gtest Qt6::Widgets Qt6::Test)
+    set_project_warnings(preferences_dialog_tests)
+    set_target_properties(preferences_dialog_tests PROPERTIES FOLDER tests AUTOMOC ON)
+    add_custom_command(TARGET preferences_dialog_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:preferences_dialog_tests> $<TARGET_FILE_DIR:preferences_dialog_tests>
+        COMMAND_EXPAND_LISTS VERBATIM
+    )
+    add_test(NAME preferences_dialog_tests COMMAND preferences_dialog_tests)
+
+    add_executable(viewport_input_tests
+        viewport_input_tests.cpp
+        ../editor/src/viewport_widget.cpp
+        ../editor/include/editor/viewport_widget.hpp
+    )
+    target_include_directories(viewport_input_tests PRIVATE ../editor/include)
+    target_link_libraries(viewport_input_tests PRIVATE editor_core Engine::Engine GTest::gtest Qt6::Widgets Qt6::Test)
+    set_project_warnings(viewport_input_tests)
+    set_target_properties(viewport_input_tests PROPERTIES FOLDER tests AUTOMOC ON)
+    add_custom_command(TARGET viewport_input_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:viewport_input_tests> $<TARGET_FILE_DIR:viewport_input_tests>
+        COMMAND_EXPAND_LISTS VERBATIM
+    )
+    add_test(NAME viewport_input_tests COMMAND viewport_input_tests)
+
     add_executable(scene_history_tests scene_history_tests.cpp)
     target_link_libraries(scene_history_tests PRIVATE editor_core Engine::Engine GTest::gtest_main Qt6::Widgets)
     set_project_warnings(scene_history_tests)
@@ -57,6 +129,17 @@ if(SRI_BUILD_EDITOR)
         COMMAND_EXPAND_LISTS VERBATIM
     )
     add_test(NAME scene_history_tests COMMAND scene_history_tests)
+
+    add_executable(edit_actions_tests edit_actions_tests.cpp)
+    target_link_libraries(edit_actions_tests PRIVATE editor_core Engine::Engine GTest::gtest Qt6::Widgets)
+    set_project_warnings(edit_actions_tests)
+    set_target_properties(edit_actions_tests PROPERTIES FOLDER tests)
+    add_custom_command(TARGET edit_actions_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:edit_actions_tests> $<TARGET_FILE_DIR:edit_actions_tests>
+        COMMAND_EXPAND_LISTS VERBATIM
+    )
+    add_test(NAME edit_actions_tests COMMAND edit_actions_tests)
 
     add_executable(log_model_tests
         log_model_tests.cpp
@@ -87,6 +170,50 @@ add_custom_command(TARGET lua_runtime_tests POST_BUILD
     COMMAND_EXPAND_LISTS VERBATIM
 )
 add_test(NAME lua_runtime_tests COMMAND lua_runtime_tests)
+
+# RmlUi owns process-global interfaces: keep fixtures sequential in one process.
+add_executable(ui_tests ui_tests.cpp ui_lifecycle_review_tests.cpp ui_example_tests.cpp ui_text_asset_tests.cpp)
+target_link_libraries(ui_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
+target_compile_definitions(ui_tests PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+target_include_directories(ui_tests PRIVATE ../engine/src)
+set_project_warnings(ui_tests)
+set_target_properties(ui_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET ui_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:ui_tests> $<TARGET_FILE_DIR:ui_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME ui_tests COMMAND ui_tests)
+set_tests_properties(ui_tests PROPERTIES RUN_SERIAL TRUE)
+
+find_package(RmlUi 6.3 CONFIG REQUIRED)
+add_executable(ui_render_tests ui_render_tests.cpp)
+target_link_libraries(ui_render_tests PRIVATE Engine::EngineStatic GTest::gtest_main
+    RmlUi::Core user32 d3d11 dxgi ole32 windowscodecs)
+target_include_directories(ui_render_tests PRIVATE ../engine/src)
+set_project_warnings(ui_render_tests)
+set_target_properties(ui_render_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET ui_render_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:ui_render_tests> $<TARGET_FILE_DIR:ui_render_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME ui_render_tests COMMAND ui_render_tests)
+set_tests_properties(ui_render_tests PROPERTIES RUN_SERIAL TRUE)
+
+# Explicit developer tool; excluded from normal builds and CTest.
+add_executable(ui_benchmark EXCLUDE_FROM_ALL ../tools/ui_benchmark.cpp)
+target_link_libraries(ui_benchmark PRIVATE Engine::EngineStatic user32 d3d11 dxgi psapi)
+target_include_directories(ui_benchmark PRIVATE ../engine/src)
+target_compile_definitions(ui_benchmark PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}"
+    SRI_BENCHMARK_CONFIG="$<CONFIG>")
+set_project_warnings(ui_benchmark)
+set_target_properties(ui_benchmark PROPERTIES FOLDER tools)
+add_custom_command(TARGET ui_benchmark POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:ui_benchmark> $<TARGET_FILE_DIR:ui_benchmark>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
 
 add_executable(asset_catalog_tests asset_catalog_tests.cpp)
 target_link_libraries(asset_catalog_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
