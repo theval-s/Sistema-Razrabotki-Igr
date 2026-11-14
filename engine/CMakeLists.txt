@@ -95,6 +95,7 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/scripting/LuaEntityHandle.hpp
     include/engine/scripting/LuaSceneBindings.hpp
     include/engine/scripting/LuaComponentBindings.hpp
+    include/engine/scripting/LuaGameBindings.hpp
     include/engine/scripting/LuaGameplayBindings.hpp
     include/engine/scripting/LuaSaveGameBindings.hpp
     include/engine/scripting/LuaStateValue.hpp
@@ -140,6 +141,7 @@ set(ENGINE_SOURCES
     src/scripting/LuaEntityHandle.cpp
     src/scripting/LuaSceneBindings.cpp
     src/scripting/LuaComponentBindings.cpp
+    src/scripting/LuaGameBindings.cpp
     src/scripting/LuaGameplayBindings.cpp
     src/scripting/LuaSaveGameBindings.cpp
 )
@@ -361,12 +363,14 @@ set(ENGINE_CORE_HEADERS
     include/engine/assets/AssetPipeline.hpp
     include/engine/assets/MaterialDefinition.hpp
     include/engine/core/CoreEvents.hpp
+    include/engine/core/DefaultSubsystems.hpp
     include/engine/core/FileSystem.hpp
     include/engine/core/FrameContext.hpp
     include/engine/core/PathUtils.hpp
     include/engine/core/Subsystem.hpp
     include/engine/core/Surface.hpp
     include/engine/project/Project.hpp
+    include/engine/project/RuntimeSettings.hpp
     include/engine/scene/Components.hpp
     include/engine/scene/Controller.hpp
     include/engine/scene/StateValue.hpp
@@ -394,11 +398,13 @@ set(ENGINE_CORE_SOURCES
     src/assets/TextureImporter.cpp
     src/assets/MaterialDefinition.cpp
     src/assets/MaterialImporter.cpp
+    src/core/DefaultSubsystems.cpp
     src/core/FileSystem.cpp
     src/core/Subsystem.cpp
     src/physics/PhysicsComponents.cpp
     src/physics/PhysicsSubsystem.cpp
     src/project/Project.cpp
+    src/project/RuntimeSettings.cpp
     src/scene/Scene.cpp
     src/scene/SceneDocument.cpp
     src/scene/GameDocument.cpp
@@ -427,3 +433,7 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${ENGINE_CORE_HEADERS} ${E
 add_executable(sri-asset-meta tools/asset_meta.cpp)
 target_link_libraries(sri-asset-meta PRIVATE Engine::EngineStatic)
 set_project_warnings(sri-asset-meta)
+
+add_executable(sri-build tools/build.cpp)
+target_link_libraries(sri-build PRIVATE Engine::EngineStatic)
+set_project_warnings(sri-build)

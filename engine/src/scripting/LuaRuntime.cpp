@@ -29,6 +29,7 @@
 #include <vector>
 
 #include <engine/scripting/LuaBindings.hpp>
+#include <engine/scripting/LuaGameBindings.hpp>
 #include <engine/scripting/LuaGameplayBindings.hpp>
 #include <engine/scripting/LuaSaveGameBindings.hpp>
 #include <engine/scripting/LuaEntityHandle.hpp>
@@ -582,6 +583,7 @@ namespace engine {
             RegisterLuaBindings(*impl_->state, impl_->bindingsContext);
             RegisterGameplayBindings(*impl_->state, impl_->bindingsContext);
             RegisterSaveGameBindings(*impl_->state, impl_->bindingsContext);
+            RegisterGameBindings(*impl_->state, impl_->bindingsContext);
             if (auto* engine = impl_->bindingsContext.engine) {
                 const auto& catalog = engine->GetAssets().GetCatalog();
                 impl_->behaviorTrees = std::make_unique<ai::LuaBehaviorTree>(*impl_->state, catalog,

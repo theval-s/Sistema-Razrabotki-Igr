@@ -6,10 +6,26 @@
 #include <string>
 #include <utility>
 
+#include <exception>
+#include <filesystem>
+#include <memory>
+
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
+#include <spdlog/sinks/rotating_file_sink.h>
 
 namespace engine::log {
+
+bool AddFileSink(const std::filesystem::path& file, std::size_t maxBytes, std::size_t files) {
+    try {
+        std::filesystem::create_directories(file.parent_path());
+        // Narrow path on purpose: same as the editor.
+        Sinks()->add_sink(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(file.string(), maxBytes, files));
+        spdlog::flush_on(spdlog::level::warn);
+        return true;
+    }
+    catch (const std::exception&) { return false; }
+}
 
 const std::shared_ptr<spdlog::sinks::dist_sink_mt>& Sinks() {
     static const std::shared_ptr<spdlog::sinks::dist_sink_mt> sinks = [] {

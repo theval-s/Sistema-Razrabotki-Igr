@@ -8,6 +8,11 @@
 #include <string_view>
 #include <utility>
 
+#include <cstddef>
+#include <filesystem>
+#include <memory>
+#include <string_view>
+
 #include <entt/core/type_info.hpp>
 #include <entt/signal/dispatcher.hpp>
 
@@ -131,6 +136,7 @@ public:
     ENGINE_API void SetPaused(bool paused);
     [[nodiscard]] ENGINE_API bool IsPaused() const noexcept;
     ENGINE_API void SetEditorMode();
+    [[nodiscard]] ENGINE_API bool IsEditorMode() const noexcept;
     [[nodiscard]] ENGINE_API bool IsPlaying() const noexcept;
     [[nodiscard]] ENGINE_API bool PlayCurrentScene(const std::filesystem::path& root,
         std::span<const AutoloadDefinition> autoloads, std::string& error);

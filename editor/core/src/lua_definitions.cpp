@@ -738,6 +738,10 @@ function Navigation.GetAgentPosition(navMesh, agent) end
 ---@param agent Entity
 function Navigation.RemoveAgent(navMesh, agent) end
 
+Game = {}
+---Exits the standalone game. Ignored while playing in the editor (use Stop).
+function Game.Quit() end
+
 ---@class PhysicsContact
 ---@field point Vector3
 ---@field normal Vector3 Receiver-oriented normal.
