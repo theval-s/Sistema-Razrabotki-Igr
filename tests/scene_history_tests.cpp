@@ -3,6 +3,7 @@
 #include <editor/selection.hpp>
 
 #include <engine/engine.hpp>
+#include <engine/audio/AudioComponents.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/Scene.hpp>
 
@@ -159,6 +160,76 @@ TEST_F(SceneHistoryTest, SceneSettingsAreUndone) {
     history.edit("Delete", [&] { scene().DestroyEntity(sun); });
     history.stack().undo();
     EXPECT_EQ(scene().GetDirectionalLight(), scene().FindFirstByName("Sun"));
+}
+
+TEST_F(SceneHistoryTest, AudioAuthoringSupportsAddEditRemoveAndMergedUndo) {
+    const auto emitter = scene().CreateEntity("Emitter");
+    history.edit("Add Audio Source", [&] { scene().AddComponent<engine::AudioSource>(emitter); });
+    ASSERT_NE(scene().TryGetComponent<engine::AudioSource>(emitter), nullptr);
+    const auto defaults = *scene().TryGetComponent<engine::AudioSource>(emitter);
+    history.stack().undo();
+    EXPECT_FALSE(scene().HasComponent<engine::AudioSource>(emitter));
+    history.stack().redo();
+
+    auto authored = defaults;
+    // Missing catalog references must survive history just like resolved clips.
+    authored.clip = engine::AssetReference{engine::AssetUuid("ea361a70-8336-47cb-af8e-c228e7d6c54b"), "audio/missing.wav"};
+    authored.enabled = false;
+    authored.playOnStart = true;
+    authored.looping = true;
+    authored.loading = engine::AudioLoadingMode::Streamed;
+    authored.bus = engine::AudioBus::Music;
+    authored.volume = 0.25f;
+    authored.pitch = 1.5f;
+    authored.spatial = engine::AudioSpatialMode::TwoD;
+    authored.attenuation = engine::AudioAttenuation::Linear;
+    authored.minDistance = 2.0f;
+    authored.maxDistance = 50.0f;
+    authored.rolloff = 0.5f;
+    history.edit("Change Audio Source", [&] {
+        scene().Modify<engine::AudioSource>(emitter, [&](auto& source) { source = authored; });
+    }, "audio/source");
+    authored.volume = 0.75f;
+    history.edit("Change Audio Source", [&] {
+        scene().Modify<engine::AudioSource>(emitter, [&](auto& source) { source.volume = authored.volume; });
+    }, "audio/source");
+    ASSERT_EQ(history.stack().count(), 2);
+    history.stack().undo();
+    ASSERT_NE(scene().TryGetComponent<engine::AudioSource>(emitter), nullptr);
+    EXPECT_EQ(*scene().TryGetComponent<engine::AudioSource>(emitter), defaults);
+    history.stack().redo();
+    EXPECT_EQ(*scene().TryGetComponent<engine::AudioSource>(emitter), authored);
+    history.edit("Remove Audio Source", [&] { scene().RemoveComponent<engine::AudioSource>(emitter); });
+    EXPECT_FALSE(scene().HasComponent<engine::AudioSource>(emitter));
+    history.stack().undo();
+    ASSERT_NE(scene().TryGetComponent<engine::AudioSource>(emitter), nullptr);
+    EXPECT_EQ(*scene().TryGetComponent<engine::AudioSource>(emitter), authored);
+}
+
+TEST_F(SceneHistoryTest, AudioListenerAndSourceSurviveDeleteUndo) {
+    const auto emitter = scene().CreateEntity("Emitter");
+    const auto id = scene().GetId(emitter);
+    scene().AddComponent<engine::AudioSource>(emitter);
+    history.edit("Add Audio Listener", [&] { scene().AddComponent<engine::AudioListener>(emitter); });
+    history.stack().undo();
+    EXPECT_FALSE(scene().HasComponent<engine::AudioListener>(emitter));
+    history.stack().redo();
+    history.edit("Disable Listener", [&] {
+        scene().Modify<engine::AudioListener>(emitter, [](auto& listener) { listener.enabled = false; });
+    });
+    history.stack().undo();
+    ASSERT_NE(scene().TryGetComponent<engine::AudioListener>(emitter), nullptr);
+    EXPECT_TRUE(scene().TryGetComponent<engine::AudioListener>(emitter)->enabled);
+    history.stack().redo();
+    history.edit("Delete", [&] { scene().DestroyEntity(emitter); });
+    history.stack().undo();
+    const auto restored = scene().FindByUuid(id);
+    ASSERT_TRUE(restored != entt::null);
+    ASSERT_NE(scene().TryGetComponent<engine::AudioListener>(restored), nullptr);
+    EXPECT_FALSE(scene().TryGetComponent<engine::AudioListener>(restored)->enabled);
+    EXPECT_TRUE(scene().HasComponent<engine::AudioSource>(restored));
+    history.stack().redo();
+    EXPECT_TRUE(scene().FindByUuid(id) == entt::null);
 }
 
 }  // namespace

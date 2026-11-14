@@ -50,6 +50,25 @@ and no active session or callback/transition. `StopGame()` ends that session and
 returns to normal standalone operation. Editor hosts use the Play/Stop lifecycle
 and its editing-scene snapshot.
 
+## Audio playback
+
+The global `Audio` table provides `Play2D`, `PlayAt`, `PlaySource`, source controls,
+availability/diagnostics, and Master/Music/SFX/UI gains. Calls return a voice (or nil)
+plus a diagnostic; voice methods use colon syntax:
+
+```lua
+local voice, message = Audio.Play2D("game/audio/click.wav", { bus = "UI" })
+if not voice then Log.warning(message) end
+-- voice:GetStatus(), voice:GetError(), voice:Pause(), voice:Resume(), voice:Stop()
+```
+
+Use mono clips for PlayAt/ThreeD sources. Scene ownership is the default; explicit
+`scope = "session"` on Play2D survives level changes until Stop. Music/SFX pause
+with gameplay; UI remains usable. Finished/Stopped/Failed are retained terminal
+statuses, not active playback; dropping userdata does not stop a voice. AudioSource
+and AudioListener use the existing Entity component API. See [audio.md](audio.md)
+for exact options, component fields, listener rules, errors, and streamed-music examples.
+
 ## Editor logging and autoload settings
 
 ### Lua completion in VS Code
@@ -500,6 +519,8 @@ fields are errors. There remains **one Script component per object**.
 | Type string | Snapshot/patch fields |
 | --- | --- |
 | `Camera` | `fovY`, `nearPlane`, `farPlane` (numbers); `0 < fovY < pi`, `0 < nearPlane < farPlane`. |
+| `AudioSource` | `clip` (UUID/path; empty string clears), `enabled`, `playOnStart`, `looping`, `loading` (Buffered/Streamed), `bus` (Music/SFX/UI), `volume`, `pitch`, `spatial` (TwoD/ThreeD), `attenuation` (None/Inverse/Linear/Exponential), `minDistance`, `maxDistance`, `rolloff`; see [audio](audio.md). |
+| `AudioListener` | `enabled` (boolean); use one enabled explicit listener. |
 | `DirectionalLight` | `color` (Vector3 RGB), `intensity` (number), all nonnegative. |
 | `PointLight` | DirectionalLight fields plus positive `range`. |
 | `SpotLight` | PointLight fields plus radian `innerHalfAngle`, `outerHalfAngle`; `0 <= inner <= outer < pi/2`, outer positive. |

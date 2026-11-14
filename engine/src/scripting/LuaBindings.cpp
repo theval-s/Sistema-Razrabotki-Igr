@@ -2,6 +2,7 @@
 
 #include <engine/scripting/LuaEntityHandle.hpp>
 #include <engine/scripting/LuaComponentBindings.hpp>
+#include "LuaBindingGroups.hpp"
 
 namespace engine {
 
@@ -78,6 +79,7 @@ namespace engine {
         RegisterEntityHandleBindings(lua);
         RegisterComponentBindings(lua, context);
         RegisterSceneBindings(lua, context);
+        RegisterAudioBindings(lua, context);
     }
 
 } // namespace engine

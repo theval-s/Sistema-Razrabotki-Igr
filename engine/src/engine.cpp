@@ -1,4 +1,5 @@
 #include <engine/engine.hpp>
+#include <engine/audio/AudioSubsystem.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -227,6 +228,7 @@ void Engine::Shutdown() {
     log::Engine().info("Engine shutting down");
     StopPlay();
     StopGame();
+    if (auto* audio = GetSubsystem<AudioSubsystem>()) audio->EndSession();
     CancelGameRequests();
     ResetSimulation();
 
@@ -385,6 +387,7 @@ void Engine::SetPaused(const bool paused) {
         return;
     }
     impl_->paused = paused;
+    if (auto* audio = GetSubsystem<AudioSubsystem>()) audio->SetGamePaused(paused);
     impl_->fixedAccumulator = 0;
     impl_->events.trigger(PauseChangedEvent{paused});
 }
@@ -463,6 +466,7 @@ bool Engine::PlayCurrentScene(const std::filesystem::path& root,
     impl_->queuedScene.reset();
     CommitScene(impl_->playSnapshot->scene);
     impl_->navigation = impl_->playSnapshot->navigation;
+    if (auto* audio = GetSubsystem<AudioSubsystem>()) audio->BeginSession();
     scripting->GetRuntime().SetLevelLoader([this](std::string_view name, std::string& failure) {
         return RequestOpenLevel(name, failure);
     });
@@ -486,6 +490,7 @@ void Engine::StopPlay() {
     if (!impl_->playSnapshot || impl_->transitioning || impl_->inCallbacks) return;
     impl_->transitioning = true;
     impl_->stoppingSession = true;
+    if (auto* audio = GetSubsystem<AudioSubsystem>()) audio->EndSession();
     CancelGameRequests();
     impl_->queuedScene.reset();
     if (auto* scripting = GetSubsystem<ScriptSubsystem>()) {
@@ -522,6 +527,7 @@ bool Engine::StartGame(const std::filesystem::path& root,
     if (!scripting) { error = "ScriptSubsystem is not registered"; return false; }
     impl_->transitioning = true;
     impl_->standalonePlaying = true;
+    if (auto* audio = GetSubsystem<AudioSubsystem>()) audio->BeginSession(true);
     impl_->sessionRoot = std::filesystem::absolute(root);
     impl_->autoloads.assign(autoloads.begin(), autoloads.end());
     scripting->GetRuntime().SetLevelLoader([this](std::string_view name, std::string& failure) {
@@ -548,6 +554,7 @@ void Engine::StopGame() {
     if (!impl_->standalonePlaying || impl_->inCallbacks || impl_->transitioning) return;
     impl_->transitioning = true;
     impl_->stoppingSession = true;
+    if (auto* audio = GetSubsystem<AudioSubsystem>()) audio->EndSession();
     CancelGameRequests();
     impl_->queuedScene.reset();
     if (auto* scripting = GetSubsystem<ScriptSubsystem>()) {
@@ -658,6 +665,7 @@ void Engine::ResetSimulation() {
 }
 
 void Engine::CommitScene(const SceneDocument& document) {
+    if (auto* audio = GetSubsystem<AudioSubsystem>()) audio->BeginSceneTransition();
     impl_->navigation.clear();
     ResetSimulation();
     if (auto* scripting = GetSubsystem<ScriptSubsystem>()) {
@@ -670,6 +678,7 @@ void Engine::CommitScene(const SceneDocument& document) {
     impl_->sceneAssets->UnloadAll();
     PopulateScene(document, *impl_->sceneAssets, impl_->scene);
     impl_->sceneBaseline = document;
+    if (auto* audio = GetSubsystem<AudioSubsystem>()) audio->EndSceneTransition();
     if (auto* scripting = GetSubsystem<ScriptSubsystem>(); scripting && scripting->IsPlaying() && !impl_->restoringGame)
         scripting->StartSceneScripts(impl_->scene);
     const auto* scripting = GetSubsystem<ScriptSubsystem>();
@@ -889,15 +898,21 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
         struct RestoreScope { bool& active; ~RestoreScope() { active = false; } } scope{impl_->restoringGame};
         CancelGameRequests();
         impl_->queuedScene.reset();
-        scripting->EndPlay();
+        auto* audio = GetSubsystem<AudioSubsystem>();
+        const auto endRestoredSession = [&] {
+            if (audio) audio->EndSession();
+            scripting->EndPlay();
+        };
+        endRestoredSession();
         CommitScene(restored);
         if (auto* input = GetSubsystem<InputSubsystem>()) input->SetCursorMode(CursorMode::Normal);
         impl_->sceneBaseline = base;
         impl_->sceneReference = reference;
         impl_->hasSceneReference = true;
+        if (audio) audio->BeginSession();
         if (!scripting->BeginPlay(root, autoloads, error, true) ||
             !scripting->PrepareSceneScripts(impl_->scene, error)) {
-            scripting->EndPlay();
+            endRestoredSession();
             return false;
         }
         // Both native and Lua restoration happen while controllers are dormant.
@@ -905,7 +920,7 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
         impl_->scene.SetControllerInstantiationEnabled(true);
         for (const auto& state : game.entities) if (state.controller) {
             if (!impl_->scene.RestoreControllerGameState(impl_->scene.FindByUuid(state.id), state.controller->data, error) || !error.empty()) {
-                scripting->EndPlay(); return false;
+                endRestoredSession(); return false;
             }
         }
         if (!scripting->RestoreGameState(game, error)) {
@@ -914,14 +929,14 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
             const auto failure = error;
             scripting->GetRuntime().DiscardSceneCommands();
             std::string startupError;
-            if (!scripting->StartPreparedScripts(startupError)) scripting->EndPlay();
+            if (!scripting->StartPreparedScripts(startupError)) endRestoredSession();
             impl_->scene.SetControllerInstantiationEnabled(true);
             impl_->scene.SetControllersActive(true);
             error = failure;
             return false;
         }
         scripting->GetRuntime().DiscardSceneCommands();
-        if (!scripting->StartPreparedScripts(error)) { scripting->EndPlay(); return false; }
+        if (!scripting->StartPreparedScripts(error)) { endRestoredSession(); return false; }
         impl_->scene.SetControllerInstantiationEnabled(true);
         impl_->scene.SetControllersActive(true);
         impl_->frame.simulationTimeSeconds = 0;

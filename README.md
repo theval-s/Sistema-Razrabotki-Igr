@@ -32,6 +32,9 @@ Code-only scene saving/loading, UUID sidecars, asset scope, render extraction an
 metadata generation: [scene and asset guide](docs/scene-assets.md).
 
 RML/RCSS UI, the example HUD and menus, assets and preview workflow: [UI guide](docs/ui.md).
+Engine/Lua/editor audio, mono 3D emitters, streaming, buses and device behavior:
+[audio guide](docs/audio.md). [ExampleGame](example_game/README.md) includes generated
+CC0 PCM clips, a moving parented emitter, mouse-look listener and pause-menu audio controls.
 The [Lua UI facade](docs/ui-lua-facade.md) documents the API and ownership rules;
 [scripting](docs/scripting.md#cursor-modes) covers gameplay cursor modes and UI overrides.
 

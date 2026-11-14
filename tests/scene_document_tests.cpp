@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 
 namespace {
 struct CountingController final : engine::Controller {
@@ -115,6 +116,187 @@ TEST(SceneDocument, ScriptSlotsRoundTripEmptyDisabledAndMissingAssets) {
     ASSERT_NE(enabled, std::string::npos);
     text.replace(enabled, std::string("\"enabled\": false").size(), "\"enabled\": 1");
     EXPECT_FALSE(engine::ParseSceneDocument(text, parsed, error));
+}
+
+TEST(SceneDocument, AudioCaptureRoundTripPopulateDuplicateAndApplyPreserveAuthoredState) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    auto& assets = host.GetSceneAssets();
+    const auto parent = scene.CreateEntity("Listener");
+    const auto emitter = scene.CreateEntity("Emitter", parent);
+    const auto empty = scene.CreateEntity("Unassigned");
+    engine::AudioSource source;
+    source.clip = engine::AssetReference{engine::NewUuid(), "game/audio/missing.mp3"};
+    source.enabled = false;
+    source.playOnStart = true;
+    source.looping = true;
+    source.loading = engine::AudioLoadingMode::Streamed;
+    source.bus = engine::AudioBus::Music;
+    source.volume = 0.4f;
+    source.pitch = 1.5f;
+    source.spatial = engine::AudioSpatialMode::TwoD;
+    source.attenuation = engine::AudioAttenuation::Linear;
+    source.minDistance = 2.0f;
+    source.maxDistance = 40.0f;
+    source.rolloff = 0.5f;
+    scene.AddComponent<engine::AudioSource>(emitter, source);
+    scene.AddComponent<engine::AudioSource>(empty);
+    scene.AddComponent<engine::AudioListener>(parent, engine::AudioListener{false});
+    EXPECT_FALSE(scene.HasUnsupportedComponents());
+
+    engine::SceneDocument captured, parsed;
+    std::string text, error;
+    ASSERT_TRUE(engine::CaptureSceneDocument(scene, assets, captured, error)) << error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(captured, text, error)) << error;
+    EXPECT_NE(text.find("\"AudioSource\""), std::string::npos);
+    EXPECT_NE(text.find("\"AudioListener\""), std::string::npos);
+    ASSERT_TRUE(engine::ParseSceneDocument(text, parsed, error)) << error;
+    EXPECT_EQ(parsed.entities, captured.entities);
+    engine::Scene restored;
+    engine::PopulateScene(parsed, assets, restored);
+    engine::SceneDocument recaptured;
+    ASSERT_TRUE(engine::CaptureSceneDocument(restored, assets, recaptured, error)) << error;
+    EXPECT_EQ(recaptured.entities, captured.entities);
+    ASSERT_NE(restored.TryGetComponent<engine::AudioSource>(restored.FindByUuid(scene.GetId(empty))), nullptr);
+    EXPECT_FALSE(restored.TryGetComponent<engine::AudioSource>(restored.FindByUuid(scene.GetId(empty)))->clip);
+
+    std::vector<engine::SceneEntityDefinition> definitions;
+    const std::vector<entt::entity> picked{parent};
+    ASSERT_TRUE(engine::CaptureEntities(scene, assets, picked, definitions, error)) << error;
+    const auto copies = engine::InstantiateEntities(definitions, assets, scene, true);
+    ASSERT_EQ(copies.size(), 2u);
+    EXPECT_NE(scene.GetId(copies[0]), scene.GetId(parent));
+    EXPECT_EQ(scene.GetParent(copies[1]), copies[0]);
+    ASSERT_NE(scene.TryGetComponent<engine::AudioSource>(copies[1]), nullptr);
+    EXPECT_EQ(*scene.TryGetComponent<engine::AudioSource>(copies[1]), source);
+    ASSERT_NE(scene.TryGetComponent<engine::AudioListener>(copies[0]), nullptr);
+    EXPECT_FALSE(scene.TryGetComponent<engine::AudioListener>(copies[0])->enabled);
+
+    scene.RemoveComponent<engine::AudioListener>(parent);
+    scene.Modify<engine::AudioSource>(emitter, [](auto& value) { value.volume = 0.9f; value.clip.reset(); });
+    engine::ApplyEntityDefinitions(definitions, assets, scene);
+    for (std::size_t i = 0; i < definitions.size(); ++i) {
+        engine::SceneEntityDefinition now;
+        ASSERT_TRUE(engine::CaptureEntity(scene, assets, i == 0 ? parent : emitter, now, error)) << error;
+        EXPECT_EQ(now, definitions[i]);
+    }
+    const auto revision = scene.GetRevision();
+    engine::ApplyEntityDefinitions(definitions, assets, scene);
+    EXPECT_EQ(scene.GetRevision(), revision);
+    definitions[0].audioListener.reset();
+    definitions[1].audioSource.reset();
+    engine::ApplyEntityDefinitions(definitions, assets, scene);
+    EXPECT_FALSE(scene.HasComponent<engine::AudioListener>(parent));
+    EXPECT_FALSE(scene.HasComponent<engine::AudioSource>(emitter));
+}
+
+TEST(SceneDocument, AudioEnumsRoundTripAndMalformedStructureIsRejectedTransactionally) {
+    engine::SceneDocument document;
+    document.entities.push_back({.id = engine::NewUuid(), .name = "Audio", .audioSource = engine::AudioSource{},
+                                 .audioListener = engine::AudioListener{}});
+    auto& source = *document.entities[0].audioSource;
+    std::string text, error;
+    engine::SceneDocument parsed;
+    for (const auto loading : {engine::AudioLoadingMode::Buffered, engine::AudioLoadingMode::Streamed})
+        for (const auto bus : {engine::AudioBus::Music, engine::AudioBus::SFX, engine::AudioBus::UI})
+            for (const auto spatial : {engine::AudioSpatialMode::TwoD, engine::AudioSpatialMode::ThreeD})
+                for (const auto attenuation : {engine::AudioAttenuation::None, engine::AudioAttenuation::Inverse,
+                                               engine::AudioAttenuation::Linear, engine::AudioAttenuation::Exponential}) {
+                    source.loading = loading; source.bus = bus; source.spatial = spatial; source.attenuation = attenuation;
+                    ASSERT_TRUE(engine::SerializeSceneDocument(document, text, error)) << error;
+                    ASSERT_TRUE(engine::ParseSceneDocument(text, parsed, error)) << error;
+                    EXPECT_EQ(parsed.entities, document.entities);
+                }
+    const auto saved = parsed.entities;
+    const auto reject = [&](std::string_view from, std::string_view to) {
+        auto invalid = text;
+        const auto at = invalid.find(from);
+        ASSERT_NE(at, std::string::npos) << from;
+        invalid.replace(at, from.size(), to);
+        EXPECT_FALSE(engine::ParseSceneDocument(invalid, parsed, error)) << invalid;
+        EXPECT_EQ(parsed.entities, saved);
+    };
+    reject("\"enabled\": true", "\"enabled\": 1"); // listener (sorted JSON keys)
+    reject("\"playOnStart\": false", "\"playOnStart\": 0");
+    reject("\"looping\": false", "\"looping\": \"false\"");
+    reject("\"streamed\"", "1");
+    reject("\"ui\"", "\"UI\"");
+    reject("\"3d\"", "null");
+    reject("\"exponential\"", "\"invalid\"");
+    reject("\"clip\": null", "\"clip\": {}");
+    reject("\"rolloff\": 1.0", "\"rolloff\": true");
+    reject("\"pitch\": 1.0", "\"pitch\": 0");
+    reject("\"volume\": 1.0", "\"volume\": 1.5");
+    reject("\"minDistance\": 1.0", "\"minDistance\": -1");
+    reject("\"maxDistance\": 100.0", "\"maxDistance\": 0.5");
+    reject("\"pitch\": 1.0", "\"unknown\": 1.0");
+    reject("\"AudioSource\": {", "\"AudioSource\": {\"enabled\": true,");
+    reject("\"AudioListener\": {", "\"AudioListener\": {\"unexpected\": false,");
+    auto invalidSourceEnabled = text;
+    const auto enabled = invalidSourceEnabled.rfind("\"enabled\": true");
+    ASSERT_NE(enabled, std::string::npos);
+    invalidSourceEnabled.replace(enabled, std::string("\"enabled\": true").size(), "\"enabled\": 1");
+    EXPECT_FALSE(engine::ParseSceneDocument(invalidSourceEnabled, parsed, error));
+    EXPECT_EQ(parsed.entities, saved);
+}
+
+TEST(SceneDocument, AudioNumericValidationAndListenerConflictsRejectInvalidDocuments) {
+    engine::SceneDocument document;
+    document.entities.push_back({.id = engine::NewUuid(), .name = "Audio", .audioSource = engine::AudioSource{},
+                                 .audioListener = engine::AudioListener{}});
+    std::string text = "unchanged", error;
+    const auto invalidSource = [&](engine::AudioSource source) {
+        document.entities[0].audioSource = source;
+        EXPECT_FALSE(engine::SerializeSceneDocument(document, text, error));
+        EXPECT_EQ(text, "unchanged");
+    };
+    for (const auto value : {-1.0f, 1.1f, std::numeric_limits<float>::infinity()}) {
+        engine::AudioSource source; source.volume = value; invalidSource(source);
+    }
+    for (const auto value : {0.0f, -1.0f, std::numeric_limits<float>::quiet_NaN()}) {
+        engine::AudioSource source; source.pitch = value; invalidSource(source);
+        source = {}; source.minDistance = value; invalidSource(source);
+        source = {}; source.maxDistance = value; invalidSource(source);
+    }
+    engine::AudioSource source;
+    source.maxDistance = source.minDistance - 0.5f; invalidSource(source);
+    source = {}; source.rolloff = -1; invalidSource(source);
+    source = {}; source.bus = static_cast<engine::AudioBus>(99); invalidSource(source);
+    source = {}; source.loading = static_cast<engine::AudioLoadingMode>(99); invalidSource(source);
+    source = {}; source.spatial = static_cast<engine::AudioSpatialMode>(99); invalidSource(source);
+    source = {}; source.attenuation = static_cast<engine::AudioAttenuation>(99); invalidSource(source);
+    document.entities[0].audioSource = engine::AudioSource{};
+    document.entities.push_back({.id = engine::NewUuid(), .name = "Other listener", .audioListener = engine::AudioListener{}});
+    EXPECT_FALSE(engine::SerializeSceneDocument(document, text, error));
+    EXPECT_NE(error.find("listeners"), std::string::npos);
+    document.entities[1].audioListener->enabled = false;
+    ASSERT_TRUE(engine::SerializeSceneDocument(document, text, error)) << error;
+    engine::SceneDocument parsed;
+    ASSERT_TRUE(engine::ParseSceneDocument(text, parsed, error)) << error;
+    const auto at = text.find("\"enabled\": false");
+    ASSERT_NE(at, std::string::npos);
+    text.replace(at, std::string("\"enabled\": false").size(), "\"enabled\": true");
+    EXPECT_FALSE(engine::ParseSceneDocument(text, parsed, error));
+    EXPECT_FALSE(parsed.entities[1].audioListener->enabled);
+}
+
+TEST(GameDocument, SpawnedAudioAuthoredStateRoundTripsThroughSceneCodec) {
+    engine::GameDocument game;
+    game.scene = {engine::NewUuid(), "game/scenes/audio.scene.json"};
+    engine::SceneEntityDefinition spawn;
+    spawn.id = engine::NewUuid();
+    spawn.name = "Persistent emitter";
+    spawn.audioSource = engine::AudioSource{};
+    spawn.audioSource->clip = engine::AssetReference{engine::NewUuid(), "game/audio/missing.wav"};
+    spawn.audioSource->looping = true;
+    spawn.audioListener = engine::AudioListener{};
+    spawn.persistence = engine::GamePersistence{};
+    game.spawned.entities.push_back(spawn);
+    std::string text, error;
+    ASSERT_TRUE(engine::SerializeGameDocument(game, text, error)) << error;
+    engine::GameDocument parsed;
+    ASSERT_TRUE(engine::ParseGameDocument(text, parsed, error)) << error;
+    EXPECT_EQ(parsed.spawned.entities, game.spawned.entities);
 }
 
 TEST(SceneDocument, ControllerCommandsFlushInFifoOrderWithoutReentry) {

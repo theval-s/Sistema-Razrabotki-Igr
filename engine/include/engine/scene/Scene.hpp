@@ -20,6 +20,7 @@
 #include <engine/engine_export.hpp>
 #include <engine/scene/Components.hpp>
 #include <engine/physics/PhysicsComponents.hpp>
+#include <engine/audio/AudioComponents.hpp>
 #include <engine/navigation/NavigationMesh.hpp>
 #include <engine/scripting/ScriptComponent.hpp>
 #include <engine/ai/BehaviorTreeComponent.hpp>
@@ -281,7 +282,8 @@ private:
         std::is_same_v<T, PointLight> || std::is_same_v<T, SpotLight> || std::is_same_v<T, Bounds> ||
         std::is_same_v<T, GamePersistence> || std::is_same_v<T, RigidBody> || std::is_same_v<T, Collider> ||
         std::is_same_v<T, ScriptComponent> || std::is_same_v<T, ai::BehaviorTreeComponent> ||
-        std::is_same_v<T, NavigationRegion> || std::is_same_v<T, NavigationSource>;
+        std::is_same_v<T, NavigationRegion> || std::is_same_v<T, NavigationSource> ||
+        std::is_same_v<T, AudioSource> || std::is_same_v<T, AudioListener>;
     /// Logs and returns false for an invalid entity. `caller` names the public function.
     [[nodiscard]] bool CheckEntity(entt::entity entity, std::string_view caller) const;
     void Detach(entt::entity entity);

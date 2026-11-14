@@ -4,6 +4,29 @@
   "directionalLight": "34fb74e3-a33c-4f20-8f44-792f841f9be8",
   "entities": [
     {
+      "id": "375c7852-3506-4aba-a2bc-2006c5471001",
+      "name": "Gameplay audio listener",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 3, 7], "rotation": [-0.07492971, 0, 0, 0.99718882], "scale": [1, 1, 1] },
+        "AudioListener": { "enabled": true }
+      }
+    },
+    {
+      "id": "375c7852-3506-4aba-a2bc-2006c5471002",
+      "name": "Orange light spatial hum",
+      "parent": "3b93eafd-a888-4720-be22-77c5ea028bca",
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "AudioSource": {
+          "clip": { "id": "375c7852-3506-4aba-a2bc-2006c5472002", "path": "game/audio/orbit-mono.wav" },
+          "enabled": true, "playOnStart": true, "looping": true,
+          "loading": "buffered", "bus": "sfx", "volume": 0.35, "pitch": 1,
+          "spatial": "3d", "attenuation": "inverse", "minDistance": 2, "maxDistance": 30, "rolloff": 1
+        }
+      }
+    },
+    {
       "id": "34fb74e3-a33c-4f20-8f44-792f841f9be8",
       "name": "Sun",
       "parent": null,

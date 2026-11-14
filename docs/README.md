@@ -24,6 +24,7 @@ Writing games in Lua with the editor:
 |---|---|
 | [scripting.md](scripting.md) | Play mode, script lifecycle, exposed properties, autoloads, shared modules, the Lua API reference, input, cursor modes, saves |
 | [physics.md](physics.md) | Rigid bodies and colliders in the editor, contact and sleep callbacks in Lua (also the C++ fixed-update model) |
+| [audio.md](audio.md) | Audio clips, 2D/mono 3D sources, listeners, Lua/C++ playback, buses, pause, device recovery and packaging |
 | [behavior-trees.md](behavior-trees.md) | `.bt.lua` tree assets, condition and action scripts, attaching trees to agents |
 | [navigation.md](navigation.md) | NavMesh baking, pathfinding and crowds from Lua (in Russian) |
 | [ui.md](ui.md) | Game UI with RML/RCSS: documents, styles, models, events, preview and reload |

@@ -16,6 +16,9 @@ endif()
 add_custom_target(ExampleGameAssets ALL
     ${GAME_SHADER_COPY_COMMAND}
     COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/audio"
+        "$<TARGET_FILE_DIR:ExampleGame>/game/audio"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/ai"
         "$<TARGET_FILE_DIR:ExampleGame>/game/ai"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -57,6 +60,7 @@ install(DIRECTORY
     DESTINATION engine COMPONENT ExampleGame
 )
 install(DIRECTORY
+    "${CMAKE_CURRENT_SOURCE_DIR}/audio"
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
     "${CMAKE_CURRENT_SOURCE_DIR}/materials"
     "${CMAKE_CURRENT_SOURCE_DIR}/models"
@@ -65,3 +69,5 @@ install(DIRECTORY
     "${CMAKE_CURRENT_SOURCE_DIR}/scripts"
     DESTINATION game COMPONENT ExampleGame
 )
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
+    DESTINATION . RENAME ExampleGame-README.md COMPONENT ExampleGame)

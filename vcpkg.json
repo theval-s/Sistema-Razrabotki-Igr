@@ -17,10 +17,15 @@
         "lua",
         "joltphysics",
         "recastnavigation",
+        "miniaudio",
         { "name": "rmlui", "default-features": false, "features": ["freetype"] }
     ],
     "builtin-baseline": "8a9d7414691554ff6c7e1f5e957872d6a033df26",
     "overrides": [
+        {
+            "name": "miniaudio",
+            "version": "0.11.25"
+        },
         {
             "name": "lua",
             "version": "5.4.8"

@@ -3,6 +3,7 @@
 #include <utility>
 
 #include <engine/engine.hpp>
+#include <engine/audio/AudioSubsystem.hpp>
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/physics/PhysicsSubsystem.hpp>
 #include <engine/rendering/RenderExtractionSubsystem.hpp>
@@ -21,6 +22,7 @@ namespace engine {
         uiConfig.enableDebugger = true;
 #endif
         engine.AddSubsystem<UiSubsystem>(std::move(uiConfig));
+        engine.AddSubsystem<AudioSubsystem>();
         engine.AddSubsystem<ScriptSubsystem>();
         engine.AddSubsystem<PhysicsSubsystem>();
         engine.AddSubsystem<RenderExtractionSubsystem>();

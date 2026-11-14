@@ -1,5 +1,16 @@
 find_package(GTest CONFIG REQUIRED)
 
+add_executable(audio_tests audio_tests.cpp lua_audio_tests.cpp)
+target_link_libraries(audio_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
+set_project_warnings(audio_tests)
+set_target_properties(audio_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET audio_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:audio_tests> $<TARGET_FILE_DIR:audio_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME audio_tests COMMAND audio_tests)
+
 # Exercise both generated export-header modes against the same utility contract.
 foreach(utf_target IN ITEMS utf_tests utf_shared_tests)
     add_executable(${utf_target} utf_tests.cpp)
@@ -48,6 +59,28 @@ add_test(NAME project_tests COMMAND project_tests)
 if(SRI_BUILD_EDITOR)
     find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Test)
     find_package(spdlog CONFIG REQUIRED)
+    add_executable(content_browser_drop_tests
+        content_browser_drop_tests.cpp
+        ../editor/modules/content/content_browser.cpp
+        ../editor/modules/content/content_browser.hpp
+        ../editor/modules/content/asset_filter_model.cpp
+        ../editor/modules/content/asset_filter_model.hpp
+        ../editor/modules/content/asset_operations.cpp
+        ../editor/modules/content/asset_dialogs.cpp
+        ../editor/modules/content/asset_dialogs.hpp
+        ../editor/modules/content/scene_placement.cpp
+    )
+    target_include_directories(content_browser_drop_tests PRIVATE ../editor/modules/content)
+    target_link_libraries(content_browser_drop_tests PRIVATE editor_core GTest::gtest
+        Qt6::Test ads::qtadvanceddocking-qt6)
+    set_project_warnings(content_browser_drop_tests)
+    set_target_properties(content_browser_drop_tests PROPERTIES FOLDER tests AUTOMOC ON)
+    add_custom_command(TARGET content_browser_drop_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:content_browser_drop_tests> $<TARGET_FILE_DIR:content_browser_drop_tests>
+        COMMAND_EXPAND_LISTS VERBATIM)
+    add_test(NAME content_browser_drop_tests COMMAND content_browser_drop_tests)
+
     add_executable(autoload_dialog_tests
         autoload_dialog_tests.cpp
         ../editor/modules/scripting/autoload_dialog.cpp

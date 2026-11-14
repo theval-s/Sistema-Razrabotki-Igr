@@ -13,6 +13,7 @@
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/Transform.hpp>
 #include <engine/physics/PhysicsComponents.hpp>
+#include <engine/audio/AudioComponents.hpp>
 #include <engine/navigation/NavigationMesh.hpp>
 #include <engine/scene/Components.hpp>
 #include <engine/scene/Controller.hpp>
@@ -46,6 +47,8 @@ struct SceneEntityDefinition {
     std::optional<Bounds> bounds;
     std::optional<RigidBody> rigidBody;
     std::optional<Collider> collider;
+    std::optional<AudioSource> audioSource;
+    std::optional<AudioListener> audioListener;
     std::optional<NavigationRegion> navigationRegion;
     std::optional<NavigationSource> navigationSource;
     std::optional<GamePersistence> persistence;
