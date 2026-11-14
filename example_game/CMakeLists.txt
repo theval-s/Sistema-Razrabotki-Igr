@@ -16,6 +16,9 @@ endif()
 add_custom_target(ExampleGameAssets ALL
     ${GAME_SHADER_COPY_COMMAND}
     COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/ai"
+        "$<TARGET_FILE_DIR:ExampleGame>/game/ai"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/materials"
         "$<TARGET_FILE_DIR:ExampleGame>/game/materials"
     COMMAND ${CMAKE_COMMAND} -E copy_directory

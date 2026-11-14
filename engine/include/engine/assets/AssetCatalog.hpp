@@ -20,7 +20,7 @@ struct AssetReference {
 };
 
 enum class CatalogAssetKind { Mesh, Texture, Shader, Material, MaterialInstance, Scene, Script,
-                              UiDocument, UiStylesheet, UiTemplate, Font };
+                              UiDocument, UiStylesheet, UiTemplate, Font, BehaviorTree };
 
 struct AssetMetadata {
     AssetUuid id;

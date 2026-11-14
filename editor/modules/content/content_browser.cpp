@@ -74,6 +74,7 @@ constexpr engine::CatalogAssetKind FilterKinds[] = {
     engine::CatalogAssetKind::Texture,  engine::CatalogAssetKind::Material,
     engine::CatalogAssetKind::MaterialInstance, engine::CatalogAssetKind::Shader,
     engine::CatalogAssetKind::Script,
+    engine::CatalogAssetKind::BehaviorTree,
     engine::CatalogAssetKind::UiDocument, engine::CatalogAssetKind::UiStylesheet,
     engine::CatalogAssetKind::UiTemplate, engine::CatalogAssetKind::Font,
 };
@@ -416,6 +417,8 @@ void ContentBrowser::buildActions() {
                          [this] { newScript(); });
     new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::Script), tr("Navigation Follower Script..."), this,
                          [this] { newScript(true); });
+    new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::BehaviorTree), tr("Behavior Tree..."), this,
+                         &ContentBrowser::newBehaviorTree);
     new_button_->setMenu(new_menu_.get());
 }
 
@@ -934,6 +937,14 @@ void ContentBrowser::newScript(bool followNavigation) {
     // No spaces by default: require() names map onto file names.
     NewAssetDialog dialog(tr("New Script"), folder_, QStringLiteral(".lua"), followNavigation ? QStringLiteral("NavigationFollower") : QStringLiteral("NewScript"), window());
     if (dialog.exec() == QDialog::Accepted && operations_.createScript(dialog.path(), followNavigation)) {
+        select({dialog.path()});
+    }
+}
+
+void ContentBrowser::newBehaviorTree() {
+    NewAssetDialog dialog(tr("New Behavior Tree"), folder_, QStringLiteral(".bt.lua"),
+                          QStringLiteral("NewTree"), window());
+    if (dialog.exec() == QDialog::Accepted && operations_.createBehaviorTree(dialog.path())) {
         select({dialog.path()});
     }
 }

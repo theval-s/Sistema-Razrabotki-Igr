@@ -1,6 +1,7 @@
 #include <engine/engine.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/ai/BehaviorTree.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
@@ -37,6 +38,157 @@ struct PlayFixture {
         ASSERT_TRUE(engine::WriteAssetMetadata(file, {engine::NewUuid(), engine::CatalogAssetKind::Scene}, error));
     }
 };
+
+TEST(BehaviorTree, ResumesWithinBudgetAndCancelsOnlyActiveAction) {
+    using namespace engine::ai;
+    struct Leaves final : LeafExecutor {
+        int checks = 0;
+        int enters = 0;
+        int ticks = 0;
+        std::vector<ExitReason> exits;
+        bool Check(std::size_t) override { ++checks; return true; }
+        void Enter(std::size_t) override { ++enters; }
+        Status Tick(std::size_t, double) override { return ++ticks % 2 ? Status::Running : Status::Success; }
+        void Exit(std::size_t, ExitReason reason) override { exits.push_back(reason); }
+    };
+    std::string error;
+    auto definition = TreeDefinition::Create({
+        {"root", NodeKind::Sequence, {1, 2}, {}, {}},
+        {"ready", NodeKind::Condition, {}, {}, {}},
+        {"work", NodeKind::Action, {}, {}, {}},
+    }, 0, error);
+    ASSERT_NE(definition, nullptr) << error;
+    auto executor = std::make_unique<Leaves>();
+    const auto* leaves = executor.get();
+    TreeInstance tree(definition, std::move(executor));
+    EXPECT_EQ(tree.Tick(0.016, 1).steps, 1u);
+    EXPECT_EQ(leaves->checks, 0);
+    EXPECT_EQ(tree.Tick(0.016, 1).status, Status::Running);
+    EXPECT_EQ(tree.Tick(0.016, 1).status, Status::Running);
+    EXPECT_EQ(tree.Tick(0.016, 1).status, Status::Running);
+    ASSERT_NE(tree.ActiveAction(), nullptr);
+    EXPECT_EQ(tree.ActiveAction()->id, "work");
+    EXPECT_EQ(tree.Tick(0.016, 1).status, Status::Success);
+    EXPECT_EQ(leaves->checks, 1);
+    EXPECT_EQ(leaves->enters, 1);
+    EXPECT_EQ(tree.Tick(0.016, 4).status, Status::Running);
+    tree.Stop();
+    tree.Stop();
+    EXPECT_EQ(leaves->exits, (std::vector{ExitReason::Success, ExitReason::Cancelled}));
+
+    EXPECT_FALSE(TreeDefinition::Create({
+        {"root", NodeKind::Action, {}, {}, {}},
+        {"orphan", NodeKind::Sequence, {1}, {}, {}},
+    }, 0, error));
+    EXPECT_FALSE(error.empty());
+}
+
+TEST(PlayMode, BehaviorTreesShareDefinitionsAndKeepIndependentState) {
+    PlayFixture f;
+    std::string error;
+    const auto asset = [&](const char* name, const char* source, engine::CatalogAssetKind kind) {
+        const auto file = f.root / name;
+        ASSERT_TRUE(engine::CreateNewFile(file, source, error)) << error;
+        ASSERT_TRUE(engine::WriteAssetMetadata(file, {engine::NewUuid(), kind}, error)) << error;
+    };
+    asset("agent.bt.lua", R"(
+        return { root = "choose", nodes = {
+            { id = "choose", kind = "Selector", children = {"work", "fallback"} },
+            { id = "work", kind = "Sequence", children = {"ready", "count"} },
+            { id = "ready", kind = "Condition", script = "game/ready.condition.lua" },
+            { id = "count", kind = "Action", script = "game/count.action.lua", parameters = {limit = 4} },
+            { id = "fallback", kind = "Action", script = "game/fallback.action.lua" },
+        }}
+    )", engine::CatalogAssetKind::BehaviorTree);
+    asset("ready.condition.lua", R"(
+        return { Check = function(ctx) return ctx.parameters.ready end }
+    )", engine::CatalogAssetKind::Script);
+    asset("count.action.lua", R"(
+        local count
+        return {
+            OnEnter = function(ctx) count = 0 end,
+            Tick = function(ctx)
+                count = count + 1
+                local p = ctx.entity:GetPosition()
+                p.x = count
+                ctx.entity:SetPosition(p)
+                return count >= ctx.parameters.limit and BT.Success or BT.Running
+            end,
+            OnExit = function(ctx, reason)
+                if reason == "Cancelled" then ctx.entity:SetName("cancelled") end
+            end,
+        }
+    )", engine::CatalogAssetKind::Script);
+    asset("fallback.action.lua", "return {Tick = function() return BT.Failure end}", engine::CatalogAssetKind::Script);
+    asset("runaway.bt.lua", R"(
+        return { root = "loop", nodes = {
+            { id = "loop", kind = "Action", script = "game/loop.action.lua" },
+        }}
+    )", engine::CatalogAssetKind::BehaviorTree);
+    asset("loop.action.lua", "return {Tick = function() while true do end end}", engine::CatalogAssetKind::Script);
+    ASSERT_FALSE(::testing::Test::HasFatalFailure());
+    ASSERT_TRUE(f.host.Initialize());
+    auto& scene = f.host.GetScene();
+    scene.CreateEntity("first");
+    scene.CreateEntity("second");
+    scene.CreateEntity("third");
+    scene.CreateEntity("runaway");
+    scene.AddComponent<engine::ai::BehaviorTreeComponent>(scene.CreateEntity("unassigned"));
+    const auto* catalogEntry = f.host.GetAssets().GetCatalog().FindPath("game/agent.bt.lua");
+    ASSERT_NE(catalogEntry, nullptr);
+    const auto authored = engine::ai::BehaviorTreeComponent{
+        {catalogEntry->metadata.id, catalogEntry->path}, true, {{"ready", false}}};
+    scene.AddComponent<engine::ai::BehaviorTreeComponent>(scene.FindFirstByName("third"), authored);
+    ASSERT_TRUE(f.host.PlayCurrentScene(f.root, {}, error)) << error;
+    auto& runtime = f.scripting->GetRuntime();
+    ASSERT_TRUE(runtime.ExecuteString(R"(
+        first = Scene.FindByName("first")
+        second = Scene.FindByName("second")
+        third = Scene.FindByName("third")
+        runaway = Scene.FindByName("runaway")
+        BT.Attach(runaway, "game/runaway.bt.lua")
+        BT.Attach(first, "game/agent.bt.lua", {ready = true})
+        BT.Attach(second, "game/agent.bt.lua", {ready = true})
+    )", "attach agents", error)) << error;
+    engine::FrameContext frame{};
+    frame.deltaSeconds = 0.016;
+    f.scripting->Update(frame);
+    ASSERT_TRUE(runtime.ExecuteString(R"(
+        local status, action = BT.GetStatus(first)
+        assert(status == BT.Running and action == "count")
+        assert(first:GetPosition().x == 1 and second:GetPosition().x == 1)
+        assert(BT.GetStatus(third) == BT.Failure)
+        assert(BT.GetStatus(runaway) == "Faulted")
+        assert(BT.GetStatus(Scene.FindByName("unassigned")) == "Stopped")
+        BT.SetParameters(first, {ready = true, limit = 2})
+        BT.Detach(second)
+    )", "edit agents", error)) << error;
+    frame.paused = true;
+    f.scripting->Update(frame);
+    ASSERT_TRUE(runtime.ExecuteString(R"(
+        assert(first:GetPosition().x == 1 and BT.GetStatus(first) == BT.Running)
+        assert(second:GetName() == "cancelled")
+    )", "check pause", error)) << error;
+    frame.paused = false;
+    f.scripting->Update(frame);
+    const auto timing = runtime.GetBehaviorTiming();
+    EXPECT_EQ(timing.updates, 2u);
+    EXPECT_GE(timing.maxMilliseconds, timing.meanMilliseconds);
+    EXPECT_TRUE(runtime.ExecuteString(R"(
+        assert(first:GetPosition().x == 2 and BT.GetStatus(first) == BT.Success)
+        assert(second:GetName() == "cancelled" and BT.GetStatus(second) == "Stopped")
+        local updates, mean, maximum = BT.GetTiming()
+        assert(updates == 2 and maximum >= mean)
+    )", "check agents", error)) << error;
+    f.host.StopPlay();
+    EXPECT_EQ(scene.FindFirstByName("cancelled"), NullEntity);
+    const auto* restored = scene.TryGetComponent<engine::ai::BehaviorTreeComponent>(scene.FindFirstByName("third"));
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(*restored, authored);
+    const auto* empty = scene.TryGetComponent<engine::ai::BehaviorTreeComponent>(scene.FindFirstByName("unassigned"));
+    ASSERT_NE(empty, nullptr);
+    EXPECT_FALSE(empty->tree.id.IsValid());
+}
 
 TEST(PlayMode, StopRestoresUnsavedEntitiesAndRemovesRuntimeChanges) {
     PlayFixture f;

@@ -27,6 +27,7 @@ std::string_view KindName(CatalogAssetKind kind) {
     case CatalogAssetKind::MaterialInstance: return "materialInstance";
     case CatalogAssetKind::Scene: return "scene";
     case CatalogAssetKind::Script: return "script";
+    case CatalogAssetKind::BehaviorTree: return "behaviorTree";
     case CatalogAssetKind::UiDocument: return "ui_document";
     case CatalogAssetKind::UiStylesheet: return "ui_stylesheet";
     case CatalogAssetKind::UiTemplate: return "ui_template";
@@ -98,7 +99,8 @@ AssetMetadata MetadataFromJson(const Json& j) {
     bool found = false;
     for (const auto candidate : {CatalogAssetKind::Mesh, CatalogAssetKind::Texture, CatalogAssetKind::Shader,
                                   CatalogAssetKind::Material, CatalogAssetKind::MaterialInstance, CatalogAssetKind::Scene, CatalogAssetKind::Script,
-                                  CatalogAssetKind::UiDocument, CatalogAssetKind::UiStylesheet, CatalogAssetKind::UiTemplate, CatalogAssetKind::Font}) {
+                                  CatalogAssetKind::UiDocument, CatalogAssetKind::UiStylesheet, CatalogAssetKind::UiTemplate, CatalogAssetKind::Font,
+                                  CatalogAssetKind::BehaviorTree}) {
         if (kind == KindName(candidate)) { meta.kind = candidate; found = true; break; }
     }
     if (!found || (j.contains("centerOnLoad") && meta.kind != CatalogAssetKind::Mesh))
@@ -120,6 +122,7 @@ std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& 
     if (name.ends_with(".material-instance.json")) return CatalogAssetKind::MaterialInstance;
     if (name.ends_with(".material.json")) return CatalogAssetKind::Material;
     if (name.ends_with(".scene.json")) return CatalogAssetKind::Scene;
+    if (name.ends_with(".bt.lua")) return CatalogAssetKind::BehaviorTree;
     const std::string ext = NormalizeName(ToGenericUtf8(path.extension()));
     if (ext == ".hlsl") return CatalogAssetKind::Shader;
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tif" ||
