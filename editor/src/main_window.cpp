@@ -1,3 +1,5 @@
+#include <QDialogButtonBox>
+ #include <QFormLayout>
 #include <engine/physics/PhysicsSubsystem.hpp>
 #include <editor/main_window.hpp>
 
@@ -259,7 +261,7 @@ void MainWindow::tickEngine() {
         engine_.ResizeSurface(metrics.pixelWidth, metrics.pixelHeight);
     engine_.Tick();
     viewport_->applyCursorMode();
-    refreshStatus();
+    if (engine_.GetFrame().frameIndex % 15 == 0) refreshStatus();
 }
 
 void MainWindow::refreshPlayHint() {

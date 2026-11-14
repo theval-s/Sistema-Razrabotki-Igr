@@ -25,6 +25,9 @@ class TaskScheduler;  // include <TaskScheduler.h> to use it
 }
 
 namespace engine {
+class NavigationMesh;
+class DebugDraw;
+struct NavigationSettings;
 
 class AssetSystem;
 struct SceneDocument;
@@ -182,6 +185,12 @@ public:
     /// The active scene's isolated asset registry. It is drained and GPU-evicted
     /// on a scene switch; GetAssets() is for non-scene/host-owned assets.
     [[nodiscard]] ENGINE_API AssetSystem& GetSceneAssets() noexcept;
+    [[nodiscard]] ENGINE_API const NavigationMesh* GetNavigationMesh(entt::entity region) const;
+    ENGINE_API void DrawNavigationMeshes(DebugDraw& draw) const;
+    [[nodiscard]] ENGINE_API std::vector<DirectX::SimpleMath::Vector3> FindNavigationPath(
+        DirectX::SimpleMath::Vector3 start, DirectX::SimpleMath::Vector3 goal,
+        entt::entity region = entt::null) const;
+    [[nodiscard]] ENGINE_API bool BuildNavigation(entt::entity region, std::string& error);
     /// Rescans the catalogs of both registries after asset files were added, moved or removed
     /// on disk. False, with the reason, when the scan was not clean (AssetSystem::RescanCatalog).
     [[nodiscard]] ENGINE_API bool RescanAssetCatalogs(std::string& error);

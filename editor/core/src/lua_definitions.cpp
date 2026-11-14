@@ -712,6 +712,32 @@ function SaveGame.RequestSave(slot) end
 ---@return string error
 function SaveGame.RequestLoad(slot) end
 
+Navigation = {}
+---@param start Vector3
+---@param goal Vector3
+---@param navMesh? Entity
+---@return Vector3[]
+function Navigation.FindPath(start, goal, navMesh) end
+
+---@param navMesh Entity
+---@param agent Entity
+---@param position Vector3
+---@param speed number
+---@return boolean
+function Navigation.RegisterAgent(navMesh, agent, position, speed) end
+---@param navMesh Entity
+---@param agent Entity
+---@param goal Vector3
+---@return boolean
+function Navigation.SetAgentGoal(navMesh, agent, goal) end
+---@param navMesh Entity
+---@param agent Entity
+---@return Vector3?
+function Navigation.GetAgentPosition(navMesh, agent) end
+---@param navMesh Entity
+---@param agent Entity
+function Navigation.RemoveAgent(navMesh, agent) end
+
 ---@class PhysicsContact
 ---@field point Vector3
 ---@field normal Vector3 Receiver-oriented normal.

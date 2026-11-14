@@ -65,6 +65,60 @@ function OnDestroy()
     -- Release this object's gameplay resources.
 end)";
 
+constexpr std::string_view NavigationScriptTemplate = R"lua(-- Bake the Navigation Region in the Inspector before Play.
+-- Attach this script to an object without a dynamic rigid body.
+Properties = {
+    navMeshName = "",
+    goalX = 8,
+    goalY = 0,
+    goalZ = 5,
+    speed = 3,
+    heightOffset = 0.5,
+}
+
+local points = {}
+local nextPoint = 1
+
+function OnStart()
+    local start = entity:GetWorldPosition()
+    start.y = start.y - Properties.heightOffset
+    local goal = Vector3.new(Properties.goalX, Properties.goalY, Properties.goalZ)
+    local mesh
+    if Properties.navMeshName ~= "" then
+        mesh = Scene.FindByName(Properties.navMeshName)
+        if not mesh:IsValid() then
+            Log.warning("Navigation: NavMesh not found: " .. Properties.navMeshName)
+            return
+        end
+    end
+    points = Navigation.FindPath(start, goal, mesh)
+    nextPoint = 1
+    if #points == 0 then
+        Log.warning("Navigation: no route. Build the mesh and check the start and goal.")
+    end
+end
+
+function OnUpdate(dt)
+    local remaining = math.max(0, Properties.speed * dt)
+    if nextPoint > #points or remaining == 0 then return end
+
+    local position = entity:GetWorldPosition()
+    while nextPoint <= #points do
+        local point = points[nextPoint]
+        local target = Vector3.new(point.x, point.y + Properties.heightOffset, point.z)
+        local delta = target - position
+        local distance = delta:Length()
+        if distance > remaining then
+            position = position + delta * (remaining / distance)
+            break
+        end
+        position = target
+        remaining = remaining - distance
+        nextPoint = nextPoint + 1
+    end
+    entity:SetWorldPosition(position)
+end)lua";
+
 /// Ids of the assets in `paths`, including everything inside the folders among them.
 std::vector<engine::AssetUuid> idsIn(const QStringList& paths) {
     std::vector<engine::AssetUuid> ids;
@@ -426,14 +480,14 @@ return {
     return createFile(tr("New Behavior Tree"), path, source, engine::CatalogAssetKind::BehaviorTree);
 }
 
-bool AssetOperations::createScript(const QString& path) {
+bool AssetOperations::createScript(const QString& path, bool followNavigation) {
     // "name.d.lua" would be a LuaLS declaration file, which the catalog skips.
     if (engine::CatalogKindForFile(editor::toPath(path)) != engine::CatalogAssetKind::Script) {
         report(tr("New Script"), {tr("%1 is not a script name; .d.lua files are declarations.")
                                       .arg(QFileInfo(path).fileName())});
         return false;
     }
-    return createFile(tr("New Script"), path, std::string(ScriptTemplate), engine::CatalogAssetKind::Script);
+    return createFile(tr("New Script"), path, std::string(followNavigation ? NavigationScriptTemplate : ScriptTemplate), engine::CatalogAssetKind::Script);
 }
 
 void AssetOperations::adoptNewFiles() {

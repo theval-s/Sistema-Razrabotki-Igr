@@ -1,3 +1,4 @@
+#include <engine/navigation/NavigationMesh.hpp>
 #include <editor/viewport_overlay.hpp>
 
 #include <QWidget>
@@ -79,6 +80,7 @@ std::string_view ViewportOverlaySubsystem::GetName() const {
 void ViewportOverlaySubsystem::LateUpdate(const engine::FrameContext&) {
     auto& world = GetEngine().GetSubsystem<engine::RenderingSubsystem>()->GetWorld();
     world.selectedSceneItems.clear();
+    if (!GetEngine().IsPlaying()) GetEngine().DrawNavigationMeshes(world.debugDraw);
     // In the bottom-left corner.
     const auto scale = static_cast<float>(viewport_.devicePixelRatioF());
     const auto height = static_cast<float>(GetEngine().GetSurface().height);
@@ -86,6 +88,13 @@ void ViewportOverlaySubsystem::LateUpdate(const engine::FrameContext&) {
                                AxesLength * scale);
     auto& assets = GetEngine().GetSceneAssets();
     const auto& scene = GetEngine().GetScene();
+    const auto selected = selection_.primary();
+    const auto* region = scene.TryGetComponent<engine::NavigationRegion>(selected);
+    if (region && !GetEngine().IsPlaying()) {
+        using DirectX::SimpleMath::Matrix;
+        world.debugDraw.Box(Matrix::CreateScale(region->halfExtents * 2.0f) *
+            Matrix::CreateTranslation(scene.GetWorldMatrix(selected).Translation()), {0.15f, 0.85f, 0.8f, 1.0f});
+    }
     if (auto* physics = GetEngine().GetSubsystem<engine::PhysicsSubsystem>()) {
         std::string ignored;
         // The inspector edits the primary entity. Preview also works in Edit,

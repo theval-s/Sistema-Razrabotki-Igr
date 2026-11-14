@@ -542,6 +542,46 @@ bool PhysicsSubsystem::Teleport(entt::entity entity, Vector3 position, Quaternio
     body->rotation = pose.rotation;
     error.clear(); return true;
 }
+namespace {
+void CollectShapeTriangles(const JPH::Shape& shape, std::vector<Vector3>& triangles) {
+    JPH::AllHitCollisionCollector<JPH::TransformedShapeCollector> leaves;
+    const JPH::TransformedShape transformed(JPH::RVec3(shape.GetCenterOfMass()),
+        JPH::Quat::sIdentity(), &shape, JPH::BodyID{});
+    transformed.CollectTransformedShapes(JPH::AABox::sBiggest(), leaves);
+    constexpr int batch = 128;
+    std::array<JPH::Float3, batch * 3> vertices;
+    for (const auto& leaf : leaves.mHits) {
+        JPH::Shape::GetTrianglesContext context;
+        leaf.GetTrianglesStart(context, JPH::AABox::sBiggest(), JPH::RVec3::sZero());
+        for (int count; (count = leaf.GetTrianglesNext(context, batch, vertices.data())) != 0;) {
+            for (int i = 0; i < count * 3; ++i)
+                triangles.emplace_back(vertices[i].x, vertices[i].y, vertices[i].z);
+        }
+    }
+}
+}
+
+bool PhysicsSubsystem::CollectColliderTriangles(entt::entity entity, std::vector<Vector3>& triangles,
+                                                std::string& error) {
+    if (!impl_) return false;
+    const auto* collider = impl_->scene->TryGetComponent<Collider>(entity);
+    const auto* settings = impl_->scene->TryGetComponent<RigidBody>(entity);
+    detail::PhysicsPose pose;
+    Impl::ShapeInput input;
+    if (!collider || !settings || !impl_->ReadShapeInput(entity, *settings, *collider, pose, input, error))
+        return false;
+    const auto result = CreateShape(input.collider, input.scale, input.geometry.get());
+    if (result.HasError()) {
+        error = result.GetError().c_str();
+        return false;
+    }
+    const auto start = triangles.size();
+    CollectShapeTriangles(*result.Get().GetPtr(), triangles);
+    for (auto i = start; i < triangles.size(); ++i)
+        triangles[i] = Vector3::Transform(triangles[i], pose.rotation) + pose.position;
+    return triangles.size() != start;
+}
+
 bool PhysicsSubsystem::DrawCollider(entt::entity entity, DebugDraw& draw, const DirectX::SimpleMath::Color& color,
                                     std::string& error) {
     error.clear();

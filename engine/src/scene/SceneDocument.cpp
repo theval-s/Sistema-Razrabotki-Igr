@@ -93,7 +93,7 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         entity.editorFolder = j.at("editorFolder").get<std::string>();
     }
     const auto& components = j.at("components");
-    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "BehaviorTree", "RigidBody", "Collider"});
+    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "BehaviorTree", "RigidBody", "Collider", "NavigationRegion", "NavigationSource"});
     if (components.contains("RigidBody")) {
         const auto& body = components.at("RigidBody");
         Fields(body, {"motionType", "mass", "friction", "restitution"});
@@ -106,6 +106,21 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         value.friction = Number(body.at("friction"));
         value.restitution = Number(body.at("restitution"));
         entity.rigidBody = value;
+    }
+    if (components.contains("NavigationRegion")) {
+        const auto& json = components.at("NavigationRegion");
+        Fields(json, {"halfExtents", "cellSize", "cellHeight", "agentHeight", "agentRadius", "agentClimb", "agentSlope"});
+        const auto extents = Numbers<3>(json.at("halfExtents"));
+        if (extents[0] <= 0 || extents[1] <= 0 || extents[2] <= 0)
+            throw std::invalid_argument("NavigationRegion half extents must be positive");
+        entity.navigationRegion = NavigationRegion{{extents[0], extents[1], extents[2]},
+            {Number(json.at("cellSize")), Number(json.at("cellHeight")), Number(json.at("agentHeight")),
+             Number(json.at("agentRadius")), Number(json.at("agentClimb")), Number(json.at("agentSlope"))}};
+    }
+    if (components.contains("NavigationSource")) {
+        const auto& json = components.at("NavigationSource");
+        Fields(json, {"useCollider"});
+        entity.navigationSource = NavigationSource{json.at("useCollider").get<bool>()};
     }
     if (components.contains("Collider")) {
         const auto& collider = components.at("Collider");
@@ -390,6 +405,15 @@ Json Encode(const SceneDocument& document) {
                 throw std::invalid_argument("invalid RigidBody motionType");
             components["RigidBody"] = {{"motionType", motion}, {"mass", body.mass}, {"friction", body.friction}, {"restitution", body.restitution}};
         }
+        if (entity.navigationRegion) {
+            const auto& region = *entity.navigationRegion;
+            const auto& s = region.settings;
+            components["NavigationRegion"] = {{"halfExtents", Encode(region.halfExtents)},
+                {"cellSize", s.cellSize}, {"cellHeight", s.cellHeight}, {"agentHeight", s.agentHeight},
+                {"agentRadius", s.agentRadius}, {"agentClimb", s.agentClimb}, {"agentSlope", s.agentSlope}};
+        }
+        if (entity.navigationSource)
+            components["NavigationSource"] = {{"useCollider", entity.navigationSource->useCollider}};
         if (entity.collider) {
             const auto& c = *entity.collider;
             const char* shape = "Box";
@@ -475,6 +499,8 @@ SceneEntityDefinition CaptureDefinition(const Scene& scene, const AssetSystem& a
     definition.tags.assign(tags.begin(), tags.end());
     if (const auto* controller = scene.GetControllerDefinition(entity)) definition.controller = *controller;
     if (const auto* body = scene.TryGetComponent<RigidBody>(entity)) definition.rigidBody = *body;
+    if (const auto* region = scene.TryGetComponent<NavigationRegion>(entity)) definition.navigationRegion = *region;
+    if (const auto* source = scene.TryGetComponent<NavigationSource>(entity)) definition.navigationSource = *source;
     if (const auto* box = scene.TryGetComponent<Collider>(entity)) definition.collider = *box;
     if (const auto* bounds = scene.TryGetComponent<Bounds>(entity)) definition.bounds = *bounds;
     if (const auto* persistence = scene.TryGetComponent<GamePersistence>(entity)) definition.persistence = *persistence;
@@ -533,6 +559,8 @@ void ApplyEntity(const SceneEntityDefinition& definition, AssetSystem& assets, S
     MatchComponent(destination, entity, definition.spotLight);
     MatchComponent(destination, entity, definition.rigidBody);
     MatchComponent(destination, entity, definition.collider);
+    MatchComponent(destination, entity, definition.navigationRegion);
+    MatchComponent(destination, entity, definition.navigationSource);
     MatchComponent(destination, entity, definition.bounds);
     MatchComponent(destination, entity, definition.persistence);
     MatchComponent(destination, entity, definition.script);
