@@ -28,6 +28,10 @@ std::string_view KindName(CatalogAssetKind kind) {
     case CatalogAssetKind::Scene: return "scene";
     case CatalogAssetKind::Script: return "script";
     case CatalogAssetKind::BehaviorTree: return "behaviorTree";
+    case CatalogAssetKind::UiDocument: return "ui_document";
+    case CatalogAssetKind::UiStylesheet: return "ui_stylesheet";
+    case CatalogAssetKind::UiTemplate: return "ui_template";
+    case CatalogAssetKind::Font: return "font";
     }
     return {};
 }
@@ -94,8 +98,9 @@ AssetMetadata MetadataFromJson(const Json& j) {
     const auto kind = j.at("kind").get<std::string>();
     bool found = false;
     for (const auto candidate : {CatalogAssetKind::Mesh, CatalogAssetKind::Texture, CatalogAssetKind::Shader,
-                                  CatalogAssetKind::Material, CatalogAssetKind::MaterialInstance, CatalogAssetKind::Scene,
-                                  CatalogAssetKind::Script, CatalogAssetKind::BehaviorTree}) {
+                                  CatalogAssetKind::Material, CatalogAssetKind::MaterialInstance, CatalogAssetKind::Scene, CatalogAssetKind::Script,
+                                  CatalogAssetKind::UiDocument, CatalogAssetKind::UiStylesheet, CatalogAssetKind::UiTemplate, CatalogAssetKind::Font,
+                                  CatalogAssetKind::BehaviorTree}) {
         if (kind == KindName(candidate)) { meta.kind = candidate; found = true; break; }
     }
     if (!found || (j.contains("centerOnLoad") && meta.kind != CatalogAssetKind::Mesh))
@@ -125,6 +130,10 @@ std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& 
     if (ext == ".fbx" || ext == ".gltf" || ext == ".glb" || ext == ".obj" ||
         ext == ".dae" || ext == ".blend" || ext == ".ply") return CatalogAssetKind::Mesh;
     if (ext == ".lua") return CatalogAssetKind::Script;
+    if (ext == ".rml") return CatalogAssetKind::UiDocument;
+    if (ext == ".rcss") return CatalogAssetKind::UiStylesheet;
+    if (ext == ".rmlt") return CatalogAssetKind::UiTemplate;
+    if (ext == ".ttf" || ext == ".otf") return CatalogAssetKind::Font;
     return std::nullopt;
 }
 

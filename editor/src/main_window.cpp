@@ -32,6 +32,7 @@
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/rendering/RenderExtractionSubsystem.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
+#include <engine/ui/UiSubsystem.hpp>
 
 #include <editor/edit_actions.hpp>
 #include <editor/editor_camera.hpp>
@@ -159,6 +160,7 @@ MainWindow::~MainWindow() {
     context_->playSession().stop();
     // The viewport outlives the engine (Qt deletes children after our members).
     viewport_->setInput(nullptr);
+    viewport_->setCamera(nullptr);
     // First, so nothing logs into the Log panel once it is gone.
     engine::log::Sinks()->remove_sink(log_sink_);
     // Modules and panels go before the engine they use.
@@ -211,15 +213,20 @@ void MainWindow::startEngine() {
     engine_.SetEditorMode();
     // The editor owns the loop: the engine only advances when we Tick() it.
     engine_.SetSurface(viewport_->surface());
-    // The camera's aspect ratio follows the surface (RenderExtractionSubsystem); the renderer keeps
-    // its initial buffer size and DXGI stretches it, so proportions stay right if blurrier.
+    // Resize rendering and UI in physical surface pixels.
     connect(viewport_, &ViewportWidget::surfaceResized, this,
             [this](quint32 width, quint32 height) { engine_.ResizeSurface(width, height); });
     // Input first, so it's latched before anything reads it; the editor camera last, so it
     // replaces the scene camera that RenderExtractionSubsystem copied into the RenderWorld.
     viewport_->setInput(engine_.AddSubsystem<engine::InputSubsystem>());
-    engine_.AddSubsystem<engine::ScriptSubsystem>();
     engine_.AddSubsystem<engine::RenderingSubsystem>();
+    engine::UiSubsystemConfig uiConfig;
+    uiConfig.host = viewport_->uiHost();
+#ifndef NDEBUG
+    uiConfig.enableDebugger = true;
+#endif
+    engine_.AddSubsystem<engine::UiSubsystem>(std::move(uiConfig));
+    engine_.AddSubsystem<engine::ScriptSubsystem>();
     engine_.AddSubsystem<engine::PhysicsSubsystem>();
     engine_.AddSubsystem<engine::RenderExtractionSubsystem>();
     camera_ = engine_.AddSubsystem<EditorCameraSubsystem>();
@@ -245,13 +252,19 @@ void MainWindow::refreshTitle() {
 }
 
 void MainWindow::tickEngine() {
+    // Poll the actual DPR too: a monitor/DPI change need not resize the pixel surface.
+    const auto metrics = viewport_->uiMetrics();
+    const auto& surface = engine_.GetSurface();
+    if (surface.width != metrics.pixelWidth || surface.height != metrics.pixelHeight)
+        engine_.ResizeSurface(metrics.pixelWidth, metrics.pixelHeight);
     engine_.Tick();
+    viewport_->applyCursorMode();
     refreshStatus();
 }
 
 void MainWindow::refreshPlayHint() {
     const PlaySession& session = context_->playSession();
-    if (!session.isPlaying() || session.isPaused()) {
+    if (!session.isPlaying()) {
         play_hint_->clear();
     } else if (!viewport_->capturesInput()) {
         play_hint_->setText(tr("Click the viewport to give the game input"));

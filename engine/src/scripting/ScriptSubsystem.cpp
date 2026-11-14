@@ -134,6 +134,7 @@ void ScriptSubsystem::EndPlay() noexcept {
     if (endingPlay_) return;
     endingPlay_ = true;
     playing_ = false;
+    runtime_.SuspendUiSession();
     ClearSceneScripts();
     runtime_.DestroyEntityInstances();
     for (auto it = autoloadInstances_.rbegin(); it != autoloadInstances_.rend(); ++it) {

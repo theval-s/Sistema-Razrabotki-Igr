@@ -14,14 +14,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 endif()
 
 add_custom_target(ExampleGameAssets ALL
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "$<TARGET_FILE_DIR:ExampleGame>/engine"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${PROJECT_SOURCE_DIR}/engine/shaders"
-        "$<TARGET_FILE_DIR:ExampleGame>/engine/shaders"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${PROJECT_SOURCE_DIR}/engine/primitives"
-        "$<TARGET_FILE_DIR:ExampleGame>/engine/primitives"
     ${GAME_SHADER_COPY_COMMAND}
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/ai"
@@ -35,6 +27,12 @@ add_custom_target(ExampleGameAssets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/scenes"
         "$<TARGET_FILE_DIR:ExampleGame>/game/scenes"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/ui"
+        "$<TARGET_FILE_DIR:ExampleGame>/game/ui"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/scripts"
+        "$<TARGET_FILE_DIR:ExampleGame>/game/scripts"
     COMMENT "Copying ExampleGame runtime assets"
     VERBATIM
 )
@@ -48,3 +46,22 @@ set_target_properties(ExampleGameAssets PROPERTIES
 )
 
 set_project_warnings(ExampleGame)
+
+# The standalone binary links the static engine, while vcpkg runtime DLLs are
+# collected recursively by the common deploy helper.
+sri_add_deploy(ExampleGame)
+install(DIRECTORY
+    "${PROJECT_SOURCE_DIR}/engine/shaders"
+    "${PROJECT_SOURCE_DIR}/engine/primitives"
+    "${PROJECT_SOURCE_DIR}/engine/ui"
+    DESTINATION engine COMPONENT ExampleGame
+)
+install(DIRECTORY
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+    "${CMAKE_CURRENT_SOURCE_DIR}/materials"
+    "${CMAKE_CURRENT_SOURCE_DIR}/models"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scenes"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ui"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts"
+    DESTINATION game COMPONENT ExampleGame
+)

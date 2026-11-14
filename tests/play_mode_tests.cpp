@@ -3,6 +3,7 @@
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/ai/BehaviorTree.hpp>
 #include <engine/core/FileSystem.hpp>
+#include <engine/input/InputSubsystem.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
 #include <engine/scene/SceneDocument.hpp>
 #include <engine/core/FrameContext.hpp>
@@ -263,11 +264,33 @@ TEST(PlayMode, LuaOpenLevelIsDeferredAndAutoloadStateSurvivesAcrossScenes) {
     EXPECT_EQ(f.host.GetScene().FindFirstByName("Last"), NullEntity);
 }
 
+TEST(PlayMode, CursorModeFromOnStartLastsUntilStop) {
+    PlayFixture f;
+    f.Level("Next");
+    auto* input = f.host.AddSubsystem<engine::InputSubsystem>();
+    const auto file = f.root / "Mouse.lua";
+    std::string error;
+    ASSERT_TRUE(engine::CreateNewFile(file, "return {OnStart = function(self) Input.SetCursorMode(CursorMode.Locked) end}", error));
+    const engine::AssetMetadata meta{engine::NewUuid(), engine::CatalogAssetKind::Script};
+    ASSERT_TRUE(engine::WriteAssetMetadata(file, meta, error));
+    ASSERT_TRUE(f.host.Initialize());
+    const std::vector<engine::AutoloadDefinition> autoloads{{"Mouse", {meta.id, "game/Mouse.lua"}, true}};
+    ASSERT_TRUE(f.host.PlayCurrentScene(f.root, autoloads, error)) << error;
+    f.host.Tick();
+    EXPECT_EQ(input->GetCursorMode(), engine::CursorMode::Locked);
+    ASSERT_TRUE(f.host.RequestOpenLevel("Next", error));
+    f.host.Tick();
+    EXPECT_EQ(input->GetCursorMode(), engine::CursorMode::Locked);
+    f.host.StopPlay();
+    EXPECT_EQ(input->GetCursorMode(), engine::CursorMode::Normal);
+}
+
 TEST(PlayMode, StartupFailureRestoresSceneAndCancelsQueuedLevel) {
     PlayFixture f; f.Level("Next");
+    auto* input = f.host.AddSubsystem<engine::InputSubsystem>();
     const auto file = f.root / "Bad.lua";
     std::string error;
-    ASSERT_TRUE(engine::CreateNewFile(file, "return {OnStart = function(self) assert(Scene.OpenLevel('Next')); error('fail') end}", error));
+    ASSERT_TRUE(engine::CreateNewFile(file, "return {OnStart = function(self) Input.SetCursorMode(CursorMode.Hidden); assert(Scene.OpenLevel('Next')); error('fail') end}", error));
     const engine::AssetMetadata meta{engine::NewUuid(), engine::CatalogAssetKind::Script};
     ASSERT_TRUE(engine::WriteAssetMetadata(file, meta, error));
     ASSERT_TRUE(f.host.Initialize());
@@ -275,6 +298,7 @@ TEST(PlayMode, StartupFailureRestoresSceneAndCancelsQueuedLevel) {
     const std::vector<engine::AutoloadDefinition> definitions{{"Bad", {meta.id, "game/Bad.lua"}, true}};
     EXPECT_FALSE(f.host.PlayCurrentScene(f.root, definitions, error));
     EXPECT_FALSE(f.host.IsPlaying());
+    EXPECT_EQ(input->GetCursorMode(), engine::CursorMode::Normal);
     f.host.Tick();
     EXPECT_NE(f.host.GetScene().FindFirstByName("Original"), NullEntity);
     EXPECT_EQ(f.host.GetScene().FindFirstByName("Next"), NullEntity);
@@ -306,6 +330,27 @@ TEST(PlayMode, NativeControllersStayDormantInEditAndRestartOnPlay) {
     ASSERT_TRUE(f.host.PlayCurrentScene(f.root, {}, error)) << error;
     EXPECT_EQ(created, 2);
     f.host.StopPlay();
+}
+
+TEST(PlayMode, NativeTeardownCannotLeaveCursorRequestInEditor) {
+    PlayFixture f;
+    auto* input = f.host.AddSubsystem<engine::InputSubsystem>();
+    struct CursorController : engine::Controller {
+        engine::InputSubsystem& input;
+        explicit CursorController(engine::InputSubsystem& in) : input(in) {}
+        void OnDestroy() override { input.SetCursorMode(engine::CursorMode::Hidden); }
+    };
+    ASSERT_TRUE(f.host.GetScene().RegisterController("cursor", {1, {}, [input] {
+        return std::make_unique<CursorController>(*input);
+    }}));
+    const auto entity = f.host.GetScene().CreateEntity("Controlled");
+    f.host.GetScene().AttachController(entity, {"cursor", 1, true, {}});
+    ASSERT_TRUE(f.host.Initialize());
+    std::string error;
+    ASSERT_TRUE(f.host.PlayCurrentScene(f.root, {}, error)) << error;
+    input->SetCursorMode(engine::CursorMode::Locked);
+    f.host.StopPlay();
+    EXPECT_EQ(input->GetCursorMode(), engine::CursorMode::Normal);
 }
 TEST(ScriptComponents, IndependentInstancesMoveOwnersAndStopRestoresAuthoringData) {
     PlayFixture f;

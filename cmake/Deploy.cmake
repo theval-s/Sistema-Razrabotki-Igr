@@ -23,6 +23,21 @@ set(SRI_DEPLOY_DIR "${CMAKE_BINARY_DIR}/deploy"
 set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
 include(InstallRequiredSystemLibraries)
 
+# Preserve vcpkg's per-port notice layout, including notices for transitive
+# dependencies. Font notices also travel with the installed engine/ui assets.
+function(sri_install_dependency_notices component)
+    install(FILES "${PROJECT_SOURCE_DIR}/external/rmlui-backend/LICENSE.txt"
+        DESTINATION licenses/rmlui-backend COMPONENT ${component})
+    install(FILES "${PROJECT_SOURCE_DIR}/engine/ui/fonts/LICENSE"
+        DESTINATION licenses/engine-fonts COMPONENT ${component})
+    if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET
+       AND EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share")
+        install(DIRECTORY "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/"
+            DESTINATION licenses/vcpkg COMPONENT ${component}
+            FILES_MATCHING PATTERN "copyright" PATTERN "LICENSE*" PATTERN "license*")
+    endif()
+endfunction()
+
 function(sri_add_deploy app)
     cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "LIBRARIES")
 
@@ -56,6 +71,7 @@ function(sri_add_deploy app)
             CONFIGURATIONS Release RelWithDebInfo MinSizeRel
         )
     endif()
+    sri_install_dependency_notices(${app})
 
     # Wipe first so files removed from the project do not linger in the folder.
     set(out "${SRI_DEPLOY_DIR}/$<CONFIG>/${app}")

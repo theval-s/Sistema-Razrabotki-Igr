@@ -6,8 +6,12 @@
 #include <QWidget>
 
 #include <optional>
+#include <memory>
+#include <engine/input/InputUiEvent.hpp>
+#include <engine/ui/UiHost.hpp>
 
 #include <engine/core/Surface.hpp>
+#include <engine/input/InputTypes.hpp>
 
 namespace engine {
 class InputSubsystem;
@@ -24,9 +28,10 @@ class ShortcutRegistry;
 /// can turn without hitting the screen edge, and every key goes to the camera rather than
 /// to shortcuts, so W/E/Q... keep flying.
 ///
-/// During Play the game has the input while the viewport captures it: from Play, Resume or
-/// a click into the viewport (which the game never sees) until the release shortcut, Pause,
+/// During Play the game has the input while the viewport captures it: from Play or
+/// a click into the viewport (which neither gameplay nor UI sees) until the release shortcut,
 /// Stop or focus loss. Meanwhile only the play shortcuts work, and no mouse signals go out.
+/// The game's cursor mode applies unless UI needs the pointer; Locked pins it at the centre.
 class ViewportWidget : public QWidget {
     Q_OBJECT
 
@@ -37,6 +42,8 @@ public:
     explicit ViewportWidget(QWidget* parent = nullptr);
 
     [[nodiscard]] engine::NativeSurface surface();
+    [[nodiscard]] std::shared_ptr<engine::UiHost> uiHost();
+    [[nodiscard]] engine::UiSurfaceMetrics uiMetrics() const;
     /// nullptr = input goes nowhere.
     void setInput(engine::InputSubsystem* input);
     void setCamera(EditorCameraSubsystem* camera);
@@ -44,14 +51,16 @@ public:
     void setShortcuts(ShortcutRegistry& shortcuts);
     /// Starting captures the input; stopping gives it back.
     void setPlaying(bool playing);
-    /// Pausing gives the input back, resuming captures it again.
+    /// Simulation pause does not revoke UI input or reacquire released editor focus.
     void setPaused(bool paused);
 
     /// Whether the game has the keyboard and mouse.
     [[nodiscard]] bool capturesInput() const noexcept { return captured_; }
-    /// Only while playing and not paused.
+    /// Available while playing, including paused simulation.
     void captureInput();
     void releaseInput();
+    /// Applies gameplay cursor mode and UI overrides while owning input; call every frame.
+    void applyCursorMode();
 
     /// No Qt painting at all, so it can't draw over the swap chain.
     [[nodiscard]] QPaintEngine* paintEngine() const override;
@@ -80,8 +89,21 @@ protected:
     void focusOutEvent(QFocusEvent* event) override;
     void focusInEvent(QFocusEvent* event) override;
     void leaveEvent(QEvent* event) override;
+    void inputMethodEvent(QInputMethodEvent* event) override;
+    QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
 
 private:
+    class HostBridge;
+    void queueUi(engine::InputUiEvent event, Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+                 std::optional<QPointF> position = std::nullopt);
+    void feedKey(QKeyEvent* event, bool down);
+    void cancelComposition();
+    std::shared_ptr<HostBridge> ui_host_;
+    engine::UiTextInputState text_input_;
+    engine::UiCaptureState ui_capture_;
+    Qt::CursorShape ui_cursor_ = Qt::ArrowCursor;
+    bool composing_ = false;
+    bool resetting_ime_ = false;
     [[nodiscard]] QSize pixelSize() const;
     /// Editing: always, the camera reads it. Playing: only while captured.
     [[nodiscard]] bool feedsEngine() const noexcept { return input_ != nullptr && (!playing_ || captured_); }
@@ -96,8 +118,10 @@ private:
     /// Global position of the previous mouse move; none after the cursor left the widget,
     /// so coming back in elsewhere isn't reported as a jump.
     std::optional<QPoint> last_cursor_{};
-    /// Right button held: cursor hidden and warped back to last_cursor_.
+    /// Right button held, or the game locked it: cursor hidden and warped back to last_cursor_.
     bool cursor_pinned_ = false;
+    /// The game's mode as applied; Normal while it doesn't have the input.
+    engine::CursorMode cursor_mode_ = engine::CursorMode::Normal;
     bool playing_ = false;
     bool paused_ = false;
     bool captured_ = false;

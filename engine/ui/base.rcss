@@ -1,0 +1,27 @@
+body { font-family: DejaVu Sans; color: #f1f4fa; font-size: 18dp; }
+div, p, h1 { display: block; }
+p { margin: 6dp 0dp 10dp; }
+h1 { font-size: 24dp; margin: 0dp 0dp 12dp; }
+.panel { background-color: #172236ee; border: 2dp #7386a6; border-radius: 10dp; padding: 18dp; }
+button { display: inline-block; background-color: #354f70; color: white; border: 1dp #a3b5cb; padding: 8dp 16dp; margin: 4dp; transition: background-color 0.15s; }
+button:hover { background-color: #577ba3; }
+button:focus-visible { border-color: #ffd36b; }
+input { display: inline-block; width: 90%; background-color: #263b55; color: white; border: 1dp #a3b5cb; padding: 5dp; }
+input.range { width: 90%; height: 18dp; }
+input.range slidertrack { background-color: #18273a; }
+input.range sliderbar { width: 18dp; background-color: #a3c7f0; border-radius: 4dp; }
+input.range sliderbar:hover { background-color: #e0efff; }
+input.range sliderarrowdec, input.range sliderarrowinc { width: 0dp; }
+.list { overflow-y: auto; height: 230dp; border-radius: 6dp; clip: always; }
+scrollbarvertical { width: 12dp; }
+scrollbarvertical slidertrack { background-color: #18273a; }
+scrollbarvertical sliderbar { min-height: 24dp; background-color: #7386a6; border-radius: 4dp; }
+scrollbarvertical sliderbar:hover { background-color: #a3b5cb; }
+scrollbarvertical sliderarrowdec, scrollbarvertical sliderarrowinc { height: 0dp; }
+.tooltip { display: none; color: #b7cfe7; font-size: 14dp; }
+.row:hover .tooltip { display: block; }
+.panel.dialog { max-height: 90%; overflow-y: auto; box-sizing: border-box; }
+@media (max-width: 700dp) {
+    .panel.dialog { top: 5%; left: 5%; width: 90%; }
+    .panel.hud { left: 5%; width: 90%; box-sizing: border-box; }
+}

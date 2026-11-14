@@ -76,6 +76,7 @@ void PresentPass::Render(RenderWorld& world, RenderingContext& context, Renderin
     context.SetShader(outlined ? outlinedPixelShader_ : pixelShader_);
     context.SetShaderResources(BindSlots::Texture::SceneResult, resources.gBuffer.resultTexture);
     if (outlined) context.SetShaderResources(BindSlots::Texture::Pass0, resources.selectionMask);
+    context.GetDeviceContext()->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context.RawDraw(6, 0);
     if (!world.debugDraw.GetLines().empty() || !world.debugDraw.GetScreenLines().empty()) {
         world.BindCameraView(context, resources);
@@ -87,7 +88,7 @@ void PresentPass::Render(RenderWorld& world, RenderingContext& context, Renderin
         context.DrawLines(world.debugDraw.GetScreenLines());
         context.GetDeviceContext()->GSSetShader(nullptr, nullptr, 0);
     }
-    context.Present();
+    // RenderingSystem composites the registered overlay and presents this target once.
 }
 
 bool PresentPass::PreReinitialize(RenderingResourceManager& resourceManager, RenderingContext& context,

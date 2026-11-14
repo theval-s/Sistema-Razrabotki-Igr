@@ -1,0 +1,5 @@
+.hud { position: absolute; top: 20dp; left: 20dp; width: 260dp; decorator: linear-gradient(to bottom, #263c58cc, #101929cc); }
+.dialog { position: absolute; top: 15%; left: 30%; width: 40%; }
+.row { padding: 7dp; border-bottom: 1dp #526983; }
+.hint { color: #b7cfe7; font-size: 14dp; }
+.badge { width: 32dp; height: 32dp; }

@@ -7,6 +7,35 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(spdlog CONFIG REQUIRED)
 find_package(directxtk CONFIG REQUIRED)
+find_package(RmlUi 6.3 CONFIG REQUIRED)
+
+set(ENGINE_UI_SOURCES
+    src/ui/UiDx11Renderer.cpp
+    src/ui/UiInterfaces.cpp
+    src/ui/UiModelStorage.cpp
+    src/ui/UiSubsystem.cpp
+)
+set(ENGINE_UI_HEADERS
+    include/engine/ui/UiHost.hpp
+    include/engine/ui/UiModel.hpp
+    include/engine/ui/UiSubsystem.hpp
+    include/engine/ui/UiTypes.hpp
+    include/engine/input/InputUiEvent.hpp
+)
+
+# Keep upstream backend warnings separate from the engine's warning policy.
+set(RMLUI_BACKEND_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../external/rmlui-backend")
+add_library(rmlui_dx11_backend STATIC
+    "${RMLUI_BACKEND_DIR}/RmlUi_Renderer_DX11.cpp"
+    "${RMLUI_BACKEND_DIR}/RmlUi_Renderer_DX11.h"
+    "${RMLUI_BACKEND_DIR}/RmlUi_Include_Windows.h"
+)
+target_link_libraries(rmlui_dx11_backend PRIVATE RmlUi::Core d3d11 d3dcompiler dxgi)
+target_compile_options(rmlui_dx11_backend PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/w>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-w>
+)
+set_target_properties(rmlui_dx11_backend PROPERTIES FOLDER "external")
 
 # --- Lua scripting ----------------------------------------------------------
 
@@ -27,6 +56,7 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/core/Log.hpp
     include/engine/core/ResourceID.hpp
     include/engine/core/Uuid.hpp
+    include/engine/core/Utf.hpp
     include/engine/engine.hpp
     include/engine/rendering/DebugDraw.hpp
     include/engine/rendering/FPSCamera.hpp
@@ -76,6 +106,7 @@ set(ENGINE_SOURCES
     src/core/Log.cpp
     src/core/ResourceID.cpp
     src/core/Uuid.cpp
+    src/core/Utf.cpp
     src/engine.cpp
     src/rendering/DebugDraw.cpp
     src/rendering/FPSCamera.cpp
@@ -134,6 +165,8 @@ source_group("Shaders" FILES ${ENGINE_SHADERS})
 
 add_library(engine SHARED
     ${ENGINE_SOURCES}
+    ${ENGINE_UI_SOURCES}
+    ${ENGINE_UI_HEADERS}
     ${ENGINE_PUBLIC_HEADERS}
     ${ENGINE_SHADERS}
 )
@@ -141,10 +174,31 @@ add_library(Engine::Engine ALIAS engine)
 
 add_library(engine_static STATIC
     ${ENGINE_SOURCES}
+    ${ENGINE_UI_SOURCES}
+    ${ENGINE_UI_HEADERS}
     ${ENGINE_PUBLIC_HEADERS}
     ${ENGINE_SHADERS}
 )
 add_library(Engine::EngineStatic ALIAS engine_static)
+
+# All runtime targets share the same output directory. Copy common assets once
+# before either engine variant is built, rather than racing per-application copies.
+get_property(SRI_ENGINE_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(SRI_ENGINE_MULTI_CONFIG)
+    set(SRI_ENGINE_ASSET_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/engine")
+else()
+    set(SRI_ENGINE_ASSET_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/engine")
+endif()
+add_custom_target(EngineRuntimeAssets
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/shaders" "${SRI_ENGINE_ASSET_DIR}/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/primitives" "${SRI_ENGINE_ASSET_DIR}/primitives"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/ui" "${SRI_ENGINE_ASSET_DIR}/ui"
+    COMMENT "Copying engine runtime assets"
+    VERBATIM
+)
+set_target_properties(EngineRuntimeAssets PROPERTIES FOLDER "engine")
+add_dependencies(engine EngineRuntimeAssets)
+add_dependencies(engine_static EngineRuntimeAssets)
 
 # --- Export macros ---------------------------------------------------------
 # Generates ENGINE_API (dllexport when building the dll, dllimport when
@@ -163,6 +217,7 @@ target_include_directories(engine
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${RMLUI_BACKEND_DIR}
 )
 
 target_include_directories(engine_static
@@ -172,6 +227,7 @@ target_include_directories(engine_static
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${RMLUI_BACKEND_DIR}
 )
 
 # The generated header makes ENGINE_API empty for static consumers.
@@ -183,14 +239,16 @@ target_link_libraries(engine
     PUBLIC
         spdlog::spdlog Microsoft::DirectXTK
     PRIVATE
-        d3d11 d3dcompiler dxgi dxguid ole32
+        d3d11 d3dcompiler dxgi dxguid ole32 imm32 windowscodecs
+        rmlui_dx11_backend RmlUi::Core $<$<CONFIG:Debug>:RmlUi::Debugger>
 )
 
 target_link_libraries(engine_static
     PUBLIC
         spdlog::spdlog Microsoft::DirectXTK
     PRIVATE
-        d3d11 d3dcompiler dxgi dxguid ole32
+        d3d11 d3dcompiler dxgi dxguid ole32 imm32 windowscodecs
+        rmlui_dx11_backend RmlUi::Core $<$<CONFIG:Debug>:RmlUi::Debugger>
 )
 
 set_target_properties(engine PROPERTIES
@@ -212,6 +270,20 @@ set_project_warnings(engine_static)
 
 # --- Install (SDK layout) --------------------------------------------------
 include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+set_target_properties(engine PROPERTIES EXPORT_NAME Engine)
+if(WIN32)
+    # Public headers transitively include Windows headers and use numeric_limits::max().
+    target_compile_definitions(engine INTERFACE $<INSTALL_INTERFACE:NOMINMAX>)
+endif()
+configure_package_config_file(cmake/EngineConfig.cmake.in
+    "${CMAKE_CURRENT_BINARY_DIR}/EngineConfig.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/Engine"
+)
+write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/EngineConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION} COMPATIBILITY SameMajorVersion
+)
 
 # Component "sdk", so the portable app deploys (cmake/Deploy.cmake) leave it out.
 install(TARGETS engine
@@ -236,6 +308,17 @@ install(EXPORT EngineTargets
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Engine
     COMPONENT sdk
 )
+if(COMMAND x_vcpkg_install_local_dependencies)
+    x_vcpkg_install_local_dependencies(
+        TARGETS engine DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT sdk
+    )
+endif()
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/EngineConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/EngineConfigVersion.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Engine COMPONENT sdk
+)
+sri_install_dependency_notices(sdk)
 
 # --- Core kernel -------------------------------------------------------------
 # Engine lifecycle, subsystems, events and the scene model -- the API
@@ -256,6 +339,7 @@ file(READ "${MATERIAL_SCHEMA_FILE}" MATERIAL_SCHEMA_JSON)
 configure_file(cmake/MaterialSchema.hpp.in generated/MaterialSchema.hpp @ONLY)
 
 set(ENGINE_CORE_HEADERS
+    include/engine/input/CursorPolicy.hpp
     include/engine/input/InputSubsystem.hpp
     include/engine/input/InputTypes.hpp
     include/engine/input/Win32InputHost.hpp

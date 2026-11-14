@@ -93,6 +93,7 @@ struct InputBindings {
         return result;
     }
     std::shared_ptr<GameplayInputContext> Default() { Refresh(); return gameplay; }
+    InputSubsystem* Subsystem() { Refresh(); return owner ? owner->Get() : nullptr; }
 };
 
 bool ValidKey(int key) {
@@ -204,6 +205,14 @@ void RegisterInput(sol::state& lua, LuaBindingsContext& context) {
     input.set_function("MouseDelta", [state] { auto c = state->Default(); return c ? c->lease.MouseDelta() : Vector2{}; });
     input.set_function("MousePosition", [state] { auto c = state->Default(); return c ? c->lease.MousePosition() : Vector2{}; });
     input.set_function("MouseWheel", [state] { auto c = state->Default(); return c ? c->lease.WheelDelta() : 0.f; });
+    input.set_function("SetCursorMode", [state](int mode) {
+        if (mode < int(CursorMode::Normal) || mode > int(CursorMode::Locked)) throw sol::error("invalid cursor mode");
+        if (auto* subsystem = state->Subsystem()) subsystem->SetCursorMode(static_cast<CursorMode>(mode));
+    });
+    input.set_function("GetCursorMode", [state] {
+        auto* subsystem = state->Subsystem();
+        return int(subsystem ? subsystem->GetCursorMode() : CursorMode::Normal);
+    });
     auto keys = lua.create_named_table("PhysicalKey");
     const char* letters[] = {"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"};
     for (int i = 0; i < 26; ++i) keys[letters[i]] = int(PhysicalKey::A) + i;
@@ -221,8 +230,13 @@ void RegisterInput(sol::state& lua, LuaBindingsContext& context) {
     buttons["Left"] = int(MouseButton::Left);
     buttons["Right"] = int(MouseButton::Right);
     buttons["Middle"] = int(MouseButton::Middle);
+    auto cursor = lua.create_named_table("CursorMode");
+    cursor["Normal"] = int(CursorMode::Normal);
+    cursor["Hidden"] = int(CursorMode::Hidden);
+    cursor["Locked"] = int(CursorMode::Locked);
     input["PhysicalKey"] = keys;
     input["MouseButton"] = buttons;
+    input["CursorMode"] = cursor;
 }
 
 Result PhysicsCommand(LuaBindingsContext& context, sol::object entity, sol::object vector,
@@ -279,6 +293,11 @@ void RegisterGameplayBindings(sol::state& lua, LuaBindingsContext& context) {
     time.set_function("RealDelta", [&context] { return context.engine ? context.engine->GetFrame().realDeltaSeconds : 0.; });
     time.set_function("RealTime", [&context] { return context.engine ? context.engine->GetFrame().realTimeSeconds : 0.; });
     time.set_function("IsPaused", [&context] { return context.engine && context.engine->IsPaused(); });
+    time.set_function("SetPaused", [&context](bool paused) {
+        if (!context.engine) return std::make_tuple(false, std::string("Time.SetPaused is unavailable without an Engine"));
+        context.engine->SetPaused(paused);
+        return std::make_tuple(true, std::string{});
+    });
 }
 
 } // namespace engine
