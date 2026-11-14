@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <string_view>
 
@@ -16,6 +18,8 @@ namespace engine::log {
 /// copies its sinks when created. Starts out with the console. The first call also points
 /// spdlog's default logger here, so plain spdlog::info() lands too, without a channel name.
 [[nodiscard]] ENGINE_API const std::shared_ptr<spdlog::sinks::dist_sink_mt>& Sinks();
+
+ENGINE_API bool AddFileSink(const std::filesystem::path& file, std::size_t maxBytes = 5 * 1024 * 1024, std::size_t files = 3);
 
 /// The logger for channel `name`, created on first use. Channels are registered with
 /// spdlog, so spdlog::set_level() and spdlog::flush_on() reach them. Takes a lock: look a

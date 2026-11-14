@@ -435,6 +435,8 @@ void Engine::SetEditorMode() {
     impl_->scene.SetControllerInstantiationEnabled(false);
 }
 
+bool Engine::IsEditorMode() const noexcept { return impl_->editorMode; }
+
 bool Engine::IsPlaying() const noexcept { return impl_->playSnapshot.has_value() || impl_->standalonePlaying; }
 
 bool Engine::PlayCurrentScene(const std::filesystem::path& root,

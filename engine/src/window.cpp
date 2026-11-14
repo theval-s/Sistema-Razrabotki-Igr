@@ -15,6 +15,15 @@ void SetInputMessageHandler(HWND window, InputMessageHandler handler) {
     else inputHandlers.erase(window);
 }
 
+bool DispatchInputMessage(HWND window, UINT message, WPARAM wparam, LPARAM lparam, LRESULT& result) {
+    const auto it = inputHandlers.find(window);
+    if (it == inputHandlers.end()) return false;
+    const auto handler = it->second;  // copy: the handler may detach itself
+    const bool handled = handler(window, message, wparam, lparam, result);
+    if (message == WM_NCDESTROY) inputHandlers.erase(window);
+    return handled;
+}
+
 //this function is even shittier than you think, it uses local statics, hence only one window could be handled properly
 HWND makeWindow(const std::uint32_t screenWidth, const uint32_t screenHeight, WindowResizedCallback * resizedCallback) {
     // Standalone surfaces and input use physical pixels. An embedding host that
@@ -26,12 +35,7 @@ HWND makeWindow(const std::uint32_t screenWidth, const uint32_t screenHeight, Wi
         static int newWidth = 0;
         static int newHeight = 0;
         static bool isResizing = false;
-        if (const auto it = inputHandlers.find(hwnd); it != inputHandlers.end()) {
-            auto handler = it->second;
-            LRESULT result = 0;
-            if (handler(hwnd, message, wparam, lparam, result)) return result;
-        }
-        if (message == WM_NCDESTROY) inputHandlers.erase(hwnd);
+        if (LRESULT result = 0; DispatchInputMessage(hwnd, message, wparam, lparam, result)) return result;
         if (message == WM_DESTROY) PostQuitMessage(0);
         if (message == WM_ENTERSIZEMOVE) {
             isResizing = true;

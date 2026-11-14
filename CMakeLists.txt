@@ -24,6 +24,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # --- Options ---------------------------------------------------------------
 option(SRI_BUILD_EDITOR "Build the Qt editor" ON)
 option(SRI_BUILD_EXAMPLE_GAME "Build the standalone example game" ON)
+option(SRI_BUILD_RUNTIME "Build the standalone game runtime" ON)
 option(SRI_BUILD_TESTS  "Build tests"         OFF)
 
 # --- Output layout ---------------------------------------------------------
@@ -52,6 +53,10 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 # --- Subprojects -----------------------------------------------------------
 add_subdirectory(external)   # git submodules
 add_subdirectory(engine)     # shared library (the SDK)
+
+if(SRI_BUILD_RUNTIME)
+    add_subdirectory(runtime)
+endif()
 
 if(SRI_BUILD_EXAMPLE_GAME)
     add_subdirectory(example_game)

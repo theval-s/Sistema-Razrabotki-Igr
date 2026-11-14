@@ -40,7 +40,7 @@ struct ENGINE_API RenderingContext {
     ~RenderingContext();
     
     /// Device and swap chain onto a host-owned window; false when there is nothing to render into.
-    bool Initialize(const NativeSurface& surface);
+    bool Initialize(const NativeSurface& surface, bool debugLayer);
     /// Reinit everything for new differently sized surface
     bool Reinitialize(const NativeSurface& surface) const;
 
@@ -86,7 +86,7 @@ struct ENGINE_API RenderingContext {
 
 private:
     static void checkResult(HRESULT result, const char* message);
-    bool CreateDeviceAndSwapChain(HWND outputWindow, uint32_t width, uint32_t height);
+    bool CreateDeviceAndSwapChain(HWND outputWindow, uint32_t width, uint32_t height, bool debugLayer);
 
     ComPtr<IDXGISwapChain> swapChain_;
     ComPtr<ID3D11Device> device_;

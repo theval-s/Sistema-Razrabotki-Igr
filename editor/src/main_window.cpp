@@ -30,6 +30,7 @@
 #include <DockManager.h>
 #include <DockWidget.h>
 
+#include <engine/core/DefaultSubsystems.hpp>
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/rendering/RenderExtractionSubsystem.hpp>
@@ -220,17 +221,7 @@ void MainWindow::startEngine() {
             [this](quint32 width, quint32 height) { engine_.ResizeSurface(width, height); });
     // Input first, so it's latched before anything reads it; the editor camera last, so it
     // replaces the scene camera that RenderExtractionSubsystem copied into the RenderWorld.
-    viewport_->setInput(engine_.AddSubsystem<engine::InputSubsystem>());
-    engine_.AddSubsystem<engine::RenderingSubsystem>();
-    engine::UiSubsystemConfig uiConfig;
-    uiConfig.host = viewport_->uiHost();
-#ifndef NDEBUG
-    uiConfig.enableDebugger = true;
-#endif
-    engine_.AddSubsystem<engine::UiSubsystem>(std::move(uiConfig));
-    engine_.AddSubsystem<engine::ScriptSubsystem>();
-    engine_.AddSubsystem<engine::PhysicsSubsystem>();
-    engine_.AddSubsystem<engine::RenderExtractionSubsystem>();
+    viewport_->setInput(engine::RegisterDefaultSubsystems(engine_, viewport_->uiHost()));
     camera_ = engine_.AddSubsystem<EditorCameraSubsystem>();
     engine_.AddSubsystem<ViewportOverlaySubsystem>(context_->selection(), *gizmo_, *viewport_);
 

@@ -20,7 +20,7 @@ namespace engine {
 
 struct ENGINE_API RenderingSystem {
     /// Renders into a host-owned window; false when the device could not be created.
-    bool Initialize(const NativeSurface& surface);
+    bool Initialize(const NativeSurface& surface, bool debugLayer);
     /// Re-inits all screen size dependant resource and sets new screen size (We hope that HWND doesn't change during game run)
     bool Reinitialize(const NativeSurface& surface);
     using OverlayCallback = std::function<void(RenderingContext&, const FrameContext&)>;

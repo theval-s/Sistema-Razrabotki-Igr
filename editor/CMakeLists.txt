@@ -110,12 +110,13 @@ endfunction()
 add_subdirectory(modules/scene)
 add_subdirectory(modules/content)
 add_subdirectory(modules/scripting)
+add_subdirectory(modules/build)
 
 # --- Install / deploy ------------------------------------------------------
 
 # `--target deploy_editor` assembles a portable editor in
 # build/<preset>/deploy/<config>/editor (see cmake/Deploy.cmake).
-sri_add_deploy(editor LIBRARIES engine editor_core qtadvanceddocking-qt6)
+sri_add_deploy(editor LIBRARIES engine editor_core qtadvanceddocking-qt6 sri-build)
 install(FILES "${PROJECT_SOURCE_DIR}/external/Qt-Advanced-Docking-System/LICENSE"
     DESTINATION licenses/qt-advanced-docking-system COMPONENT editor)
 
@@ -148,3 +149,22 @@ file(GENERATE
         OUTPUT  "$<TARGET_FILE_DIR:editor>/qt.conf"
         CONTENT "[Paths]\nPrefix = ${QT6_INSTALL_PREFIX}\n"
 )
+
+# --- Game export (Project > Build Game...) -----------------------------------
+# The build module runs sri-build.exe from the editor's folder; sri-build copies runtime/ from there.
+# deploy_sri_runtime makes this part of the editor build slower: switch it off while iterating on the editor.
+option(SRI_EDITOR_BUILD_RUNTIME_TEMPLATE "Build sri-build and the game runtime template with the editor" ON)
+if(SRI_BUILD_RUNTIME AND SRI_EDITOR_BUILD_RUNTIME_TEMPLATE)
+    add_dependencies(editor sri-build sri_runtime_template)
+endif()
+
+if(SRI_BUILD_RUNTIME)
+    # The finished deploy_sri_runtime folder becomes <editor>/runtime. Use the deploy_editor target:
+    # it builds deploy_sri_runtime first, a bare `cmake --install` would find the folder missing.
+    install(CODE "set(_runtime_template \"${SRI_DEPLOY_DIR}/\${CMAKE_INSTALL_CONFIG_NAME}/sri_runtime\")"
+            COMPONENT editor)
+    install(CODE [[
+        file(COPY "${_runtime_template}/" DESTINATION "${CMAKE_INSTALL_PREFIX}/runtime")
+    ]] COMPONENT editor)
+    add_dependencies(deploy_editor deploy_sri_runtime)
+endif()

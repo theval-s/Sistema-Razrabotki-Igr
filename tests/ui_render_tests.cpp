@@ -105,7 +105,7 @@ protected:
                                  0, 0, width, height, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
         ASSERT_NE(window, nullptr);
         graphics = std::make_unique<RenderingContext>();
-        ASSERT_TRUE(graphics->Initialize({window, width, height}));
+        ASSERT_TRUE(graphics->Initialize({window, width, height}, true));
         ASSERT_HRESULT_SUCCEEDED(graphics->GetDevice()->QueryInterface(IID_PPV_ARGS(messages.GetAddressOf())));
         messages->ClearStoredMessages();
         renderer = CreateUiDx11Renderer(*graphics, error);
@@ -475,7 +475,7 @@ class UiDx11SubsystemTest : public testing::Test {
 protected:
     std::filesystem::path oldRoot = AssetPathResolver::GetGameRoot();
     std::filesystem::path root = std::filesystem::temp_directory_path() / ("sri-ui-overlay-" + NewUuid());
-    Engine host{EngineConfig{.taskThreads = 1}};
+    Engine host{EngineConfig{.taskThreads = 1, .graphicsDebugLayer = true}};
     HWND window = nullptr;
     RenderingSubsystem* rendering = host.AddSubsystem<RenderingSubsystem>();
     std::shared_ptr<MetricsHost> platform = std::make_shared<MetricsHost>();

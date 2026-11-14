@@ -62,6 +62,12 @@ struct EngineConfig {
     /// Task scheduler threads to create in addition to the main thread.
     /// 0 = one per hardware thread, minus the main thread.
     std::uint32_t taskThreads = 0;
+    /// D3D11 debug layer; skipped with a warning where Graphics Tools are missing.
+#ifdef NDEBUG
+    bool graphicsDebugLayer = false;
+#else
+    bool graphicsDebugLayer = true;
+#endif
 };
 
 /// The engine kernel: owns the subsystems, the asset system, the active scene, the
@@ -131,6 +137,7 @@ public:
     ENGINE_API void SetPaused(bool paused);
     [[nodiscard]] ENGINE_API bool IsPaused() const noexcept;
     ENGINE_API void SetEditorMode();
+    [[nodiscard]] ENGINE_API bool IsEditorMode() const noexcept;
     [[nodiscard]] ENGINE_API bool IsPlaying() const noexcept;
     [[nodiscard]] ENGINE_API bool PlayCurrentScene(const std::filesystem::path& root,
         std::span<const AutoloadDefinition> autoloads, std::string& error);

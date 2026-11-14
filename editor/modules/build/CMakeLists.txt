@@ -1,0 +1,1 @@
+sri_add_editor_module(editor_module_build build_module.cpp)

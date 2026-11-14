@@ -13,6 +13,8 @@ using InputMessageHandler = std::function<bool(HWND, UINT, WPARAM, LPARAM, LRESU
 /// Called by the window procedure for both sent and queued messages. Return true
 /// to supply the result and bypass default handling. Empty detaches the listener.
 ENGINE_API void SetInputMessageHandler(HWND window, InputMessageHandler handler);
+/// For custom window procedures: call first, return `result` when it returns true.
+ENGINE_API bool DispatchInputMessage(HWND window, UINT message, WPARAM wparam, LPARAM lparam, LRESULT& result);
 
 //Some shitty window init, rewrite
 //only one window could be handled
