@@ -2,21 +2,38 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <unordered_map>
+#include <utility>
 
 namespace engine {
+namespace {
+std::unordered_map<HWND, InputMessageHandler> inputHandlers;
+}
+
+void SetInputMessageHandler(HWND window, InputMessageHandler handler) {
+    if (handler) inputHandlers[window] = std::move(handler);
+    else inputHandlers.erase(window);
+}
 
 //this function is even shittier than you think, it uses local statics, hence only one window could be handled properly
 HWND makeWindow(const std::uint32_t screenWidth, const uint32_t screenHeight, WindowResizedCallback * resizedCallback) {
+    // Standalone surfaces and input use physical pixels. An embedding host that
+    // already selected process awareness keeps its existing policy.
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     static WindowResizedCallback * callback = resizedCallback;
     
     WNDPROC windowFunction = [](HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)-> LRESULT{
         static int newWidth = 0;
         static int newHeight = 0;
         static bool isResizing = false;
-        if (message == WM_KEYDOWN) {
-            if (static_cast<unsigned int>(wparam) == 27) PostQuitMessage(0);
-            return 0;
-        } else if (message == WM_ENTERSIZEMOVE) {
+        if (const auto it = inputHandlers.find(hwnd); it != inputHandlers.end()) {
+            auto handler = it->second;
+            LRESULT result = 0;
+            if (handler(hwnd, message, wparam, lparam, result)) return result;
+        }
+        if (message == WM_NCDESTROY) inputHandlers.erase(hwnd);
+        if (message == WM_DESTROY) PostQuitMessage(0);
+        if (message == WM_ENTERSIZEMOVE) {
             isResizing = true;
         } else if (message == WM_SIZE) {
             newWidth = LOWORD(lparam);
@@ -62,7 +79,7 @@ HWND makeWindow(const std::uint32_t screenWidth, const uint32_t screenHeight, Wi
         .right = static_cast<LONG>(screenWidth),
         .bottom = static_cast<LONG>(screenHeight),
     };
-    if (!AdjustWindowRectEx(&windowRect, windowStyle, FALSE, windowExStyle)) {
+    if (!AdjustWindowRectExForDpi(&windowRect, windowStyle, FALSE, windowExStyle, GetDpiForSystem())) {
         std::cout << "AdjustWindowRectEx() failed: " << '\n' << GetLastError() << '\n';
         exit(-1);
     }

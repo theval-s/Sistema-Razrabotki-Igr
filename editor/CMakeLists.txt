@@ -65,14 +65,6 @@ set_target_properties(editor PROPERTIES
 
 set_project_warnings(editor)
 
-# Shader paths are resolved beside the executable, just like the game assets.
-add_custom_command(TARGET editor POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:editor>/engine"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${PROJECT_SOURCE_DIR}/engine/shaders" "$<TARGET_FILE_DIR:editor>/engine/shaders"
-    VERBATIM
-)
-
 # --- Runtime DLLs (Windows) ------------------------------------------------
 # Engine.dll already lands in the same bin/ directory via the global output
 # settings; this additionally copies Qt and vcpkg DLLs next to the executable
@@ -85,23 +77,6 @@ if(WIN32)
         VERBATIM
     )
 endif()
-
-# --- Engine runtime files -------------------------------------------------
-# The renderer compiles its shaders from <exe dir>/engine/shaders at startup;
-# engine/primitives holds the built-in meshes and textures (engine::BuiltinAssets).
-add_custom_target(EditorAssets ALL
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:editor>/engine"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${PROJECT_SOURCE_DIR}/engine/shaders"
-        "$<TARGET_FILE_DIR:editor>/engine/shaders"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${PROJECT_SOURCE_DIR}/engine/primitives"
-        "$<TARGET_FILE_DIR:editor>/engine/primitives"
-    COMMENT "Copying editor runtime assets"
-    VERBATIM
-)
-add_dependencies(editor EditorAssets)
-set_target_properties(EditorAssets PROPERTIES FOLDER "tools")
 
 # --- Editor modules --------------------------------------------------------
 # Each module is a DLL in <exe dir>/editor_modules, loaded once at startup
@@ -141,10 +116,13 @@ add_subdirectory(modules/scripting)
 # `--target deploy_editor` assembles a portable editor in
 # build/<preset>/deploy/<config>/editor (see cmake/Deploy.cmake).
 sri_add_deploy(editor LIBRARIES engine editor_core qtadvanceddocking-qt6)
+install(FILES "${PROJECT_SOURCE_DIR}/external/Qt-Advanced-Docking-System/LICENSE"
+    DESTINATION licenses/qt-advanced-docking-system COMPONENT editor)
 
 install(DIRECTORY
         "${PROJECT_SOURCE_DIR}/engine/shaders"
         "${PROJECT_SOURCE_DIR}/engine/primitives"
+        "${PROJECT_SOURCE_DIR}/engine/ui"
     DESTINATION engine
     COMPONENT editor
 )

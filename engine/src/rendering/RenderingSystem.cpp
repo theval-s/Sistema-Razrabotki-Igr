@@ -66,7 +66,7 @@ void RenderingSystem::InitializePasses(const uint32_t screenWidth, const uint32_
     }
 }
 
-void RenderingSystem::RenderFrame(const FrameContext& frame) {
+void RenderingSystem::RenderFrame(const FrameContext& frame, const OverlayCallback& overlay) {
     if (!ready_) {
         return;
     }
@@ -79,8 +79,10 @@ void RenderingSystem::RenderFrame(const FrameContext& frame) {
 
     for (const auto& renderPass : renderPasses_) {
         renderPass->Render(world_, renderingContext_, resources_);
+        if (renderPass == renderPasses_.back() && overlay) overlay(renderingContext_, frame);
         renderingContext_.ClearHazardousState();
     }
+    renderingContext_.Present();
 }
 
 RenderingSystem::~RenderingSystem() {

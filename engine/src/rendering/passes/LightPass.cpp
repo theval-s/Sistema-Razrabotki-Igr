@@ -99,6 +99,7 @@ void LightPass::Render(RenderWorld& world, RenderingContext& context, RenderingR
     context.SetRasterizerState(RasterizerState::CullNone);
     UpdateLight(context, resources, world.directionalLight);
     context.SetShader(dirLightVertexShader_);
+    context.GetDeviceContext()->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context.RawDraw(6, 0);
 }
 

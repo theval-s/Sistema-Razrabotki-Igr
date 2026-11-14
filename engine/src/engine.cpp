@@ -17,6 +17,7 @@
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/ResourceID.hpp>
 #include <engine/core/PathUtils.hpp>
+#include <engine/input/InputSubsystem.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/scene/SceneDocument.hpp>
 #include <engine/scene/GameDocument.hpp>
@@ -457,6 +458,8 @@ void Engine::StopPlay() {
     CancelGameRequests();
     impl_->queuedScene.reset();
     CommitScene(impl_->playSnapshot->scene);
+    // Reset after both Lua and native teardown callbacks have run.
+    if (auto* input = GetSubsystem<InputSubsystem>()) input->SetCursorMode(CursorMode::Normal);
     impl_->sceneBaseline = impl_->playSnapshot->baseline;
     impl_->sceneReference = impl_->playSnapshot->reference;
     impl_->hasSceneReference = impl_->playSnapshot->hasReference;
@@ -514,6 +517,7 @@ void Engine::StopGame() {
     }
     impl_->scene.SetControllersActive(false);
     ResetSimulation();
+    if (auto* input = GetSubsystem<InputSubsystem>()) input->SetCursorMode(CursorMode::Normal);
     impl_->standalonePlaying = false;
     CancelGameRequests();
     impl_->queuedScene.reset();
@@ -846,6 +850,7 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
         impl_->queuedScene.reset();
         scripting->EndPlay();
         CommitScene(restored);
+        if (auto* input = GetSubsystem<InputSubsystem>()) input->SetCursorMode(CursorMode::Normal);
         impl_->sceneBaseline = base;
         impl_->sceneReference = reference;
         impl_->hasSceneReference = true;

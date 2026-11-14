@@ -19,7 +19,8 @@ struct AssetReference {
     bool operator==(const AssetReference&) const = default;
 };
 
-enum class CatalogAssetKind { Mesh, Texture, Shader, Material, MaterialInstance, Scene, Script };
+enum class CatalogAssetKind { Mesh, Texture, Shader, Material, MaterialInstance, Scene, Script,
+                              UiDocument, UiStylesheet, UiTemplate, Font };
 
 struct AssetMetadata {
     AssetUuid id;

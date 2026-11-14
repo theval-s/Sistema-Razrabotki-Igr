@@ -34,6 +34,11 @@ inline spdlog::logger& Render() {
     return logger;
 }
 
+inline spdlog::logger& Ui() {
+    static spdlog::logger& logger = Channel("UI");
+    return logger;
+}
+
 inline spdlog::logger& Assets() {
     static spdlog::logger& logger = Channel("Assets");
     return logger;

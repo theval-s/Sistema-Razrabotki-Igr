@@ -26,12 +26,19 @@ public:
     /// The surface this subsystem renders into, as handed by the host.
     [[nodiscard]] const NativeSurface& GetSurface() const noexcept;
 
+    // Single engine-owned overlay lease. The owner must detach before its shutdown;
+    // duplicate registration is rejected rather than replacing a live callback.
+    void SetOverlayCallbacks(RenderingSystem::OverlayCallback render, std::function<void()> beforeResize);
+    void ClearOverlayCallbacks() noexcept;
+
 private:
     void OnSurfaceChanged(const SurfaceChangedEvent& event);
 
     RenderingSystem renderer_{};
     NativeSurface surface_{};
     bool resizePending_ = false;
+    RenderingSystem::OverlayCallback overlay_;
+    std::function<void()> beforeOverlayResize_;
 };
 
 }  // namespace engine
