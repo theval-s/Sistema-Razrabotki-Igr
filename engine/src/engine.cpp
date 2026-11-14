@@ -5,8 +5,10 @@
 #include <cstddef>
 #include <deque>
 #include <optional>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <TaskScheduler.h>
@@ -20,6 +22,9 @@
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/scene/SceneDocument.hpp>
+#include <engine/navigation/NavigationMesh.hpp>
+#include <engine/physics/PhysicsSubsystem.hpp>
+#include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/GameDocument.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
 
@@ -55,6 +60,7 @@ struct Engine::Impl {
     explicit Impl(EngineConfig engineConfig) : config(std::move(engineConfig)) {}
 
     EngineConfig config;
+    std::unordered_map<EntityUuid, NavigationMesh, EntityUuidHash> navigation;
     // Registration order == Initialize/Update/Render order. Accessed by index
     // everywhere so subsystems may register more subsystems while running.
     std::vector<Entry> subsystems;
@@ -70,6 +76,8 @@ struct Engine::Impl {
     std::uint64_t simulationRevision = 0;
     std::uint64_t nextFrameIndex = 0;
     std::chrono::steady_clock::time_point lastTickTime{};
+    std::chrono::steady_clock::time_point lastTickEnd{};
+    std::chrono::steady_clock::time_point lastBacklogWarning{};
 
     entt::dispatcher events;
     // GPU clones belong to the active scene runtime, never to serializable components.
@@ -96,6 +104,7 @@ struct Engine::Impl {
     };
     std::deque<GameRequest> gameRequests;
     struct PlaySnapshot {
+        std::unordered_map<EntityUuid, NavigationMesh, EntityUuidHash> navigation;
         SceneDocument scene, baseline;
         AssetReference reference;
         bool hasReference = false;
@@ -286,6 +295,10 @@ void Engine::Tick() {
         if (!LoadScene(file, error) || !error.empty()) log::Engine().error("Deferred scene load: {}", error);
     }
     const auto revision = impl_->simulationRevision;
+    using Milliseconds = std::chrono::duration<double, std::milli>;
+    const auto fixedStart = std::chrono::steady_clock::now();
+    double crowdMilliseconds = 0;
+    bool discardedBacklog = false;
     // A newly committed scene starts accumulating time on the next frame.
     if (!impl_->paused && (!impl_->editorMode || IsPlaying()) && revision == frameRevision) {
         impl_->fixedAccumulator += current.deltaSeconds;
@@ -299,6 +312,12 @@ void Engine::Tick() {
             for (std::size_t i = 0; i < impl_->subsystems.size(); ++i)
                 impl_->subsystems[i].subsystem->FixedUpdate(step);
             impl_->inCallbacks = false;
+            const auto crowdStart = std::chrono::steady_clock::now();
+            impl_->scene.ForEach<NavigationRegion>([&](entt::entity region, const NavigationRegion&) {
+                if (const auto* mesh = GetNavigationMesh(region))
+                    mesh->UpdateCrowd(static_cast<float>(step.deltaSeconds), impl_->scene);
+            });
+            crowdMilliseconds += Milliseconds(std::chrono::steady_clock::now() - crowdStart).count();
             ++impl_->fixedStep.stepIndex;
             ++steps;
             if (impl_->queuedScene) {
@@ -312,9 +331,10 @@ void Engine::Tick() {
         }
         if (impl_->fixedAccumulator >= impl_->config.fixedStepSeconds) {
             impl_->fixedAccumulator = std::fmod(impl_->fixedAccumulator, impl_->config.fixedStepSeconds);
-            log::Engine().warn("FixedUpdate catch-up limit reached; discarded simulation backlog");
+            discardedBacklog = true;
         }
     }
+    const auto renderStart = std::chrono::steady_clock::now();
     for (std::size_t i = 0; i < impl_->subsystems.size(); ++i) {
         impl_->subsystems[i].subsystem->LateUpdate(current);
     }
@@ -323,6 +343,19 @@ void Engine::Tick() {
     }
     if (auto* scripting = GetSubsystem<ScriptSubsystem>()) scripting->GetRuntime().FlushSceneCommands();
     ProcessGameRequests();
+    const auto frameEnd = std::chrono::steady_clock::now();
+    const auto previousEnd = std::exchange(impl_->lastTickEnd, frameEnd);
+    if (discardedBacklog && frameEnd - impl_->lastBacklogWarning >= std::chrono::seconds(1)) {
+        impl_->lastBacklogWarning = frameEnd;
+        const double outsideTick = previousEnd.time_since_epoch().count()
+            ? Milliseconds(now - previousEnd).count() : 0;
+        log::Engine().warn("FixedUpdate catch-up limit reached; discarded simulation backlog "
+                           "(between ticks {:.1f} ms, update {:.1f} ms, fixed updates {:.1f} ms "
+                           "including crowd {:.1f} ms, late update/render {:.1f} ms)",
+            outsideTick, Milliseconds(fixedStart - now).count(),
+            Milliseconds(renderStart - fixedStart).count(), crowdMilliseconds,
+            Milliseconds(frameEnd - renderStart).count());
+    }
 }
 
 bool Engine::Run() {
@@ -417,6 +450,7 @@ bool Engine::PlayCurrentScene(const std::filesystem::path& root,
     }
     Impl::PlaySnapshot snapshot;
     if (!CaptureSceneDocument(impl_->scene, *impl_->sceneAssets, snapshot.scene, error)) return false;
+    snapshot.navigation = impl_->navigation;
     snapshot.baseline = impl_->sceneBaseline;
     snapshot.reference = impl_->sceneReference;
     snapshot.hasReference = impl_->hasSceneReference;
@@ -426,6 +460,7 @@ bool Engine::PlayCurrentScene(const std::filesystem::path& root,
     impl_->autoloads.assign(autoloads.begin(), autoloads.end());
     impl_->queuedScene.reset();
     CommitScene(impl_->playSnapshot->scene);
+    impl_->navigation = impl_->playSnapshot->navigation;
     scripting->GetRuntime().SetLevelLoader([this](std::string_view name, std::string& failure) {
         return RequestOpenLevel(name, failure);
     });
@@ -458,11 +493,13 @@ void Engine::StopPlay() {
     CancelGameRequests();
     impl_->queuedScene.reset();
     CommitScene(impl_->playSnapshot->scene);
+    impl_->navigation = impl_->playSnapshot->navigation;
     // Reset after both Lua and native teardown callbacks have run.
     if (auto* input = GetSubsystem<InputSubsystem>()) input->SetCursorMode(CursorMode::Normal);
     impl_->sceneBaseline = impl_->playSnapshot->baseline;
     impl_->sceneReference = impl_->playSnapshot->reference;
     impl_->hasSceneReference = impl_->playSnapshot->hasReference;
+    for (const auto& entry : impl_->navigation) entry.second.ClearCrowd();
     impl_->playSnapshot.reset();
     impl_->sessionRoot.clear();
     impl_->autoloads.clear();
@@ -517,6 +554,7 @@ void Engine::StopGame() {
     }
     impl_->scene.SetControllersActive(false);
     ResetSimulation();
+    for (const auto& entry : impl_->navigation) entry.second.ClearCrowd();
     if (auto* input = GetSubsystem<InputSubsystem>()) input->SetCursorMode(CursorMode::Normal);
     impl_->standalonePlaying = false;
     CancelGameRequests();
@@ -618,6 +656,7 @@ void Engine::ResetSimulation() {
 }
 
 void Engine::CommitScene(const SceneDocument& document) {
+    impl_->navigation.clear();
     ResetSimulation();
     if (auto* scripting = GetSubsystem<ScriptSubsystem>()) {
         scripting->ClearSceneScripts();
@@ -967,6 +1006,119 @@ void Engine::ClearEntityMaterialOverride(entt::entity entity) {
 
 AssetSystem& Engine::GetAssets() noexcept {
     return *impl_->assets;
+}
+
+const NavigationMesh* Engine::GetNavigationMesh(entt::entity region) const {
+    const auto& scene = impl_->scene;
+    if (!scene.HasComponent<NavigationRegion>(region)) return nullptr;
+    const auto found = impl_->navigation.find(scene.GetId(region));
+    return found == impl_->navigation.end() ? nullptr : &found->second;
+}
+
+void Engine::DrawNavigationMeshes(DebugDraw& draw) const {
+    impl_->scene.ForEach<NavigationRegion>([&](entt::entity region, const NavigationRegion&) {
+        if (const auto* mesh = GetNavigationMesh(region)) mesh->Draw(draw);
+    });
+}
+
+std::vector<DirectX::SimpleMath::Vector3> Engine::FindNavigationPath(
+    DirectX::SimpleMath::Vector3 start, DirectX::SimpleMath::Vector3 goal, entt::entity region) const {
+    if (region != entt::null) {
+        const auto* mesh = GetNavigationMesh(region);
+        return mesh ? mesh->FindPath(start, goal) : std::vector<DirectX::SimpleMath::Vector3>{};
+    }
+
+    std::vector<DirectX::SimpleMath::Vector3> best;
+    float bestLength = std::numeric_limits<float>::infinity();
+    EntityUuid bestId{};
+    impl_->scene.ForEach<NavigationRegion>([&](entt::entity candidate, const NavigationRegion&) {
+        const auto* mesh = GetNavigationMesh(candidate);
+        if (!mesh) return;
+        auto path = mesh->FindPath(start, goal);
+        if (path.empty()) return;
+        float length = (path.front() - start).Length() + (goal - path.back()).Length();
+        for (std::size_t i = 1; i < path.size(); ++i) length += (path[i] - path[i - 1]).Length();
+        const auto id = impl_->scene.GetId(candidate);
+        if (length < bestLength || (length == bestLength && id < bestId)) {
+            bestLength = length;
+            bestId = id;
+            best = std::move(path);
+        }
+    });
+    return best;
+}
+
+bool Engine::BuildNavigation(entt::entity entity, std::string& error) {
+    using DirectX::SimpleMath::Vector3;
+    error.clear();
+    const Scene& scene = GetScene();
+    const auto* region = scene.TryGetComponent<NavigationRegion>(entity);
+    if (!region) {
+        error = "Select an entity with a Navigation Region";
+        return false;
+    }
+    const auto center = scene.GetWorldMatrix(entity).Translation();
+    const auto minimum = center - region->halfExtents;
+    const auto maximum = center + region->halfExtents;
+    std::vector<Vector3> vertices;
+    std::vector<int> indices;
+    auto& assets = GetSceneAssets();
+    auto* physics = GetSubsystem<PhysicsSubsystem>();
+    constexpr std::size_t limit = 3000000;
+    scene.ForEach<NavigationSource>([&](entt::entity source, const NavigationSource& settings) {
+        if (!error.empty()) return;
+        const auto* body = scene.TryGetComponent<RigidBody>(source);
+        const auto* collider = scene.TryGetComponent<Collider>(source);
+        if ((body && body->motionType != MotionType::Static) || (collider && collider->isTrigger)) return;
+
+        if (settings.useCollider) {
+            const auto first = vertices.size();
+            if (!physics || !physics->CollectColliderTriangles(source, vertices, error)) {
+                if (error.empty()) error = "A Navigation Source requires a valid static collider";
+                return;
+            }
+            if (vertices.size() > limit || vertices.size() - first > limit - indices.size()) {
+                error = "Too many navigation triangles";
+                return;
+            }
+            for (auto i = first; i < vertices.size(); ++i) indices.push_back(static_cast<int>(i));
+            return;
+        }
+        const auto* renderer = scene.TryGetComponent<MeshRenderer>(source);
+        if (!renderer) {
+            error = "A Navigation Source requires a Mesh Renderer";
+            return;
+        }
+        const auto mesh = assets.Peek(renderer->mesh);
+        if (!mesh || !mesh->geometry) {
+            error = "A navigation source mesh is not loaded";
+            return;
+        }
+        const auto& geometry = *mesh->geometry;
+        if (geometry.positions.size() > limit - vertices.size() ||
+            geometry.indices.size() > limit - indices.size()) {
+            error = "Too many navigation triangles";
+            return;
+        }
+        const int base = static_cast<int>(vertices.size());
+        const auto world = scene.GetWorldMatrix(source);
+        for (const auto position : geometry.positions)
+            vertices.push_back(Vector3::Transform(position, world));
+        for (const auto index : geometry.indices)
+            indices.push_back(base + static_cast<int>(index));
+    });
+    if (!error.empty()) return false;
+    if (indices.empty()) {
+        error = "Add a Navigation Source to the floor and any walls that affect movement";
+        return false;
+    }
+    NavigationMesh mesh;
+    if (!mesh.BuildRegion(vertices, indices, region->settings, minimum, maximum)) {
+        error = "No walkable mesh was built. Check the region bounds, geometry and agent settings.";
+        return false;
+    }
+    impl_->navigation.insert_or_assign(scene.GetId(entity), mesh);
+    return true;
 }
 
 AssetSystem& Engine::GetSceneAssets() noexcept {

@@ -1,3 +1,4 @@
+#include <QMessageBox>
 #include "component_inspectors.hpp"
 
 #include <QAbstractItemView>
@@ -231,6 +232,31 @@ void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt
             used ? QObject::tr("%1 (missing)").arg(QString::fromStdString(used->path.empty() ? used->id.ToString() : used->path))
                  : QObject::tr("None"));
     });
+}
+
+void buildNavigationRegion(PropertyForm& form, editor::EditorContext& context, entt::entity entity) {
+    auto& scene = context.scene();
+    using Region = engine::NavigationRegion;
+    using Settings = engine::NavigationSettings;
+    form.addVec3(QObject::tr("Half extents (world axes)"), field(scene, entity, &Region::halfExtents));
+    form.addFloat(QObject::tr("Cell size"), field(scene, entity, &Region::settings, &Settings::cellSize));
+    form.addFloat(QObject::tr("Cell height"), field(scene, entity, &Region::settings, &Settings::cellHeight));
+    form.addFloat(QObject::tr("Agent height"), field(scene, entity, &Region::settings, &Settings::agentHeight));
+    form.addFloat(QObject::tr("Agent radius"), field(scene, entity, &Region::settings, &Settings::agentRadius));
+    form.addFloat(QObject::tr("Maximum step"), field(scene, entity, &Region::settings, &Settings::agentClimb));
+    form.addFloat(QObject::tr("Maximum slope (degrees)"), field(scene, entity, &Region::settings, &Settings::agentSlope));
+    auto* bake = new QPushButton(QObject::tr("Bake Navigation Mesh"));
+    QObject::connect(bake, &QPushButton::clicked, bake, [&context, entity, bake] {
+        std::string error;
+        if (!context.engine().BuildNavigation(entity, error))
+            QMessageBox::warning(bake, QObject::tr("Navigation Region"), QString::fromStdString(error));
+    });
+    form.addRow({}, bake, [&context, bake] { bake->setEnabled(!context.engine().IsPlaying()); });
+}
+
+void buildNavigationSource(PropertyForm& form, editor::EditorContext& context, entt::entity entity) {
+    form.addBool(QObject::tr("Use Collider (off: Mesh Renderer)"),
+                 field(context.scene(), entity, &engine::NavigationSource::useCollider));
 }
 
 void buildMeshRenderer(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
@@ -720,6 +746,9 @@ std::span<const ComponentInspector> componentInspectors() {
         {entt::type_hash<engine::Tags>::value(), QObject::tr("Tags"), buildTags},
         {entt::type_hash<engine::MeshRenderer>::value(), QObject::tr("Mesh Renderer"), buildMeshRenderer,
          addMeshRenderer, removeComponent<engine::MeshRenderer>},
+        {entt::type_hash<engine::NavigationRegion>::value(), QObject::tr("NavMesh"), buildNavigationRegion},
+        {entt::type_hash<engine::NavigationSource>::value(), QObject::tr("Navigation Source"), buildNavigationSource,
+         addComponent<engine::NavigationSource>, removeComponent<engine::NavigationSource>},
         {entt::type_hash<engine::Camera>::value(), QObject::tr("Camera"), buildCamera, addComponent<engine::Camera>,
          removeComponent<engine::Camera>},
         {entt::type_hash<engine::DirectionalLight>::value(), QObject::tr("Directional Light"), buildDirectionalLight,

@@ -12,6 +12,7 @@
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/Transform.hpp>
 #include <engine/physics/PhysicsComponents.hpp>
+#include <engine/navigation/NavigationMesh.hpp>
 #include <engine/scene/Components.hpp>
 #include <engine/scene/Controller.hpp>
 #include <engine/scene/SceneQueries.hpp>
@@ -44,6 +45,8 @@ struct SceneEntityDefinition {
     std::optional<Bounds> bounds;
     std::optional<RigidBody> rigidBody;
     std::optional<Collider> collider;
+    std::optional<NavigationRegion> navigationRegion;
+    std::optional<NavigationSource> navigationSource;
     std::optional<GamePersistence> persistence;
     std::optional<ScriptComponent> script;
     bool operator==(const SceneEntityDefinition&) const = default;

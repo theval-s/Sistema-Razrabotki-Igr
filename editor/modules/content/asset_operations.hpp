@@ -70,7 +70,7 @@ public:
     bool updateMaterial(const QString& path, const engine::MaterialDefinition& definition);
     bool updateMaterialInstance(const QString& path, const engine::MaterialInstanceDefinition& definition);
     /// Write a new .lua script from the default template at `path`, with its meta. False on failure.
-    bool createScript(const QString& path);
+    bool createScript(const QString& path, bool followNavigation = false);
     /// Adds metas and rescans
     void adoptNewFiles();
     void rescan();
