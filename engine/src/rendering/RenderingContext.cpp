@@ -20,12 +20,12 @@ RenderingContext::~RenderingContext() {
 }
 
 
-bool RenderingContext::Initialize(const NativeSurface& surface) {
+bool RenderingContext::Initialize(const NativeSurface& surface, const bool debugLayer) {
     if (!surface.IsValid()) {
         log::Render().error("RenderingContext::Initialize: the engine has no valid native surface");
         return false;
     }
-    return CreateDeviceAndSwapChain(static_cast<HWND>(surface.windowHandle), surface.width, surface.height);
+    return CreateDeviceAndSwapChain(static_cast<HWND>(surface.windowHandle), surface.width, surface.height, debugLayer);
 }
 
 bool RenderingContext::Reinitialize(const NativeSurface& surface) const {
@@ -41,7 +41,8 @@ bool RenderingContext::Reinitialize(const NativeSurface& surface) const {
 }
 
 
-bool RenderingContext::CreateDeviceAndSwapChain(const HWND hwnd, const uint32_t width, const uint32_t height) {
+bool RenderingContext::CreateDeviceAndSwapChain(const HWND hwnd, const uint32_t width, const uint32_t height,
+                                                const bool debugLayer) {
     const DXGI_SWAP_CHAIN_DESC swapChainDesc{
         .BufferDesc = DXGI_MODE_DESC{
             .Width = width,
@@ -59,26 +60,6 @@ bool RenderingContext::CreateDeviceAndSwapChain(const HWND hwnd, const uint32_t 
         .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
         .Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH,
     };
-    /*
-    constexpr D3D_FEATURE_LEVEL featureLevel[] = {D3D_FEATURE_LEVEL_11_1};
-    const HRESULT r = D3D11CreateDeviceAndSwapChain(
-        nullptr,
-        D3D_DRIVER_TYPE_HARDWARE,
-        nullptr,
-        D3D11_CREATE_DEVICE_DEBUG, // todo
-        featureLevel,
-        1,
-        D3D11_SDK_VERSION,
-        &swapChainDesc,
-        swapChain_.GetAddressOf(),
-        device_.GetAddressOf(),
-        nullptr,
-        deviceContext_.GetAddressOf());
-    if (FAILED(r)) {
-        log::Render().critical("D3D11CreateDeviceAndSwapChain failed: {:08x}", static_cast<unsigned long>(r));
-        return false;
-    }
-    */
 
     constexpr D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
     const auto create = [&](const UINT flags) { return D3D11CreateDeviceAndSwapChain(
@@ -95,10 +76,7 @@ bool RenderingContext::CreateDeviceAndSwapChain(const HWND hwnd, const uint32_t 
         nullptr,
         deviceContext_.ReleaseAndGetAddressOf());
         };
-    UINT flags = 0;
-#ifndef NDEBUG
-    flags |= D3D11_CREATE_DEVICE_DEBUG;
-#endif
+    const UINT flags = debugLayer ? D3D11_CREATE_DEVICE_DEBUG : 0;
     HRESULT r = create(flags);
     if (FAILED(r) && (flags & D3D11_CREATE_DEVICE_DEBUG) != 0) {  // no Graphics Tools installed
         log::Render().warn("D3D debug layer unavailable ({:08x}), continuing without it", static_cast<unsigned long>(r));

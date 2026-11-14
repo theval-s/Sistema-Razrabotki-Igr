@@ -17,7 +17,7 @@ bool RenderingSubsystem::Initialize() {
         log::Render().error("The host gave the engine no window to render into");
         return false;
     }
-    if (!renderer_.Initialize(surface_)) {
+    if (!renderer_.Initialize(surface_, GetEngine().GetConfig().graphicsDebugLayer)) {
         log::Render().error("The renderer could not be created for {}x{}",
                       surface_.width, surface_.height);
         return false;

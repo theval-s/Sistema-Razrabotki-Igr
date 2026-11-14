@@ -12,6 +12,7 @@
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/Log.hpp>
 #include <engine/core/PathUtils.hpp>
+#include <engine/input/InputSubsystem.hpp>
 #include <engine/input/Win32InputHost.hpp>
 #include <engine/project/Project.hpp>
 #include <engine/project/RuntimeSettings.hpp>
@@ -250,7 +251,7 @@ int WINAPI wWinMain(
             return Fail("Could not register Win32InputHost");
         }
 
-        auto* input = engine::RegisterDefaultSubsystems(runtime);
+        auto* input = engine::RegisterDefaultSubsystems(runtime, host->GetUiHost());
 
         if (!input) {
             return Fail("Could not register the default input subsystem");
@@ -278,6 +279,11 @@ int WINAPI wWinMain(
             engine::log::Engine().warn("Startup scene loaded with diagnostics: {}", error);
         }
 
+        // Initial mode only: scripts may change it, Win32InputHost reapplies it on focus.
+        if (settings.captureMouse) {
+            input->SetCursorMode(engine::CursorMode::Locked);
+        }
+
         if (!runtime.StartGame(
             engine::AssetPathResolver::GetGameRoot(),
             project->autoloads,
@@ -289,14 +295,6 @@ int WINAPI wWinMain(
         engine::log::Engine().info("Game session started");
 
         while (!runtime.IsExitRequested()) {
-
-            if (settings.captureMouse &&
-                !host->IsRelativeMouseMode() &&
-                !window->IsMinimized() &&
-                GetForegroundWindow() == window->Handle()) {
-
-                host->SetRelativeMouseMode(true);
-            }
 
             if (window->IsMinimized()) {
                 Sleep(50);

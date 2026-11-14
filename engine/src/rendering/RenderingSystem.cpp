@@ -3,8 +3,8 @@
 
 namespace engine {
 
-bool RenderingSystem::Initialize(const NativeSurface& surface) {
-    if (!renderingContext_.Initialize(surface)) {
+bool RenderingSystem::Initialize(const NativeSurface& surface, const bool debugLayer) {
+    if (!renderingContext_.Initialize(surface, debugLayer)) {
         return false;
     }
     InitializePasses(surface.width, surface.height);

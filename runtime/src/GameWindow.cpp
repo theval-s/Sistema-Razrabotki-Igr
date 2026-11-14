@@ -1,5 +1,6 @@
 #include "GameWindow.hpp"
 #include <engine/core/Surface.hpp>
+#include <engine/window.hpp>
 
 #include <cstdint>
 #include <string>
@@ -194,6 +195,11 @@ LRESULT CALLBACK GameWindow::Proc(
         self->hwnd_ = hwnd;
 
         return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+
+    // Win32InputHost reads keys, buttons, focus and text from here.
+    if (LRESULT result = 0; engine::DispatchInputMessage(hwnd, msg, wp, lp, result)) {
+        return result;
     }
 
     auto* self = reinterpret_cast<GameWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
