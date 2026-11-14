@@ -8,6 +8,7 @@
 #include <engine/assets/AssetPipeline.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
+#include <engine/core/Utf.hpp>
 #include <engine/project/Project.hpp>
 #include <engine/project/RuntimeSettings.hpp>
 #include <engine/scene/SceneDocument.hpp>
@@ -19,11 +20,16 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace {
 
     namespace fs = std::filesystem;
+
+    constexpr const wchar_t* BuildStampName = L".sri-build";
+    constexpr std::string_view BuildStampText =
+        "Made by sri-build. The next build deletes and replaces this whole folder.\n";
 
     struct Options {
         fs::path project;
@@ -45,69 +51,26 @@ namespace {
         std::cout << "error: " << message << '\n';
     }
 
-    bool WideToUtf8(std::wstring_view text, std::string& result) {
-        result.clear();
-
-        if (text.empty()) {
-            return true;
-        }
-
-        const int required = WideCharToMultiByte(
-            CP_UTF8,
-            WC_ERR_INVALID_CHARS,
-            text.data(),
-            static_cast<int>(text.size()),
-            nullptr,
-            0,
-            nullptr,
-            nullptr
-        );
-
-        if (required <= 0) {
-            return false;
-        }
-
-        result.resize(static_cast<std::size_t>(required));
-
-        const int converted = WideCharToMultiByte(
-            CP_UTF8,
-            WC_ERR_INVALID_CHARS,
-            text.data(),
-            static_cast<int>(text.size()),
-            result.data(),
-            required,
-            nullptr,
-            nullptr
-        );
-
-        if (converted != required) {
-            result.clear();
-            return false;
-        }
-
-        return true;
-    }
-
     bool ParsePositiveInteger(
         std::wstring_view text,
         std::uint32_t& result
     ) {
-        const std::string value(text.begin(), text.end());
+        const auto value = engine::utf::ToUtf8(text);
 
-        if (value.empty()) {
+        if (!value || value->empty()) {
             return false;
         }
 
         std::uint32_t parsed = 0;
 
         const auto [end, ec] = std::from_chars(
-            value.data(),
-            value.data() + value.size(),
+            value->data(),
+            value->data() + value->size(),
             parsed
         );
 
         if (ec != std::errc{} ||
-            end != value.data() + value.size() ||
+            end != value->data() + value->size() ||
             parsed == 0) {
             return false;
         }
@@ -152,11 +115,14 @@ namespace {
                     return false;
                 }
 
-                if (!WideToUtf8(argv[++i], destination)) {
+                auto text = engine::utf::ToUtf8(std::wstring_view(argv[++i]));
+
+                if (!text) {
                     error = "Could not convert command-line text to UTF-8";
                     return false;
                 }
 
+                destination = std::move(*text);
                 return true;
                 };
 
@@ -368,7 +334,8 @@ namespace {
             return false;
         }
 
-        const fs::path marker = options.out / engine::RuntimeSettings::FileName;
+        // Only folders carrying this stamp are ever deleted: game.json alone is too common a name.
+        const fs::path stamp = options.out / BuildStampName;
 
         if (fs::exists(options.out)) {
             if (!fs::is_directory(options.out)) {
@@ -376,11 +343,8 @@ namespace {
                 return false;
             }
 
-            const bool empty = fs::is_empty(options.out);
-            const bool hasMarker = fs::is_regular_file(marker);
-
-            if (!empty && !hasMarker) {
-                error = "refusing to overwrite '" + engine::ToUtf8(options.out) + "': not empty and not a previous build";
+            if (!fs::is_empty(options.out) && !fs::is_regular_file(stamp)) {
+                error = "refusing to overwrite '" + engine::ToUtf8(options.out) + "': not empty and not made by sri-build";
                 return false;
             }
         }
@@ -395,17 +359,9 @@ namespace {
         fs::remove_all(options.out);
         fs::create_directories(options.out);
 
-        //std::string json;
-
-        if (!engine::SerializeRuntimeSettings(
-            options.settings,
-            json,
-            error
-        )) {
-            return false;
-        }
-
-        if (!engine::WriteFileAtomic(marker, json, error)) {
+        // Stamp first, so the next build can still replace a half-finished one.
+        if (!engine::WriteFileAtomic(stamp, BuildStampText, error) ||
+            !engine::WriteFileAtomic(options.out / engine::RuntimeSettings::FileName, json, error)) {
             return false;
         }
 

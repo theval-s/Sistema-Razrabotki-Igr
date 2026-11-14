@@ -1,18 +1,17 @@
 #include <engine/core/Log.hpp>
 
+#include <exception>
+#include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <utility>
 
-#include <exception>
-#include <filesystem>
-#include <memory>
-
+#include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
-#include <spdlog/sinks/rotating_file_sink.h>
 
 namespace engine::log {
 

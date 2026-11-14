@@ -12,65 +12,25 @@
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/Log.hpp>
 #include <engine/core/PathUtils.hpp>
+#include <engine/core/Utf.hpp>
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/input/Win32InputHost.hpp>
 #include <engine/project/Project.hpp>
 #include <engine/project/RuntimeSettings.hpp>
 
-#include <filesystem>
-#include <string>
-#include <exception>
-#include <memory>
 #include <cstdint>
-
-#include <vector>
-#include <string_view>
+#include <exception>
+#include <filesystem>
+#include <memory>
+#include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 
 namespace {
 
     namespace fs = std::filesystem;
-
-    bool Utf8ToWide(std::string_view text, std::wstring& result) {
-        result.clear();
-
-        if (text.empty()) {
-            return true;
-        }
-
-        const int required = MultiByteToWideChar(
-            CP_UTF8,
-            MB_ERR_INVALID_CHARS,
-            text.data(),
-            static_cast<int>(text.size()),
-            nullptr,
-            0
-        );
-
-        if (required <= 0) {
-            return false;
-        }
-
-        result.resize(static_cast<std::size_t>(required));
-
-        const int converted = MultiByteToWideChar(
-            CP_UTF8,
-            MB_ERR_INVALID_CHARS,
-            text.data(),
-            static_cast<int>(text.size()),
-            result.data(),
-            required
-        );
-
-        if (converted != required) {
-            result.clear();
-            return false;
-        }
-
-        return true;
-    }
 
     int Fail(const std::string& message) noexcept {
         try {
@@ -80,9 +40,11 @@ namespace {
 
         std::wstring wideMessage;
 
-        if (!Utf8ToWide(message, wideMessage)) {
-            wideMessage = L"An error occurred while starting the game. " L"See the runtime log for details.";
+        try {
+            wideMessage = engine::utf::ToWide(message).value_or(
+                L"An error occurred while starting the game. See the runtime log for details.");
         }
+        catch (...) { }
 
         MessageBoxW(
             nullptr,
@@ -215,16 +177,16 @@ int WINAPI wWinMain(
 
         engine::log::Engine().info("Starting game '{}'",project->name);
 
-        std::wstring windowTitle;
-
         const std::string& title = settings.title.empty() ? project->name : settings.title;
 
-        if (!Utf8ToWide(title, windowTitle)) {
+        auto windowTitle = engine::utf::ToWide(title);
+
+        if (!windowTitle) {
             return Fail("Could not convert the game window title to UTF-16");
         }
 
         GameWindow::Options windowOptions;
-        windowOptions.title = std::move(windowTitle);
+        windowOptions.title = std::move(*windowTitle);
         windowOptions.width = settings.width;
         windowOptions.height = settings.height;
         windowOptions.fullscreen = settings.fullscreen;

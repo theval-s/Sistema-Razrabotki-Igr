@@ -8,11 +8,6 @@
 #include <string_view>
 #include <utility>
 
-#include <cstddef>
-#include <filesystem>
-#include <memory>
-#include <string_view>
-
 #include <entt/core/type_info.hpp>
 #include <entt/signal/dispatcher.hpp>
 
