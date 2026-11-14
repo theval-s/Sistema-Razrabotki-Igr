@@ -107,7 +107,8 @@ the engine statically through `Engine::EngineStatic`.
 
 ## 4. Package for release if needed
 
-Build a portable, self-contained editor folder (exe, DLLs, Qt plugins, shaders, editor modules):
+Build a portable, self-contained editor folder (exe, DLLs, Qt plugins, shaders, editor modules,
+and the user guides from [docs](docs/README.md) for game developers and their AI agents):
 
 ```
 cmake --build --preset windows-release --target deploy
@@ -116,7 +117,7 @@ cmake --build --preset windows-release --target deploy
 This produces `build/windows-msvc/deploy/<config>/editor`. The folder is wiped and recreated each time; set
 `SRI_DEPLOY_DIR` to put it elsewhere. Debug deploys need the debug MSVC runtime, so they only run on machines with Visual Studio.
 
-The engine SDK (headers, import library, CMake package) is a separate install component:
+The engine SDK (headers, import library, CMake package, guides in `share/doc/SRI_Engine`) is a separate install component:
 
 ```
 cmake --install build/windows-msvc --config RelWithDebInfo --component sdk --prefix dist/sdk

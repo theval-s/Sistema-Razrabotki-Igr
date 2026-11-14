@@ -321,6 +321,7 @@ install(FILES
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Engine COMPONENT sdk
 )
 sri_install_dependency_notices(sdk)
+sri_install_docs(sdk ${CMAKE_INSTALL_DOCDIR} SDK)
 
 # --- Core kernel -------------------------------------------------------------
 # Engine lifecycle, subsystems, events and the scene model -- the API

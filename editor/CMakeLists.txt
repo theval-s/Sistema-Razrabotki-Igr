@@ -119,6 +119,7 @@ add_subdirectory(modules/build)
 sri_add_deploy(editor LIBRARIES engine editor_core qtadvanceddocking-qt6 sri-build)
 install(FILES "${PROJECT_SOURCE_DIR}/external/Qt-Advanced-Docking-System/LICENSE"
     DESTINATION licenses/qt-advanced-docking-system COMPONENT editor)
+sri_install_docs(editor docs)
 
 install(DIRECTORY
         "${PROJECT_SOURCE_DIR}/engine/shaders"

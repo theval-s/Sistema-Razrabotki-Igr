@@ -1,7 +1,7 @@
 # UI native integration contract
 
 This reference describes the native UI boundary, ownership rules and host integration.
-See [game UI authoring](ui.md) for RML/RCSS setup and [the Lua facade](ui-lua-facade.md)
+See [game UI authoring](../ui.md) for RML/RCSS setup and [the Lua facade](../ui-lua-facade.md)
 for script APIs.
 Public UI headers contain neither sol nor Rml types and follow the engine's exported,
 out-of-line PImpl convention. C++20 and the existing engine SDK ABI/toolchain apply;

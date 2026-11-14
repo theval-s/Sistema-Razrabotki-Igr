@@ -14,6 +14,12 @@
 #
 # Runtime files beyond binaries (shaders, assets, Qt plugins) are the caller's
 # job: install(... COMPONENT <app>).
+#
+#   sri_install_docs(<component> <destination> [SDK])
+#
+# Installs docs/, so game developers and their AI agents can read the guides
+# next to the editor or SDK. docs/dev (engine-team notes) never ships;
+# docs/sdk (C++ host docs) ships only with SDK.
 # ---------------------------------------------------------------------------
 
 set(SRI_DEPLOY_DIR "${CMAKE_BINARY_DIR}/deploy"
@@ -36,6 +42,16 @@ function(sri_install_dependency_notices component)
             DESTINATION licenses/vcpkg COMPONENT ${component}
             FILES_MATCHING PATTERN "copyright" PATTERN "LICENSE*" PATTERN "license*")
     endif()
+endfunction()
+
+function(sri_install_docs component destination)
+    cmake_parse_arguments(PARSE_ARGV 2 arg "SDK" "" "")
+    set(exclude PATTERN dev EXCLUDE)
+    if(NOT arg_SDK)
+        list(APPEND exclude PATTERN sdk EXCLUDE)
+    endif()
+    install(DIRECTORY "${PROJECT_SOURCE_DIR}/docs/"
+        DESTINATION ${destination} COMPONENT ${component} ${exclude})
 endfunction()
 
 function(sri_add_deploy app)

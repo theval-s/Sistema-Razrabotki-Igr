@@ -2,7 +2,7 @@
 
 ## Play current scene
 
-Use **Play Current Scene** on the toolbar (F5), **Pause** to suspend simulation,
+Use **Play Current Scene** on the viewport toolbar (F5), **Pause** to suspend simulation,
 and **Stop** (Shift+F5) to return to editing. Play uses the current in-memory scene,
 including unsaved edits; it does not compile C++ or write the scene to disk.
 Autoloads start before entity scripts and native controllers. Stop restores the original scene,
