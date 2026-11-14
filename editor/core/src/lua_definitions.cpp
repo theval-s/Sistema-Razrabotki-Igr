@@ -738,6 +738,60 @@ function Navigation.GetAgentPosition(navMesh, agent) end
 ---@param agent Entity
 function Navigation.RemoveAgent(navMesh, agent) end
 
+---@alias BehaviorStatus 'Running'|'Success'|'Failure'
+---@alias BehaviorAgentStatus BehaviorStatus|'Pending'|'Stopped'|'Faulted'
+---@alias BehaviorParameters table<string, string|number|boolean>
+---@class BehaviorContext
+---@field entity Entity Owning entity.
+---@field parameters BehaviorParameters Node defaults, then the agent's overrides.
+---@field blackboard table Shared by all leaves of one agent.
+---Returned by a leaf script (.condition.lua: Check; .action.lua: Tick, optional OnEnter/OnExit).
+---@class BehaviorLeaf
+---@field Check? fun(ctx:BehaviorContext):boolean
+---@field OnEnter? fun(ctx:BehaviorContext)
+---@field Tick? fun(ctx:BehaviorContext, dt:number):BehaviorStatus
+---@field OnExit? fun(ctx:BehaviorContext, reason:'Success'|'Failure'|'Cancelled'|'Faulted')
+---@class BehaviorNode
+---@field id string Unique within the tree.
+---@field kind 'Sequence'|'Selector'|'Condition'|'Action'
+---@field children? string[] Node ids; composites only.
+---@field script? string Leaf script UUID or logical path; leaves only.
+---@field parameters? BehaviorParameters
+---Returned by a .bt.lua asset.
+---@class BehaviorTreeDefinition
+---@field root string Node id.
+---@field nodes BehaviorNode[]
+
+BT = {}
+BT.Running = 'Running'
+BT.Success = 'Success'
+BT.Failure = 'Failure'
+---Attaches or replaces the tree after the current callbacks. Errors on an invalid entity or asset.
+---@param entity Entity
+---@param asset string .bt.lua UUID or logical path.
+---@param parameters? BehaviorParameters Per-agent overrides.
+function BT.Attach(entity, asset, parameters) end
+---Replaces the override table; running actions see it on their next tick.
+---@param entity Entity
+---@param values BehaviorParameters
+function BT.SetParameters(entity, values) end
+---Disabling cancels the active action; enabling starts a fresh instance.
+---@param entity Entity
+---@param enabled boolean
+function BT.SetEnabled(entity, enabled) end
+---Removes the attachment and cancels the active action.
+---@param entity Entity
+function BT.Detach(entity) end
+---@param entity Entity
+---@return BehaviorAgentStatus status Faulted stays until the tree is disabled, detached or replaced.
+---@return string action Active action node id; empty when idle.
+function BT.GetStatus(entity) end
+---Totals for this Play session's unpaused behavior updates.
+---@return integer updates
+---@return number meanMilliseconds
+---@return number maxMilliseconds
+function BT.GetTiming() end
+
 Game = {}
 ---Exits the standalone game. Ignored while playing in the editor (use Stop).
 function Game.Quit() end
