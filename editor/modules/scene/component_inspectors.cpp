@@ -30,12 +30,14 @@
 #include <optional>
 #include <string>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include <entt/core/type_info.hpp>
 
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/animation/AnimationSubsystem.hpp>
 #include <engine/audio/AudioSubsystem.hpp>
 #include <engine/engine.hpp>
 #include <engine/physics/PhysicsComponents.hpp>
@@ -174,12 +176,12 @@ std::optional<engine::AssetReference> usedAsset(const engine::AssetSystem& asset
     return assets.ReferenceFor(handle);
 }
 
-/// A picker for one asset slot of the MeshRenderer: `reference` and `handle` are its members,
+/// A picker for one renderer asset slot: `reference` and `handle` are its members,
 /// `request` what loads a chosen asset into the scene's registry.
-template <class Asset>
+template <class Component, class Asset>
 void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt::entity entity, const QString& label,
-                  const engine::CatalogAssetKind kind, engine::AssetReference engine::MeshRenderer::*reference,
-                  engine::AssetHandle<Asset> engine::MeshRenderer::*handle,
+                  const engine::CatalogAssetKind kind, engine::AssetReference Component::*reference,
+                  engine::AssetHandle<Asset> Component::*handle,
                   engine::AssetHandle<Asset> (engine::AssetSystem::*request)(const engine::AssetReference&)) {
     engine::Scene& scene = context.scene();
     engine::Engine& engine = context.engine();
@@ -189,7 +191,7 @@ void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt
     // Only the user's choices get here: refresh picks quietly.
     QObject::connect(picker, &QComboBox::currentIndexChanged, picker,
                      [&context, &scene, &engine, entity, label, picker, kind, reference, handle, request] {
-                         const auto* renderer = std::as_const(scene).TryGetComponent<engine::MeshRenderer>(entity);
+                         const auto* renderer = std::as_const(scene).TryGetComponent<Component>(entity);
                          const std::optional<engine::AssetReference> chosen = picker->reference();
                          if (renderer == nullptr || !chosen || chosen->id == (renderer->*reference).id) {
                              return;
@@ -197,9 +199,11 @@ void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt
                          context.history().edit(QObject::tr("Change %1").arg(label), [&] {
                              // Asynchronous, like adding the component: the entity isn't drawn until it's loaded.
                              const auto loaded = (engine.GetSceneAssets().*request)(*chosen);
-                             scene.Modify<engine::MeshRenderer>(entity, [&](engine::MeshRenderer& changed) {
+                             scene.Modify<Component>(entity, [&](Component& changed) {
                                  changed.*handle = loaded;
                                  changed.*reference = *chosen;
+                                 if constexpr (std::is_same_v<Component, engine::SkinnedMeshRenderer>)
+                                     changed.posedBounds.reset();
                              });
                              if (kind == engine::CatalogAssetKind::MaterialInstance) {
                                  engine.ClearEntityMaterialOverride(entity);
@@ -210,7 +214,7 @@ void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt
     // What the picker last showed, so it's only touched when the slot changes elsewhere.
     auto shown = std::make_shared<std::string>();
     form.addRow(label, picker, [&scene, &engine, entity, picker, reference, handle, shown] {
-        const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity);
+        const auto* renderer = scene.TryGetComponent<Component>(entity);
         if (renderer == nullptr || picker->hasFocus() || picker->lineEdit()->hasFocus() || picker->view()->isVisible()) {
             return;
         }
@@ -269,6 +273,146 @@ void buildMeshRenderer(PropertyForm& form, editor::EditorContext& context, const
     addAssetSlot(form, context, entity, QObject::tr("Material"), engine::CatalogAssetKind::MaterialInstance,
                  &engine::MeshRenderer::materialReference, &engine::MeshRenderer::materialInstance,
                  &engine::AssetSystem::RequestMaterialInstance);
+}
+
+void buildSkinnedMeshRenderer(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
+    addAssetSlot(form, context, entity, QObject::tr("Mesh"), engine::CatalogAssetKind::SkinnedMesh,
+                 &engine::SkinnedMeshRenderer::meshReference, &engine::SkinnedMeshRenderer::mesh,
+                 &engine::AssetSystem::RequestSkinnedMesh);
+    addAssetSlot(form, context, entity, QObject::tr("Material"), engine::CatalogAssetKind::MaterialInstance,
+                 &engine::SkinnedMeshRenderer::materialReference, &engine::SkinnedMeshRenderer::materialInstance,
+                 &engine::AssetSystem::RequestMaterialInstance);
+}
+
+void addAnimatorReference(PropertyForm& form, editor::EditorContext& context, entt::entity entity,
+                          const QString& label, engine::CatalogAssetKind kind,
+                          engine::AssetReference engine::Animator::*member) {
+    auto* picker = new editor::AssetPicker(context.engine().GetSceneAssets().GetCatalog(), kind, QObject::tr("None"));
+    picker->setMinimumContentsLength(12);
+    QObject::connect(picker, &QComboBox::currentIndexChanged, picker, [&context, entity, picker, member, label] {
+        const auto* animator = context.scene().TryGetComponent<engine::Animator>(entity);
+        if (!animator || picker->currentIndex() < 0) return;
+        const auto chosen = picker->reference().value_or(engine::AssetReference{});
+        if ((animator->*member).id == chosen.id && (animator->*member).path == chosen.path) return;
+        context.history().edit(QObject::tr("Change %1").arg(label), [&] {
+            context.scene().Modify<engine::Animator>(entity, [&](auto& changed) { changed.*member = chosen; });
+        });
+    });
+    form.addRow(label, picker, [&context, entity, picker, member] {
+        const auto* animator = context.scene().TryGetComponent<engine::Animator>(entity);
+        if (!animator || picker->hasFocus() || picker->lineEdit()->hasFocus() || picker->view()->isVisible()) return;
+        const QSignalBlocker blocker(picker);
+        const auto& reference = animator->*member;
+        if (!reference.id.IsValid()) {
+            picker->setCurrentIndex(0);
+        } else if (!picker->selectId(reference.id)) {
+            picker->reload();
+            if (!picker->selectId(reference.id)) {
+                picker->setCurrentIndex(-1);
+                picker->lineEdit()->setPlaceholderText(QObject::tr("%1 (missing)").arg(
+                    QString::fromStdString(reference.path.empty() ? reference.id.ToString() : reference.path)));
+            }
+        }
+    });
+}
+
+void buildAnimator(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
+    auto& scene = context.scene();
+    addAnimatorReference(form, context, entity, QObject::tr("Skeleton"), engine::CatalogAssetKind::Skeleton,
+                         &engine::Animator::skeleton);
+    addAnimatorReference(form, context, entity, QObject::tr("Clip"), engine::CatalogAssetKind::AnimationClip,
+                         &engine::Animator::clip);
+    auto speed = field(scene, entity, &engine::Animator::speed);
+    speed.set = [&context, entity](float value) {
+        value = std::max(0.0f, value);
+        context.scene().Modify<engine::Animator>(entity, [&](auto& animator) { animator.speed = value; });
+        if (auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>()) {
+            std::string ignored;
+            animation->SetSpeed(entity, value, ignored);
+        }
+    };
+    form.addFloat(QObject::tr("Speed"), std::move(speed), {.step = 0.1, .decimals = 3, .minimum = 0.0});
+    form.addBool(QObject::tr("Loop"), field(scene, entity, &engine::Animator::loop));
+    form.addBool(QObject::tr("Play on start"), field(scene, entity, &engine::Animator::playOnStart));
+
+    if (!context.engine().GetSubsystem<engine::AnimationSubsystem>()) return;
+    auto* controls = new QWidget;
+    auto* layout = new QVBoxLayout(controls);
+    layout->setContentsMargins(0, 0, 0, 0);
+    auto* playbackClip = new editor::AssetPicker(context.engine().GetSceneAssets().GetCatalog(),
+        engine::CatalogAssetKind::AnimationClip, QObject::tr("Choose playback clip"));
+    if (const auto* animator = scene.TryGetComponent<engine::Animator>(entity))
+        playbackClip->selectId(animator->clip.id);
+    playbackClip->setToolTip(QObject::tr("Transient playback target; does not change the scene's starting clip."));
+    layout->addWidget(playbackClip);
+    auto* fade = new QDoubleSpinBox;
+    fade->setRange(0.0, 3600.0);
+    fade->setSingleStep(0.1);
+    fade->setSuffix(QObject::tr(" s fade"));
+    PropertyForm::ignoreWheelUnlessFocused(fade);
+    layout->addWidget(fade);
+    auto* buttons = new QHBoxLayout;
+    auto* play = new QPushButton(QObject::tr("Play"));
+    auto* pause = new QPushButton(QObject::tr("Pause"));
+    auto* stop = new QPushButton(QObject::tr("Stop"));
+    buttons->addWidget(play);
+    buttons->addWidget(pause);
+    buttons->addWidget(stop);
+    layout->addLayout(buttons);
+    auto* seek = new QDoubleSpinBox;
+    seek->setRange(0.0, 1.0e9);
+    seek->setDecimals(3);
+    seek->setSingleStep(0.1);
+    seek->setSuffix(QObject::tr(" s"));
+    PropertyForm::ignoreWheelUnlessFocused(seek);
+    layout->addWidget(seek);
+    auto* status = new QLabel;
+    status->setWordWrap(true);
+    layout->addWidget(status);
+    auto error = std::make_shared<QString>();
+    QObject::connect(play, &QPushButton::clicked, controls, [&context, entity, fade, playbackClip, error] {
+        auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>();
+        const auto* animator = context.scene().TryGetComponent<engine::Animator>(entity);
+        const auto clip = playbackClip->reference();
+        if (!animation || !animator || !clip) return;
+        std::string message;
+        animation->Play(entity, *clip, static_cast<float>(fade->value()), animator->loop, message);
+        *error = QString::fromStdString(message);
+    });
+    QObject::connect(pause, &QPushButton::clicked, controls, [&context, entity] {
+        if (auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>()) {
+            if (const auto state = animation->GetPlaybackState(entity)) animation->SetPaused(entity, state->playing);
+        }
+    });
+    QObject::connect(stop, &QPushButton::clicked, controls, [&context, entity, error] {
+        if (auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>()) animation->Stop(entity);
+        error->clear();
+    });
+    QObject::connect(seek, &QDoubleSpinBox::editingFinished, controls, [&context, entity, seek, error] {
+        if (auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>()) {
+            std::string message;
+            animation->Seek(entity, seek->value(), message);
+            *error = QString::fromStdString(message);
+        }
+    });
+    // Transport is transient subsystem state, deliberately outside authored-property history.
+    form.addRow(QObject::tr("Playback"), controls, [&context, entity, controls, playbackClip, play, pause, stop, seek, status, error] {
+        auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>();
+        const auto* animator = context.scene().TryGetComponent<engine::Animator>(entity);
+        controls->setEnabled(animation && animator);
+        if (!animation || !animator) return;
+        const auto state = animation->GetPlaybackState(entity);
+        play->setEnabled(playbackClip->reference().has_value() && !(state && state->transitioning));
+        pause->setEnabled(state && state->ready);
+        stop->setEnabled(state.has_value());
+        seek->setEnabled(state && state->ready && state->duration > 0.0f && !state->transitioning);
+        pause->setText(state && !state->playing ? QObject::tr("Resume") : QObject::tr("Pause"));
+        if (state && !seek->hasFocus()) {
+            const QSignalBlocker blocker(seek);
+            seek->setValue(state->timeSeconds);
+        }
+        status->setText(!error->isEmpty() ? *error : state ? QString::fromStdString(state->error) : QObject::tr("Stopped"));
+    });
 }
 
 void buildCamera(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
@@ -955,6 +1099,10 @@ void addBounds(editor::EditorContext& context, const entt::entity entity) {
             bounds.local = mesh->bounds;
         }
     }
+    if (const auto* renderer = scene.TryGetComponent<engine::SkinnedMeshRenderer>(entity)) {
+        if (renderer->posedBounds) bounds.local = *renderer->posedBounds;
+        else if (const auto mesh = context.engine().GetSceneAssets().Peek(renderer->mesh)) bounds.local = mesh->bounds;
+    }
     scene.AddComponent<engine::Bounds>(entity, bounds);
 }
 
@@ -970,9 +1118,30 @@ void removePhysics(editor::EditorContext& context, const entt::entity entity) {
     context.scene().RemoveComponent<engine::Collider>(entity);
 }
 
+void addSkinnedMeshRenderer(editor::EditorContext& context, const entt::entity entity) {
+    auto& scene = context.scene();
+    auto& assets = context.engine().GetSceneAssets();
+    const auto meshes = assets.GetCatalog().List(engine::CatalogAssetKind::SkinnedMesh);
+    if (meshes.empty()) {
+        QMessageBox::information(nullptr, QObject::tr("Skinned Mesh Renderer"),
+                                 QObject::tr("Add a skinned mesh descriptor to the content folder first."));
+        return;
+    }
+    engine::SkinnedMeshRenderer renderer;
+    // The scene codec requires file-backed renderer slots, including in undo snapshots.
+    renderer.meshReference = {meshes.front()->metadata.id, meshes.front()->path};
+    renderer.mesh = assets.RequestSkinnedMesh(renderer.meshReference);
+    renderer.materialInstance = assets.RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance);
+    if (const auto* material = assets.GetCatalog().FindPath(engine::BuiltinAssets::DefaultMaterialInstance))
+        renderer.materialReference = {material->metadata.id, material->path};
+    scene.RemoveComponent<engine::MeshRenderer>(entity);
+    scene.AddComponent<engine::SkinnedMeshRenderer>(entity, std::move(renderer));
+}
+
 }  // namespace
 
 void addMeshRenderer(editor::EditorContext& context, const entt::entity entity) {
+    context.scene().RemoveComponent<engine::SkinnedMeshRenderer>(entity);
     engine::AssetSystem& assets = context.engine().GetSceneAssets();
     const engine::AssetCatalog& catalog = assets.GetCatalog();
     engine::MeshRenderer renderer;
@@ -1002,6 +1171,10 @@ std::span<const ComponentInspector> componentInspectors() {
         {entt::type_hash<engine::Tags>::value(), QObject::tr("Tags"), buildTags},
         {entt::type_hash<engine::MeshRenderer>::value(), QObject::tr("Mesh Renderer"), buildMeshRenderer,
          addMeshRenderer, removeComponent<engine::MeshRenderer>},
+        {entt::type_hash<engine::SkinnedMeshRenderer>::value(), QObject::tr("Skinned Mesh Renderer"), buildSkinnedMeshRenderer,
+         addSkinnedMeshRenderer, removeComponent<engine::SkinnedMeshRenderer>},
+        {entt::type_hash<engine::Animator>::value(), QObject::tr("Animator"), buildAnimator,
+         addComponent<engine::Animator>, removeComponent<engine::Animator>},
         {entt::type_hash<engine::NavigationRegion>::value(), QObject::tr("NavMesh"), buildNavigationRegion},
         {entt::type_hash<engine::NavigationSource>::value(), QObject::tr("Navigation Source"), buildNavigationSource,
          addComponent<engine::NavigationSource>, removeComponent<engine::NavigationSource>},

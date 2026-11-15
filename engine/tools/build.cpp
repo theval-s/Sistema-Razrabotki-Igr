@@ -20,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -229,6 +230,33 @@ namespace {
             errors.push_back("startup scene '" + project.startupScene + "' is not in the catalog");
         }
 
+        using Signatures = std::unordered_map<engine::AssetUuid, std::uint64_t, engine::AssetUuidHash>;
+        Signatures skeletons, clips, meshes;
+        const auto validateSkeletal = [&](engine::CatalogAssetKind catalogKind,
+                                          engine::AssetKind assetKind, Signatures& signatures) {
+            engine::SkeletalAssetImporter importer(assetKind);
+            for (const auto* entry : catalog.List(catalogKind)) {
+                engine::AssetDesc desc;
+                desc.name = entry->path;
+                desc.path = entry->source;
+                desc.catalog = &catalog;
+                desc.centerOnLoad = entry->metadata.centerOnLoad;
+                engine::CpuPayload payload;
+                error.clear();
+                if (!importer.ReadCpu(desc, nullptr, payload, error)) {
+                    errors.push_back(entry->path + ": " + error);
+                    continue;
+                }
+                const auto signature = assetKind == engine::AssetKind::Skeleton ? payload.skeleton.signature :
+                    assetKind == engine::AssetKind::AnimationClip ? payload.animationClip.skeletonSignature :
+                    payload.skinnedMesh.skeletonSignature;
+                signatures.emplace(entry->metadata.id, signature);
+            }
+        };
+        validateSkeletal(engine::CatalogAssetKind::Skeleton, engine::AssetKind::Skeleton, skeletons);
+        validateSkeletal(engine::CatalogAssetKind::AnimationClip, engine::AssetKind::AnimationClip, clips);
+        validateSkeletal(engine::CatalogAssetKind::SkinnedMesh, engine::AssetKind::SkinnedMesh, meshes);
+
         for (const auto* scene :
             catalog.List(engine::CatalogAssetKind::Scene)) {
 
@@ -245,6 +273,43 @@ namespace {
             }
             if (scene == start && !document.activeCamera) {
                 warnings.push_back(scene->path + ": no active camera, the game would show nothing");
+            }
+            for (const auto& entity : document.entities) {
+                const std::string context = scene->path + ": entity '" + entity.name + "' (" +
+                    entity.id.ToString() + "): ";
+                const auto checkReference = [&](const engine::AssetReference& reference,
+                                                engine::CatalogAssetKind kind, const char* field) {
+                    if (!reference.id.IsValid()) return;
+                    if (!catalog.Find(reference.id, kind)) {
+                        errors.push_back(context + field + " references missing or wrong-kind asset " +
+                            reference.id.ToString() + (reference.path.empty() ? "" : " (" + reference.path + ")"));
+                    }
+                };
+                if (entity.skinnedRenderer) {
+                    checkReference(entity.skinnedRenderer->mesh, engine::CatalogAssetKind::SkinnedMesh,
+                                   "SkinnedMeshRenderer.mesh");
+                    checkReference(entity.skinnedRenderer->materialInstance, engine::CatalogAssetKind::MaterialInstance,
+                                   "SkinnedMeshRenderer.materialInstance");
+                }
+                if (entity.animator) {
+                    checkReference(entity.animator->skeleton, engine::CatalogAssetKind::Skeleton, "Animator.skeleton");
+                    checkReference(entity.animator->clip, engine::CatalogAssetKind::AnimationClip, "Animator.clip");
+                    const auto skeleton = skeletons.find(entity.animator->skeleton.id);
+                    const auto clip = clips.find(entity.animator->clip.id);
+                    if (skeleton != skeletons.end() && clip != clips.end() && skeleton->second != clip->second) {
+                        errors.push_back(context + "Animator.clip skeleton signature does not match Animator.skeleton (" +
+                            catalog.Find(entity.animator->clip.id)->path + " and " +
+                            catalog.Find(entity.animator->skeleton.id)->path + ")");
+                    }
+                    if (entity.skinnedRenderer) {
+                        const auto mesh = meshes.find(entity.skinnedRenderer->mesh.id);
+                        if (skeleton != skeletons.end() && mesh != meshes.end() && skeleton->second != mesh->second) {
+                            errors.push_back(context + "SkinnedMeshRenderer.mesh skeleton signature does not match Animator.skeleton (" +
+                                catalog.Find(entity.skinnedRenderer->mesh.id)->path + " and " +
+                                catalog.Find(entity.animator->skeleton.id)->path + ")");
+                        }
+                    }
+                }
             }
         }
 

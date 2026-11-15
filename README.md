@@ -31,6 +31,9 @@ examples: [material asset contract](docs/material-assets.md).
 Code-only scene saving/loading, UUID sidecars, asset scope, render extraction and
 metadata generation: [scene and asset guide](docs/scene-assets.md).
 
+Skeletal animation assets, editor workflow, Lua and C++ playback, and the TestBot
+example: [animation guide](docs/animation.md).
+
 RML/RCSS UI, the example HUD and menus, assets and preview workflow: [UI guide](docs/ui.md).
 Engine/Lua/editor audio, mono 3D emitters, streaming, buses and device behavior:
 [audio guide](docs/audio.md). [ExampleGame](example_game/README.md) includes generated

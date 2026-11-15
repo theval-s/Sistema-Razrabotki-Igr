@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <SimpleMath.h>
+#include <memory>
 
 #include <engine/engine_export.hpp>
 
@@ -9,6 +10,7 @@
 #include <engine/rendering/RenderingResources.hpp>
 
 #include "resources/Material.hpp"
+#include "resources/Skinning.hpp"
 
 namespace engine {
 using DirectX::SimpleMath::Vector3;
@@ -32,6 +34,7 @@ struct RenderItem {
     Matrix worldMatrix;
     MeshHandle mesh;
     MaterialInstanceHandle materialInstance;
+    std::shared_ptr<const SkinningPalette> skinning;
 };
 
 struct RenderWorld {

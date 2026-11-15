@@ -32,6 +32,8 @@ include(InstallRequiredSystemLibraries)
 # Preserve vcpkg's per-port notice layout, including notices for transitive
 # dependencies. Font notices also travel with the installed engine/ui assets.
 function(sri_install_dependency_notices component)
+    install(FILES "${PROJECT_SOURCE_DIR}/external/ozz-animation/LICENSE.md"
+        DESTINATION licenses/ozz-animation COMPONENT ${component})
     install(FILES "${PROJECT_SOURCE_DIR}/external/rmlui-backend/LICENSE.txt"
         DESTINATION licenses/rmlui-backend COMPONENT ${component})
     install(FILES "${PROJECT_SOURCE_DIR}/engine/ui/fonts/LICENSE"

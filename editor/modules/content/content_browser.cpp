@@ -71,6 +71,8 @@ const QString ImportDirectoryKey = QStringLiteral("content/importDirectory");
 
 constexpr engine::CatalogAssetKind FilterKinds[] = {
     engine::CatalogAssetKind::Scene,    engine::CatalogAssetKind::Mesh,
+    engine::CatalogAssetKind::SkinnedMesh, engine::CatalogAssetKind::Skeleton,
+    engine::CatalogAssetKind::AnimationClip,
     engine::CatalogAssetKind::Texture,  engine::CatalogAssetKind::Material,
     engine::CatalogAssetKind::MaterialInstance, engine::CatalogAssetKind::Shader,
     engine::CatalogAssetKind::Script,

@@ -152,6 +152,8 @@ void ShadowCSMPass::Initialize(RenderingResourceManager& resourceManager, Render
                                RenderingResources& resources) {
     vertexShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
         {.defines = {{"MATERIAL_SHADOW_VS"}}});
+    skinnedVertexShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
+        {.defines = {{"MATERIAL_SHADOW_VS"}, {"ENGINE_SKINNED", "1"}}});
     geometryShader_ = resourceManager.CompileShader(L"engine/ShadowCSMPass.hlsl", ShaderType::Geometry);
     const TextureDesc shadowTextureDesc{
         .width = mapSize, .height = mapSize, .arraySize = 4,
@@ -166,6 +168,7 @@ void ShadowCSMPass::Initialize(RenderingResourceManager& resourceManager, Render
 void ShadowCSMPass::Destroy(RenderingResourceManager& resourceManager, RenderingContext& context,
                             RenderingResources& resources) {
     resourceManager.DestroyShader(vertexShader_);
+    resourceManager.DestroyShader(skinnedVertexShader_);
     resourceManager.DestroyShader(geometryShader_);
     resourceManager.DestroyTexture(resources.shadowTexture);
 }
@@ -185,7 +188,7 @@ void ShadowCSMPass::Render(RenderWorld& world, RenderingContext& context, Render
         data = resources.cascadeInfo.bufferData;
     });
 
-    const auto draws = BuildMaterialDrawList(world, context.GetResourceManager(), true, vertexShader_);
+    const auto draws = BuildMaterialDrawList(world, context.GetResourceManager(), true, vertexShader_, {}, skinnedVertexShader_);
     ShaderHandle boundVS{};
     MaterialInstanceHandle boundInstance{};
     for (const auto& draw : draws) {
@@ -204,6 +207,7 @@ void ShadowCSMPass::Render(RenderWorld& world, RenderingContext& context, Render
             boundInstance = draw.item->materialInstance;
         }
         const auto& ri = *draw.item;
+        resources.BindSkinning(context, ri.skinning.get());
         resources.objectCBuffer.Update(context, [&](ObjectBufferData& data){
             data.worldMatrix = ri.worldMatrix;
             data.normalMatrix = ri.worldMatrix.Invert().Transpose();

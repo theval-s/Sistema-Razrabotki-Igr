@@ -15,6 +15,7 @@ struct ENGINE_API ShadowCSMPass : RenderPass {
 
 private:
     ShaderHandle vertexShader_;
+    ShaderHandle skinnedVertexShader_;
     ShaderHandle geometryShader_;
 };
 

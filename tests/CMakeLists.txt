@@ -11,6 +11,38 @@ add_custom_command(TARGET audio_tests POST_BUILD
 )
 add_test(NAME audio_tests COMMAND audio_tests)
 
+add_executable(animation_tests
+    animation_tests.cpp
+    animation_import_regression_tests.cpp
+    animation_scene_tests.cpp
+    animation_lua_tests.cpp
+    animation_build_tests.cpp
+)
+add_dependencies(animation_tests sri-build)
+target_link_libraries(animation_tests PRIVATE Engine::EngineStatic GTest::gtest_main ozz_animation)
+target_include_directories(animation_tests PRIVATE ../engine/src)
+target_compile_definitions(animation_tests PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+set_project_warnings(animation_tests)
+set_target_properties(animation_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET animation_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:animation_tests> $<TARGET_FILE_DIR:animation_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME animation_tests COMMAND animation_tests)
+
+add_executable(rendering_skinning_tests rendering_skinning_tests.cpp animation_render_tests.cpp)
+target_link_libraries(rendering_skinning_tests PRIVATE Engine::EngineStatic GTest::gtest_main d3d11 d3dcompiler dxgi)
+target_compile_definitions(rendering_skinning_tests PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+set_project_warnings(rendering_skinning_tests)
+set_target_properties(rendering_skinning_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET rendering_skinning_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:rendering_skinning_tests> $<TARGET_FILE_DIR:rendering_skinning_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME rendering_skinning_tests COMMAND rendering_skinning_tests)
+
 # Exercise both generated export-header modes against the same utility contract.
 foreach(utf_target IN ITEMS utf_tests utf_shared_tests)
     add_executable(${utf_target} utf_tests.cpp)

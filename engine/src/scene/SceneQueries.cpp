@@ -2,6 +2,7 @@
 #include <engine/scene/Scene.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
+#include <engine/animation/AnimationComponents.hpp>
 #include <algorithm>
 #include <cmath>
 #include <DirectXCollision.h>
@@ -23,6 +24,10 @@ void ForBounds(const Scene& scene, AssetSystem& assets, Fn&& fn) {
         const Aabb* local = nullptr;
         if (const auto* renderer = scene.TryGetComponent<MeshRenderer>(entity))
             if (const auto mesh = assets.Peek(renderer->mesh)) local = &mesh->bounds;
+        if (const auto* renderer = scene.TryGetComponent<SkinnedMeshRenderer>(entity)) {
+            if (renderer->posedBounds) local = &*renderer->posedBounds;
+            else if (const auto mesh = assets.Peek(renderer->mesh)) local = &mesh->bounds;
+        }
         if (!local) if (const auto* bounds = scene.TryGetComponent<Bounds>(entity)) local = &bounds->local;
         if (local) fn(entity, WorldBounds(*local, scene.GetWorldMatrix(entity)));
         for (const auto child : scene.GetChildren(entity)) self(self, child);

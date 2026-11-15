@@ -36,6 +36,8 @@ struct ShaderSet {
     ShaderHandle shadowPassVS;
     ShaderHandle gBufferPassVS;
     ShaderHandle gBufferPassPS;
+    ShaderHandle skinnedGBufferPassVS;
+    ShaderHandle skinnedShadowPassVS;
 };
 
 struct MaterialParameters {

@@ -113,7 +113,8 @@ bool RenderingResourceManager::DestroyShader(const ShaderHandle shaderHandle) {
     bool owned = false;
     materials_.ForEach([&](const Material& material) {
         owned |= material.shaders.shadowPassVS == shaderHandle ||
-                 material.shaders.gBufferPassVS == shaderHandle || material.shaders.gBufferPassPS == shaderHandle;
+                 material.shaders.gBufferPassVS == shaderHandle || material.shaders.gBufferPassPS == shaderHandle ||
+                 material.shaders.skinnedGBufferPassVS == shaderHandle || material.shaders.skinnedShadowPassVS == shaderHandle;
     });
     if (owned) return false;
     return shaders_.Remove(shaderHandle);
@@ -129,21 +130,27 @@ MaterialHandle RenderingResourceManager::CreateMaterial(const MaterialDesc& desc
             buffers_.Get(desc.defaults.customBuffer).type != BufferType::Constant))) return {};
 
     ShaderSet shaders{};
-    auto compile = [&](MaterialHook hook, ShaderType type, const char* define, ShaderHandle& target) {
+    auto compile = [&](MaterialHook hook, ShaderType type, const char* define, ShaderHandle& target, bool skinned = false) {
         if (!HasHook(desc.hooks, hook)) return true;
         const auto path = AssetPathResolver::ResolveShader({
             .path = AssetPathResolver::DefaultPath(ToUtf8(desc.shaderFile), AssetKind::Shader)});
-        auto compiled = ShaderContext::CompileCpu(path, type, {.defines = {{define, "1"}, {"MATERIAL_HAS_HOOK", "1"}}});
+        ShaderCompileOptions options{.defines = {{define, "1"}, {"MATERIAL_HAS_HOOK", "1"}}};
+        if (skinned) options.defines.push_back({"ENGINE_SKINNED", "1"});
+        auto compiled = ShaderContext::CompileCpu(path, type, options);
         if (!compiled) return false;
         target = RegisterCompiledShader(*compiled);
         return static_cast<bool>(target);
     };
     if (!compile(MaterialHook::ShadowVS, ShaderType::Vertex, "MATERIAL_SHADOW_VS", shaders.shadowPassVS) ||
         !compile(MaterialHook::GBufferVS, ShaderType::Vertex, "MATERIAL_GBUFFER_VS", shaders.gBufferPassVS) ||
-        !compile(MaterialHook::GBufferPS, ShaderType::Pixel, "MATERIAL_GBUFFER_PS", shaders.gBufferPassPS)) {
+        !compile(MaterialHook::GBufferPS, ShaderType::Pixel, "MATERIAL_GBUFFER_PS", shaders.gBufferPassPS) ||
+        !compile(MaterialHook::GBufferVS, ShaderType::Vertex, "MATERIAL_GBUFFER_VS", shaders.skinnedGBufferPassVS, true) ||
+        !compile(MaterialHook::ShadowVS, ShaderType::Vertex, "MATERIAL_SHADOW_VS", shaders.skinnedShadowPassVS, true)) {
         shaders_.Remove(shaders.shadowPassVS);
         shaders_.Remove(shaders.gBufferPassVS);
         shaders_.Remove(shaders.gBufferPassPS);
+        shaders_.Remove(shaders.skinnedGBufferPassVS);
+        shaders_.Remove(shaders.skinnedShadowPassVS);
         return {};
     }
     const auto result = RegisterMaterial(shaders, desc.defaults);
@@ -151,6 +158,8 @@ MaterialHandle RenderingResourceManager::CreateMaterial(const MaterialDesc& desc
         shaders_.Remove(shaders.shadowPassVS);
         shaders_.Remove(shaders.gBufferPassVS);
         shaders_.Remove(shaders.gBufferPassPS);
+        shaders_.Remove(shaders.skinnedGBufferPassVS);
+        shaders_.Remove(shaders.skinnedShadowPassVS);
     }
     return result;
 }
@@ -163,15 +172,19 @@ MaterialHandle RenderingResourceManager::RegisterMaterial(const ShaderSet& shade
     if (!validShader(shaders.shadowPassVS, ShaderType::Vertex) ||
         !validShader(shaders.gBufferPassVS, ShaderType::Vertex) ||
         !validShader(shaders.gBufferPassPS, ShaderType::Pixel) ||
+        !validShader(shaders.skinnedGBufferPassVS, ShaderType::Vertex) ||
+        !validShader(shaders.skinnedShadowPassVS, ShaderType::Vertex) ||
         (defaults.albedoTexture && !textures_.Contains(defaults.albedoTexture)) ||
         (defaults.customBuffer && (!buffers_.Contains(defaults.customBuffer) ||
                                   buffers_.Get(defaults.customBuffer).type != BufferType::Constant))) return {};
     bool shared = false;
     materials_.ForEach([&](const Material& material) {
         const auto& owned = material.shaders;
-        for (auto candidate : {shaders.shadowPassVS, shaders.gBufferPassVS, shaders.gBufferPassPS}) {
+        for (auto candidate : {shaders.shadowPassVS, shaders.gBufferPassVS, shaders.gBufferPassPS,
+                               shaders.skinnedGBufferPassVS, shaders.skinnedShadowPassVS}) {
             if (candidate && (candidate == owned.shadowPassVS || candidate == owned.gBufferPassVS ||
-                               candidate == owned.gBufferPassPS)) shared = true;
+                               candidate == owned.gBufferPassPS || candidate == owned.skinnedGBufferPassVS ||
+                               candidate == owned.skinnedShadowPassVS)) shared = true;
         }
     });
     if (shared) return {};
@@ -186,6 +199,8 @@ bool RenderingResourceManager::DestroyMaterial(const MaterialHandle handle) {
     shaders_.Remove(shaders.shadowPassVS);
     shaders_.Remove(shaders.gBufferPassVS);
     shaders_.Remove(shaders.gBufferPassPS);
+    shaders_.Remove(shaders.skinnedGBufferPassVS);
+    shaders_.Remove(shaders.skinnedShadowPassVS);
     return true;
 }
 
@@ -237,6 +252,8 @@ bool RenderingResourceManager::ReplaceMaterial(const MaterialHandle live, const 
     shaders_.Remove(oldShaders.shadowPassVS);
     shaders_.Remove(oldShaders.gBufferPassVS);
     shaders_.Remove(oldShaders.gBufferPassPS);
+    shaders_.Remove(oldShaders.skinnedGBufferPassVS);
+    shaders_.Remove(oldShaders.skinnedShadowPassVS);
     return true;
 }
 

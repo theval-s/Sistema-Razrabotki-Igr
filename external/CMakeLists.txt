@@ -65,5 +65,27 @@ if(SRI_BUILD_EDITOR)
     endif()
 endif()
 
+# --- ozz-animation ----------------------------------------------------------
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ozz-animation/CMakeLists.txt")
+    block()
+        set(BUILD_SHARED_LIBS OFF)
+        set(ozz_build_msvc_rt_dll ON)
+        set(ozz_build_postfix OFF)
+        set(ozz_build_samples OFF)
+        set(ozz_build_tests OFF)
+        set(ozz_build_howtos OFF)
+        set(ozz_build_tools OFF)
+        set(ozz_build_fbx OFF)
+        set(ozz_build_gltf OFF)
+        set(ozz_build_data OFF)
+        add_subdirectory(ozz-animation EXCLUDE_FROM_ALL)
+    endblock()
+    set_target_properties(ozz_base ozz_animation ozz_animation_offline PROPERTIES
+        FOLDER "external"
+    )
+else()
+    message(FATAL_ERROR "external/ozz-animation is missing -- run: git submodule update --init")
+endif()
+
 # vcpkg itself is usually a submodule too (external/vcpkg); it is consumed by
 # cmake/Vcpkg.cmake before project() and must NOT be add_subdirectory()'d here.

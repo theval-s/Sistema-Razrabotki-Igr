@@ -8,6 +8,7 @@
 #include <engine/rendering/RenderingContext.hpp>
 #include <engine/rendering/RenderingResourceManager.hpp>
 #include <engine/rendering/resources/Texture.hpp>
+#include <engine/rendering/resources/Skinning.hpp>
 
 namespace engine {
 
@@ -45,6 +46,11 @@ struct ObjectBufferData {
     Matrix worldMatrix;
     Matrix normalMatrix; //todo: may be split to separate object as only GBuffer and CS passes currently need this
 };
+
+struct SkinningBufferData {
+    std::array<Matrix, MaxSkinningJoints> matrices;
+};
+static_assert(sizeof(SkinningBufferData) == 16384);
 
 struct CascadeBufferData {
     std::array<Matrix, 4> viewProjections{};
@@ -127,6 +133,7 @@ struct RenderingResources {
     ConstantBuffer<ObjectBufferData> objectCBuffer;
     ConstantBuffer<CascadeBufferData> shadowCascadesCBuffer;
     ConstantBuffer<LightBufferData> lightCBuffer;
+    ConstantBuffer<SkinningBufferData> skinningCBuffer;
 
     TextureHandle shadowTexture;
     // R = visible selected pixels, G = selected pixels behind scene depth.
@@ -141,6 +148,7 @@ struct RenderingResources {
     ENGINE_API explicit RenderingResources(uint32_t aScreenWith, uint32_t aScreenHeight);
 
     ENGINE_API void BindCBuffers(RenderingContext& context);
+    ENGINE_API void BindSkinning(RenderingContext& context, const SkinningPalette* palette);
     
     ENGINE_API void Initialize(RenderingResourceManager& resourceManager);
     ENGINE_API void Destroy(RenderingResourceManager& resourceManager);

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "activeCamera": "b52e7e3e-920c-48b7-b782-8f403e062001",
+  "directionalLight": "b52e7e3e-920c-48b7-b782-8f403e062002",
+  "entities": [
+    { "id": "b52e7e3e-920c-48b7-b782-8f403e062001", "name": "Camera", "parent": null,
+      "components": { "Transform": { "position": [0, 2, 7], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] }, "Camera": { "fovY": 1.04719755, "nearPlane": 0.1, "farPlane": 100 } } },
+    { "id": "b52e7e3e-920c-48b7-b782-8f403e062002", "name": "Sun", "parent": null,
+      "components": { "Transform": { "position": [0, 0, 0], "rotation": [-0.435, 0.203, 0, 0.877], "scale": [1, 1, 1] }, "DirectionalLight": { "color": [1, 0.95, 0.85], "intensity": 1.25 } } },
+    { "id": "b52e7e3e-920c-48b7-b782-8f403e062003", "name": "Floor", "parent": null,
+      "components": { "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [10, 1, 10] }, "MeshRenderer": { "mesh": { "id": "96002d7a-ba76-4a0b-a5b9-60dc10b86cd2", "path": "engine/primitives/plane/model.obj" }, "materialInstance": { "id": "8d3e822a-2c06-4660-8f75-12396a136929", "path": "engine/primitives/default.material-instance.json" } } } },
+    { "id": "b52e7e3e-920c-48b7-b782-8f403e062004", "name": "TestBot Idle", "tags": ["animated"], "parent": null,
+      "components": { "Transform": { "position": [-3.5, 1, -3], "rotation": [0, 0, -0.70710678, 0.70710678], "scale": [1, 1, 1] },
+        "SkinnedMeshRenderer": { "mesh": { "id": "b52e7e3e-920c-48b7-b782-8f403e061003", "path": "game/models/TestBot/model.skinned-mesh.json" }, "materialInstance": { "id": "8d3e822a-2c06-4660-8f75-12396a136929", "path": "engine/primitives/default.material-instance.json" } },
+        "Animator": { "skeleton": { "id": "b52e7e3e-920c-48b7-b782-8f403e061002", "path": "game/models/TestBot/model.skeleton.json" }, "clip": { "id": "b52e7e3e-920c-48b7-b782-8f403e061004", "path": "game/models/TestBot/idle.animation.json" }, "speed": 1, "loop": true, "playOnStart": true } } },
+    { "id": "b52e7e3e-920c-48b7-b782-8f403e062005", "name": "TestBot Walk", "tags": ["animated"], "parent": null,
+      "components": { "Transform": { "position": [-0.5, 1, -3], "rotation": [0, 0, -0.70710678, 0.70710678], "scale": [1, 1, 1] },
+        "SkinnedMeshRenderer": { "mesh": { "id": "b52e7e3e-920c-48b7-b782-8f403e061003", "path": "game/models/TestBot/model.skinned-mesh.json" }, "materialInstance": { "id": "8d3e822a-2c06-4660-8f75-12396a136929", "path": "engine/primitives/default.material-instance.json" } },
+        "Animator": { "skeleton": { "id": "b52e7e3e-920c-48b7-b782-8f403e061002", "path": "game/models/TestBot/model.skeleton.json" }, "clip": { "id": "b52e7e3e-920c-48b7-b782-8f403e061005", "path": "game/models/TestBot/walk.animation.json" }, "speed": 1, "loop": true, "playOnStart": true } } }
+  ]
+}

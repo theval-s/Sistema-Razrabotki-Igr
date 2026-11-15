@@ -165,7 +165,9 @@ std::pair<QString, QString> splitAssetName(const QString& name, const bool dir) 
     // The engine's multi-part suffixes (CatalogKindForFile).
     //TODO: add if we get more suffixes?
     for (const QLatin1String suffix : {QLatin1String(".material-instance.json"), QLatin1String(".material.json"),
-                                       QLatin1String(".scene.json")}) {
+                                        QLatin1String(".skinned-mesh.json"), QLatin1String(".skeleton.json"),
+                                        QLatin1String(".animation.json"),
+                                        QLatin1String(".scene.json")}) {
         if (name.size() > suffix.size() && name.endsWith(suffix, Qt::CaseInsensitive)) {
             return {name.chopped(suffix.size()), name.right(suffix.size())};
         }

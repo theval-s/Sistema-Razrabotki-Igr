@@ -13,6 +13,7 @@ public:
 
 private:
     ShaderHandle defaultVS_{};
+    ShaderHandle skinnedDefaultVS_{};
     ShaderHandle visiblePS_{};
     ShaderHandle occludedPS_{};
 };

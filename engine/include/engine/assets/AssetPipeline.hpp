@@ -3,6 +3,7 @@
 #include <chrono>
 #include <array>
 #include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -18,6 +19,7 @@
 #include <engine/assets/AssetCommon.hpp>
 #include <engine/assets/AssetTypes.hpp>
 #include <engine/assets/AssetHandle.hpp>
+#include <engine/rendering/resources/Skinning.hpp>
 
 namespace engine {
 
@@ -28,6 +30,31 @@ struct MeshCpu {
     std::vector<uint32_t> indices;
     Aabb bounds;
     std::shared_ptr<const MeshGeometry> geometry;
+};
+
+struct SkinnedVertex {
+    DirectX::SimpleMath::Vector4 position;
+    DirectX::SimpleMath::Vector3 normal;
+    DirectX::SimpleMath::Vector2 uv;
+    std::array<std::uint16_t, 4> joints{};
+    std::array<float, 4> weights{};
+};
+static_assert(offsetof(SkinnedVertex, joints) == 36);
+static_assert(offsetof(SkinnedVertex, weights) == 44);
+static_assert(sizeof(SkinnedVertex) == 60);
+
+struct SkinnedMeshSectionCpu {
+    std::vector<SkinnedVertex> vertices;
+    std::vector<std::uint32_t> indices;
+    std::uint32_t materialSlot = 0;
+    std::shared_ptr<const SkinBinding> binding;
+};
+
+struct SkinnedMeshCpu {
+    std::vector<SkinnedMeshSectionCpu> sections;
+    Aabb bounds;
+    std::uint64_t skeletonSignature = 0;
+    AssetReference skeletonReference;
 };
 
 /// The decoded texture, already a device resource: WIC decoding a 4K image and building its
@@ -41,11 +68,12 @@ struct TextureCpu {
 struct MaterialCpu {
     MaterialDefinition definition;
     // ShadowVS, GBufferVS, GBufferPS. An undeclared hook has no bytecode.
-    std::array<CompiledShader, 3> shaders;
+    std::array<CompiledShader, 5> shaders;
 };
 
 struct CpuPayload {
-    enum class Kind : uint8_t { None, Mesh, Texture, Shader, Material, MaterialInstance };
+    enum class Kind : uint8_t { None, Mesh, Texture, Shader, Material, MaterialInstance,
+                               Skeleton, AnimationClip, SkinnedMesh };
 
     Kind kind = Kind::None;
     MeshCpu mesh;
@@ -53,6 +81,9 @@ struct CpuPayload {
     CompiledShader shader;
     MaterialCpu material;
     MaterialInstanceDefinition materialInstance;
+    SkeletonAsset skeleton;
+    AnimationClipAsset animationClip;
+    SkinnedMeshCpu skinnedMesh;
 };
 
 /// Output of the GPU phase (main thread): handles of the resources that were created.
@@ -63,6 +94,7 @@ struct GpuPayload {
     ShaderHandle shader;
     MaterialHandle material;
     MaterialInstanceHandle materialInstance;
+    std::vector<SkinnedMeshSection> skinnedSections;
 };
 
 /// Everything the upload phase may need, resolved on the main thread before the call.
@@ -95,6 +127,20 @@ public:
                                std::string& error) const override;
     [[nodiscard]] bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
                                  GpuPayload& result, std::string& error) const override;
+};
+
+/// Descriptor-backed skeletal import. Each worker resolves and reads the same
+/// skeleton source independently, producing a compatibility-checked snapshot.
+/// No worker waits on another asset request or touches the registry.
+class SkeletalAssetImporter final : public IAssetImporter {
+public:
+    explicit SkeletalAssetImporter(AssetKind kind) : kind_(kind) {}
+    bool ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPayload& payload,
+                 std::string& error) const override;
+    bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
+                   GpuPayload& result, std::string& error) const override;
+private:
+    AssetKind kind_;
 };
 
 class TextureImporter final : public IAssetImporter {

@@ -3,16 +3,21 @@
 #include <QDir>
 #include <QDropEvent>
 #include <QFileInfo>
+#include <QFile>
 #include <QMimeData>
 #include <QString>
 #include <QWidget>
 
 #include <algorithm>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include <SimpleMath.h>
+#include <nlohmann/json.hpp>
 
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/animation/AnimationComponents.hpp>
 #include <engine/engine.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/SceneQueries.hpp>
@@ -42,6 +47,21 @@ const engine::CatalogEntry* findEntry(const engine::AssetCatalog& catalog, const
     return entry != nullptr && entry->metadata.kind == kind ? entry : nullptr;
 }
 
+engine::AssetReference skeletonFor(const engine::CatalogEntry& mesh, const engine::AssetCatalog& catalog) {
+    QFile file(editor::toQString(mesh.source));
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    const auto bytes = file.readAll();
+    const auto descriptor = nlohmann::json::parse(bytes.constBegin(), bytes.constEnd(), nullptr, false);
+    if (descriptor.is_discarded() || !descriptor.is_object() || !descriptor.contains("skeleton")) return {};
+    engine::AssetReference reference;
+    std::string error;
+    if (!engine::ParseAssetReference(descriptor["skeleton"].dump(), reference, error)) return {};
+    // The catalog's current path wins after an asset move; loading stays asynchronous.
+    if (const auto* entry = catalog.Find(reference.id, engine::CatalogAssetKind::Skeleton))
+        reference.path = entry->path;
+    return reference;
+}
+
 /// The first material instance next to mesh or the default one.
 const engine::CatalogEntry* materialFor(const engine::AssetCatalog& catalog, const engine::CatalogEntry& mesh) {
     const QDir folder = QFileInfo(editor::toQString(mesh.source)).absoluteDir();
@@ -65,10 +85,14 @@ QString entityName(const engine::CatalogEntry& mesh) {
 const engine::CatalogEntry* placeableMesh(const engine::AssetCatalog& catalog, const QString& path) {
     const QFileInfo info(path);
     if (!info.isDir()) {
+        if (const auto* entry = findEntry(catalog, path, engine::CatalogAssetKind::SkinnedMesh)) return entry;
         return findEntry(catalog, path, engine::CatalogAssetKind::Mesh);
     }
-    // The name AssetPathResolver::ResolveMesh looks for in a model folder.
     const QDir folder(path);
+    for (const QString& file : folder.entryList({QStringLiteral("*.skinned-mesh.json")}, QDir::Files, QDir::Name)) {
+        if (const auto* entry = findEntry(catalog, folder.filePath(file), engine::CatalogAssetKind::SkinnedMesh)) return entry;
+    }
+    // The name AssetPathResolver::ResolveMesh looks for in a static model folder.
     for (const QString& file : folder.entryList({QStringLiteral("model.*")}, QDir::Files, QDir::Name)) {
         if (const auto* entry = findEntry(catalog, folder.filePath(file), engine::CatalogAssetKind::Mesh)) {
             return entry;
@@ -111,9 +135,21 @@ int addToScene(editor::EditorContext& context, const QStringList& paths, const s
         transform.position = center + right * offset;
         scene.SetTransform(entity, transform);
         // Asynchronous: the entity shows up once the mesh is loaded. The references are what gets saved.
-        scene.AddComponent<engine::MeshRenderer>(entity, assets.RequestMesh(mesh_reference),
-                                                 assets.RequestMaterialInstance(material_reference), mesh_reference,
-                                                 material_reference);
+        if (mesh.metadata.kind == engine::CatalogAssetKind::SkinnedMesh) {
+            engine::SkinnedMeshRenderer renderer;
+            renderer.mesh = assets.RequestSkinnedMesh(mesh_reference);
+            renderer.materialInstance = assets.RequestMaterialInstance(material_reference);
+            renderer.meshReference = mesh_reference;
+            renderer.materialReference = material_reference;
+            scene.AddComponent<engine::SkinnedMeshRenderer>(entity, std::move(renderer));
+            engine::Animator animator;
+            animator.skeleton = skeletonFor(mesh, catalog);
+            scene.AddComponent<engine::Animator>(entity, std::move(animator));
+        } else {
+            scene.AddComponent<engine::MeshRenderer>(entity, assets.RequestMesh(mesh_reference),
+                                                     assets.RequestMaterialInstance(material_reference), mesh_reference,
+                                                     material_reference);
+        }
         added.push_back(entity);
     }
     context.selection().setEntities(added);

@@ -43,6 +43,8 @@ void GBufferPass::Initialize(RenderingResourceManager& resourceManager, Renderin
                              RenderingResources& resources) {
     vertexShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
         {.defines = {{"MATERIAL_GBUFFER_VS"}}});
+    skinnedVertexShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
+        {.defines = {{"MATERIAL_GBUFFER_VS"}, {"ENGINE_SKINNED", "1"}}});
     pixelShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Pixel,
         {.defines = {{"MATERIAL_GBUFFER_PS"}}});
 
@@ -54,6 +56,7 @@ void GBufferPass::Initialize(RenderingResourceManager& resourceManager, Renderin
 void GBufferPass::Destroy(RenderingResourceManager& resourceManager, RenderingContext& context,
     RenderingResources& resources) {
     resourceManager.DestroyShader(vertexShader_);
+    resourceManager.DestroyShader(skinnedVertexShader_);
     resourceManager.DestroyShader(pixelShader_);
     DestroyGBuffer(resourceManager, resources);
     resourceManager.DestroyMesh(lightSphere_);
@@ -73,7 +76,7 @@ void GBufferPass::Render(RenderWorld& world, RenderingContext& context, Renderin
     world.BindCameraView(context, resources);
 
     const auto& manager = context.GetResourceManager();
-    const auto draws = BuildMaterialDrawList(world, manager, false, vertexShader_, pixelShader_);
+    const auto draws = BuildMaterialDrawList(world, manager, false, vertexShader_, pixelShader_, skinnedVertexShader_);
     ShaderHandle boundVS{}, boundPS{};
     MaterialInstanceHandle boundInstance{};
     for (const auto& draw : draws) {
@@ -98,6 +101,7 @@ void GBufferPass::Render(RenderWorld& world, RenderingContext& context, Renderin
             boundInstance = draw.item->materialInstance;
         }
         const auto& ri = *draw.item;
+        resources.BindSkinning(context, ri.skinning.get());
         resources.objectCBuffer.Update(context, [&](ObjectBufferData& data){
             data.worldMatrix = ri.worldMatrix;
             data.normalMatrix = ri.worldMatrix.Invert().Transpose();

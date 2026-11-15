@@ -36,6 +36,7 @@ Asset formats, with their C++ APIs:
 |---|---|
 | [scene-assets.md](scene-assets.md) | `.meta` sidecars and UUIDs, scene JSON, saves, the C++ scene API |
 | [material-assets.md](material-assets.md) | Material and material-instance JSON, shader hooks, the C++ material API |
+| [animation.md](animation.md) | GLB animation assets, editor workflow, Lua and C++ playback, and skinning limits |
 
 C++ hosts, in `sdk/` (engine SDK only):
 

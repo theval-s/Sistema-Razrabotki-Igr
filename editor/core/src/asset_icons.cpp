@@ -21,6 +21,12 @@ Style styleOf(const engine::CatalogAssetKind kind) {
     switch (kind) {
     case engine::CatalogAssetKind::Mesh:
         return {"MESH", QColor(0xc7, 0x7d, 0x2a)};
+    case engine::CatalogAssetKind::SkinnedMesh:
+        return {"SKIN", QColor(0xc7, 0x65, 0x42)};
+    case engine::CatalogAssetKind::Skeleton:
+        return {"RIG", QColor(0x99, 0x6a, 0xb8)};
+    case engine::CatalogAssetKind::AnimationClip:
+        return {"ANIM", QColor(0x4b, 0x92, 0xa8)};
     case engine::CatalogAssetKind::Texture:
             //TODO: figure out thumbnails, QFileIconProvider?
         return {"IMG", QColor(0x3d, 0x9a, 0x5b)};
@@ -102,6 +108,12 @@ QString assetKindName(const engine::CatalogAssetKind kind) {
     switch (kind) {
     case engine::CatalogAssetKind::Mesh:
         return QObject::tr("Meshes");
+    case engine::CatalogAssetKind::SkinnedMesh:
+        return QObject::tr("Skinned Meshes");
+    case engine::CatalogAssetKind::Skeleton:
+        return QObject::tr("Skeletons");
+    case engine::CatalogAssetKind::AnimationClip:
+        return QObject::tr("Animation Clips");
     case engine::CatalogAssetKind::Texture:
         return QObject::tr("Textures");
     case engine::CatalogAssetKind::Shader:

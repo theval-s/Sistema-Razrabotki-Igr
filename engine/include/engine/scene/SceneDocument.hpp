@@ -1,6 +1,7 @@
 #pragma once
 #include <engine/scripting/ScriptComponent.hpp>
 #include <engine/ai/BehaviorTreeComponent.hpp>
+#include <engine/animation/AnimationComponents.hpp>
 
 #include <optional>
 #include <span>
@@ -39,6 +40,8 @@ struct SceneEntityDefinition {
         bool operator==(const Mesh&) const = default;
     };
     std::optional<Mesh> renderer;
+    std::optional<Mesh> skinnedRenderer;
+    std::optional<Animator> animator;
     std::optional<Camera> camera;
     std::optional<DirectionalLight> directionalLight;
     std::optional<PointLight> pointLight;

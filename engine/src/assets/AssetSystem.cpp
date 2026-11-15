@@ -30,6 +30,13 @@ T MakeValue(const AssetDesc& desc, const CpuPayload& cpu, const GpuPayload& gpu)
         return ShaderAsset{gpu.shader, desc.shaderStage};
     } else if constexpr (std::is_same_v<T, MaterialAsset>) {
         return MaterialAsset{gpu.material, cpu.material.definition};
+    } else if constexpr (std::is_same_v<T, SkeletonAsset>) {
+        return cpu.skeleton;
+    } else if constexpr (std::is_same_v<T, AnimationClipAsset>) {
+        return cpu.animationClip;
+    } else if constexpr (std::is_same_v<T, SkinnedMeshAsset>) {
+        return SkinnedMeshAsset{gpu.skinnedSections, cpu.skinnedMesh.bounds,
+            cpu.skinnedMesh.skeletonSignature, cpu.skinnedMesh.skeletonReference};
     } else {
         return MaterialInstanceAsset{gpu.materialInstance, cpu.materialInstance};
     }
@@ -88,6 +95,9 @@ constexpr std::string_view ToString(const AssetKind kind) {
         return "material";
     case AssetKind::MaterialInstance:
         return "material instance";
+    case AssetKind::Skeleton: return "skeleton";
+    case AssetKind::AnimationClip: return "animation clip";
+    case AssetKind::SkinnedMesh: return "skinned mesh";
     case AssetKind::Count:
         break;
     }
@@ -109,6 +119,8 @@ void AssetSystem::Initialize() {
     importers_[static_cast<size_t>(AssetKind::Shader)] = std::make_unique<ShaderImporter>();
     importers_[static_cast<size_t>(AssetKind::Material)] = std::make_unique<MaterialImporter>();
     importers_[static_cast<size_t>(AssetKind::MaterialInstance)] = std::make_unique<MaterialInstanceImporter>();
+    for (const auto kind : {AssetKind::Skeleton, AssetKind::AnimationClip, AssetKind::SkinnedMesh})
+        importers_[static_cast<size_t>(kind)] = std::make_unique<SkeletalAssetImporter>(kind);
 }
 
 void AssetSystem::Update(const FrameContext& frame) {
@@ -167,6 +179,51 @@ entt::resource<MaterialAsset> AssetSystem::LoadMaterial(const std::string_view n
 
 entt::resource<MaterialInstanceAsset> AssetSystem::LoadMaterialInstance(const std::string_view name) {
     return LoadSync(RequestMaterialInstance(name));
+}
+
+entt::resource<SkeletonAsset> AssetSystem::LoadSkeleton(std::string_view name) {
+    return LoadSync(RequestSkeleton(name));
+}
+entt::resource<AnimationClipAsset> AssetSystem::LoadAnimationClip(std::string_view name) {
+    return LoadSync(RequestAnimationClip(name));
+}
+entt::resource<SkinnedMeshAsset> AssetSystem::LoadSkinnedMesh(std::string_view name) {
+    return LoadSync(RequestSkinnedMesh(name));
+}
+
+AssetHandle<SkeletonAsset> AssetSystem::RequestSkeleton(std::string_view name) {
+    if (name.empty()) return {};
+    AssetDesc desc;
+    desc.name = NormalizeName(name);
+    desc.path = AssetPathResolver::DefaultPath(desc.name, AssetKind::Skeleton);
+    return Request<SkeletonAsset>(std::move(desc));
+}
+AssetHandle<AnimationClipAsset> AssetSystem::RequestAnimationClip(std::string_view name) {
+    if (name.empty()) return {};
+    AssetDesc desc;
+    desc.name = NormalizeName(name);
+    desc.path = AssetPathResolver::DefaultPath(desc.name, AssetKind::AnimationClip);
+    return Request<AnimationClipAsset>(std::move(desc));
+}
+AssetHandle<SkinnedMeshAsset> AssetSystem::RequestSkinnedMesh(std::string_view name) {
+    if (name.empty()) return {};
+    AssetDesc desc;
+    desc.name = NormalizeName(name);
+    desc.path = AssetPathResolver::DefaultPath(desc.name, AssetKind::SkinnedMesh);
+    return Request<SkinnedMeshAsset>(std::move(desc));
+}
+
+AssetHandle<SkeletonAsset> AssetSystem::RequestSkeleton(const AssetReference& reference) {
+    const auto* entry = Resolve(reference, CatalogAssetKind::Skeleton);
+    return entry ? RequestSkeleton(entry->path) : AssetHandle<SkeletonAsset>{};
+}
+AssetHandle<AnimationClipAsset> AssetSystem::RequestAnimationClip(const AssetReference& reference) {
+    const auto* entry = Resolve(reference, CatalogAssetKind::AnimationClip);
+    return entry ? RequestAnimationClip(entry->path) : AssetHandle<AnimationClipAsset>{};
+}
+AssetHandle<SkinnedMeshAsset> AssetSystem::RequestSkinnedMesh(const AssetReference& reference) {
+    const auto* entry = Resolve(reference, CatalogAssetKind::SkinnedMesh);
+    return entry ? RequestSkinnedMesh(entry->path) : AssetHandle<SkinnedMeshAsset>{};
 }
 
 bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& error) {
@@ -360,12 +417,26 @@ void AssetSystem::UnloadAll() {
         shaders_.ForEachReady([&](const ShaderAsset& value) { gpu.DestroyShader(value.shader); });
         textures_.ForEachReady([&](const TextureAsset& value) { gpu.DestroyTexture(value.texture); });
         meshes_.ForEachReady([&](const MeshAsset& value) { gpu.DestroyMesh(value.mesh); });
+        skinnedMeshes_.ForEachReady([&](const SkinnedMeshAsset& value) {
+            for (const auto& section : value.sections) gpu.DestroyMesh(section.mesh);
+        });
     }
     materialInstances_.EvictAll();
     materials_.EvictAll();
     shaders_.EvictAll();
     textures_.EvictAll();
     meshes_.EvictAll();
+    skinnedMeshes_.EvictAll();
+    animationClips_.EvictAll();
+    skeletons_.EvictAll();
+}
+
+std::optional<AssetReference> AssetSystem::ReferenceFor(AssetHandle<SkinnedMeshAsset> handle) const {
+    const auto* record = skinnedMeshes_.Get(handle);
+    if (!record) return std::nullopt;
+    const auto* entry = catalog_.FindPath(record->desc.name);
+    if (!entry || entry->metadata.kind != CatalogAssetKind::SkinnedMesh) return std::nullopt;
+    return AssetReference{entry->metadata.id, entry->path};
 }
 
 std::optional<AssetReference> AssetSystem::ReferenceFor(AssetHandle<MeshAsset> handle) const {
@@ -532,6 +603,15 @@ bool AssetSystem::FinishJob(LoadJob& job, const uint64_t frameIndex) {
     case AssetKind::MaterialInstance:
         FinishTyped(job, materialInstances_, AssetHandle<MaterialInstanceAsset>{job.slot, job.generation}, frameIndex);
         break;
+    case AssetKind::Skeleton:
+        FinishTyped(job, skeletons_, AssetHandle<SkeletonAsset>{job.slot, job.generation}, frameIndex);
+        break;
+    case AssetKind::AnimationClip:
+        FinishTyped(job, animationClips_, AssetHandle<AnimationClipAsset>{job.slot, job.generation}, frameIndex);
+        break;
+    case AssetKind::SkinnedMesh:
+        FinishTyped(job, skinnedMeshes_, AssetHandle<SkinnedMeshAsset>{job.slot, job.generation}, frameIndex);
+        break;
     case AssetKind::Count:
         break;
     }
@@ -603,23 +683,24 @@ entt::resource<T> AssetSystem::FinishTyped(const LoadJob& job, AssetTable<T>& ta
         return failed;
     }
 
-    RenderingSubsystem* rendering = engine_.GetSubsystem<RenderingSubsystem>();
-    if (rendering == nullptr) {
-        const std::string error = "no RenderingSubsystem to upload the result to";
-        auto failed = FailLoad(table, handle, error);
-        engine_.GetEvents().trigger(AssetFailedEvent{job.id, job.name, job.kind, error});
-        return failed;
-    }
-
     GpuPayload gpu;
-    std::string error;
-    auto transfer = MakeTransfer(*rendering);
-    transfer.material = job.resolvedMaterial;
-    transfer.materialParameters = job.resolvedParameters;
-    if (!ImporterFor(job.kind).UploadGpu(transfer, job.payload, gpu, error)) {
-        entt::resource<T> failed = FailLoad(table, handle, error);
-        engine_.GetEvents().trigger(AssetFailedEvent{job.id, job.name, job.kind, error});
-        return failed;
+    if constexpr (!std::is_same_v<T, SkeletonAsset> && !std::is_same_v<T, AnimationClipAsset>) {
+        auto* rendering = engine_.GetSubsystem<RenderingSubsystem>();
+        std::string error;
+        bool uploaded = false;
+        if (rendering) {
+            auto transfer = MakeTransfer(*rendering);
+            transfer.material = job.resolvedMaterial;
+            transfer.materialParameters = job.resolvedParameters;
+            uploaded = ImporterFor(job.kind).UploadGpu(transfer, job.payload, gpu, error);
+        } else {
+            error = "no RenderingSubsystem to upload the result to";
+        }
+        if (!uploaded) {
+            auto failed = FailLoad(table, handle, error);
+            engine_.GetEvents().trigger(AssetFailedEvent{job.id, job.name, job.kind, error});
+            return failed;
+        }
     }
 
     const auto totalSeconds =

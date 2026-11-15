@@ -3,6 +3,7 @@
 #include <utility>
 
 #include <engine/engine.hpp>
+#include <engine/animation/AnimationSubsystem.hpp>
 #include <engine/audio/AudioSubsystem.hpp>
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/physics/PhysicsSubsystem.hpp>
@@ -25,6 +26,7 @@ namespace engine {
         engine.AddSubsystem<AudioSubsystem>();
         engine.AddSubsystem<ScriptSubsystem>();
         engine.AddSubsystem<PhysicsSubsystem>();
+        engine.AddSubsystem<AnimationSubsystem>();
         engine.AddSubsystem<RenderExtractionSubsystem>();
         return input;
     }
