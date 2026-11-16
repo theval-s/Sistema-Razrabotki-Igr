@@ -12,7 +12,9 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 namespace engine {
@@ -24,6 +26,34 @@ bool IsFinite(Vector3 v) {
 }
 
 constexpr int QueryCapacity = 2048;
+
+// .navmesh: magic, version, checksum of the rest, owner region, settings, Detour tile size and data.
+static_assert(std::endian::native == std::endian::little, ".navmesh files are little-endian");
+constexpr std::array<char, 8> FileMagic{'S', 'R', 'I', 'N', 'A', 'V', 'M', '\0'};
+constexpr std::uint32_t FileVersion = 1;
+
+std::uint64_t Checksum(std::span<const std::uint8_t> data) {
+    std::uint64_t hash = 14695981039346656037ull;
+    for (const auto byte : data) hash = (hash ^ byte) * 1099511628211ull;
+    return hash;
+}
+
+template <class T>
+void Put(std::vector<std::uint8_t>& out, const T& value) {
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(&value);
+    out.insert(out.end(), bytes, bytes + sizeof(T));
+}
+
+struct Reader {
+    std::span<const std::uint8_t> rest;
+    template <class T>
+    bool Get(T& value) {
+        if (rest.size() < sizeof(T)) return false;
+        std::memcpy(&value, rest.data(), sizeof(T));
+        rest = rest.subspan(sizeof(T));
+        return true;
+    }
+};
 }
 
 struct NavigationMesh::Impl {
@@ -272,6 +302,77 @@ void NavigationMesh::Draw(DebugDraw& draw) const {
             draw.Line({a[0], a[1] + 0.03f, a[2]}, {b[0], b[1] + 0.03f, b[2]}, color);
         }
     }
+}
+
+std::vector<std::uint8_t> NavigationMesh::Serialize(EntityUuid region) const {
+    if (!impl_) return {};
+    const auto* tile = static_cast<const dtNavMesh&>(*impl_->mesh).getTile(0);
+    if (!tile || !tile->data || tile->dataSize <= 0) return {};
+    const std::span<const std::uint8_t> data(tile->data, static_cast<std::size_t>(tile->dataSize));
+    std::vector<std::uint8_t> body;
+    body.insert(body.end(), region.Bytes().begin(), region.Bytes().end());
+    const auto& s = impl_->settings;
+    for (const float value : {s.cellSize, s.cellHeight, s.agentHeight, s.agentRadius, s.agentClimb, s.agentSlope})
+        Put(body, value);
+    Put(body, static_cast<std::uint32_t>(data.size()));
+    body.insert(body.end(), data.begin(), data.end());
+
+    std::vector<std::uint8_t> file(FileMagic.begin(), FileMagic.end());
+    Put(file, FileVersion);
+    Put(file, Checksum(body));
+    file.insert(file.end(), body.begin(), body.end());
+    return file;
+}
+
+bool NavigationMesh::Deserialize(std::span<const std::uint8_t> data, EntityUuid& region, std::string& error) {
+    Reader in{data};
+    std::array<char, 8> magic{};
+    std::uint32_t version = 0;
+    std::uint64_t checksum = 0;
+    if (!in.Get(magic) || magic != FileMagic) {
+        error = "not a .navmesh file";
+        return false;
+    }
+    if (!in.Get(version) || version != FileVersion) {
+        error = "unsupported .navmesh version";
+        return false;
+    }
+    if (!in.Get(checksum) || Checksum(in.rest) != checksum) {
+        error = "damaged .navmesh file";
+        return false;
+    }
+    std::array<std::uint8_t, 16> owner{};
+    NavigationSettings settings;
+    std::uint32_t size = 0;
+    if (!in.Get(owner) || !in.Get(settings.cellSize) || !in.Get(settings.cellHeight) ||
+        !in.Get(settings.agentHeight) || !in.Get(settings.agentRadius) || !in.Get(settings.agentClimb) ||
+        !in.Get(settings.agentSlope) || !in.Get(size) || size < sizeof(dtMeshHeader) ||
+        size > static_cast<std::uint32_t>((std::numeric_limits<int>::max)()) || in.rest.size() != size) {
+        error = "damaged .navmesh file";
+        return false;
+    }
+
+    auto next = std::make_shared<Impl>();
+    auto* tile = static_cast<unsigned char*>(dtAlloc(size, DT_ALLOC_PERM));
+    if (!next->mesh || !next->query || !tile) {
+        dtFree(tile);
+        error = "out of memory";
+        return false;
+    }
+    std::memcpy(tile, in.rest.data(), size);
+    if (dtStatusFailed(next->mesh->init(tile, static_cast<int>(size), DT_TILE_FREE_DATA))) {
+        dtFree(tile);
+        error = "the NavMesh was baked by an incompatible engine version";
+        return false;
+    }
+    if (dtStatusFailed(next->query->init(next->mesh.get(), QueryCapacity))) {
+        error = "out of memory";
+        return false;
+    }
+    next->settings = settings;
+    impl_ = std::move(next);
+    region = EntityUuid(FormatUuidBytes(owner));
+    return true;
 }
 
 std::vector<Vector3> NavigationMesh::FindPath(Vector3 start, Vector3 goal) const {

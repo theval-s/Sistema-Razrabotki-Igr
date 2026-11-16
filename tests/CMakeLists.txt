@@ -289,6 +289,17 @@ target_link_libraries(asset_authoring_tests PRIVATE Engine::EngineStatic GTest::
 set_project_warnings(asset_authoring_tests)
 set_target_properties(asset_authoring_tests PROPERTIES FOLDER tests)
 
+add_executable(navigation_tests navigation_tests.cpp)
+target_link_libraries(navigation_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
+set_project_warnings(navigation_tests)
+set_target_properties(navigation_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET navigation_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:navigation_tests> $<TARGET_FILE_DIR:navigation_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME navigation_tests COMMAND navigation_tests)
+
 add_executable(file_system_tests file_system_tests.cpp)
 target_link_libraries(file_system_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(file_system_tests)

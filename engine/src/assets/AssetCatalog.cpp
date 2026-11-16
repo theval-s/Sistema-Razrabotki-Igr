@@ -36,6 +36,7 @@ std::string_view KindName(CatalogAssetKind kind) {
     case CatalogAssetKind::Skeleton: return "skeleton";
     case CatalogAssetKind::AnimationClip: return "animationClip";
     case CatalogAssetKind::SkinnedMesh: return "skinnedMesh";
+    case CatalogAssetKind::NavMesh: return "navMesh";
     }
     return {};
 }
@@ -105,7 +106,7 @@ AssetMetadata MetadataFromJson(const Json& j) {
                                   CatalogAssetKind::Material, CatalogAssetKind::MaterialInstance, CatalogAssetKind::Scene, CatalogAssetKind::Script,
                                   CatalogAssetKind::UiDocument, CatalogAssetKind::UiStylesheet, CatalogAssetKind::UiTemplate, CatalogAssetKind::Font,
                                   CatalogAssetKind::BehaviorTree, CatalogAssetKind::AudioClip, CatalogAssetKind::Skeleton,
-                                  CatalogAssetKind::AnimationClip, CatalogAssetKind::SkinnedMesh}) {
+                                  CatalogAssetKind::AnimationClip, CatalogAssetKind::SkinnedMesh, CatalogAssetKind::NavMesh}) {
         if (kind == KindName(candidate)) { meta.kind = candidate; found = true; break; }
     }
     if (!found || (j.contains("centerOnLoad") && meta.kind != CatalogAssetKind::Mesh))
@@ -143,6 +144,7 @@ std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& 
     if (ext == ".rmlt") return CatalogAssetKind::UiTemplate;
     if (ext == ".ttf" || ext == ".otf") return CatalogAssetKind::Font;
     if (ext == ".wav" || ext == ".flac" || ext == ".mp3") return CatalogAssetKind::AudioClip;
+    if (ext == ".navmesh") return CatalogAssetKind::NavMesh;
     return std::nullopt;
 }
 

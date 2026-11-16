@@ -664,6 +664,29 @@ void Engine::ResetSimulation() {
         impl_->subsystems[i].subsystem->ResetSimulation();
 }
 
+namespace {
+// Loads each region's baked .navmesh; a missing or foreign bake leaves the region without a mesh.
+void LoadNavigation(const Scene& scene, const AssetCatalog& catalog,
+                    std::unordered_map<EntityUuid, NavigationMesh, EntityUuidHash>& meshes) {
+    scene.ForEach<NavigationRegion>([&](entt::entity entity, const NavigationRegion& region) {
+        if (!region.navMesh.id.IsValid()) return;
+        const auto id = scene.GetId(entity);
+        const auto fail = [&](const std::string& reason) {
+            log::Engine().warn("NavMesh '{}' ({}): {}. Bake it again.", scene.GetName(entity), region.navMesh.path, reason);
+        };
+        const auto* entry = catalog.Find(region.navMesh.id, CatalogAssetKind::NavMesh);
+        if (!entry) return fail("the baked data is missing");
+        std::vector<std::uint8_t> data;
+        std::string error;
+        EntityUuid owner;
+        NavigationMesh mesh;
+        if (!ReadBinaryFile(entry->source, data, error) || !mesh.Deserialize(data, owner, error)) return fail(error);
+        if (owner != id) return fail("the baked data belongs to another NavMesh");
+        meshes.insert_or_assign(id, std::move(mesh));
+    });
+}
+}  // namespace
+
 void Engine::CommitScene(const SceneDocument& document) {
     if (auto* audio = GetSubsystem<AudioSubsystem>()) audio->BeginSceneTransition();
     impl_->navigation.clear();
@@ -680,6 +703,7 @@ void Engine::CommitScene(const SceneDocument& document) {
     impl_->scene.Clear();
     impl_->sceneAssets->UnloadAll();
     PopulateScene(document, *impl_->sceneAssets, impl_->scene);
+    LoadNavigation(impl_->scene, impl_->sceneAssets->GetCatalog(), impl_->navigation);
     impl_->sceneBaseline = document;
     if (auto* audio = GetSubsystem<AudioSubsystem>()) audio->EndSceneTransition();
     if (auto* scripting = GetSubsystem<ScriptSubsystem>(); scripting && scripting->IsPlaying() && !impl_->restoringGame)
@@ -1139,6 +1163,16 @@ bool Engine::BuildNavigation(entt::entity entity, std::string& error) {
     }
     impl_->navigation.insert_or_assign(scene.GetId(entity), mesh);
     return true;
+}
+
+bool Engine::SaveNavigation(entt::entity region, const std::filesystem::path& file, std::string& error) const {
+    const auto* mesh = GetNavigationMesh(region);
+    const auto data = mesh ? mesh->Serialize(impl_->scene.GetId(region)) : std::vector<std::uint8_t>{};
+    if (data.empty()) {
+        error = "Bake the NavMesh first";
+        return false;
+    }
+    return WriteFileAtomic(file, {reinterpret_cast<const char*>(data.data()), data.size()}, error);
 }
 
 AssetSystem& Engine::GetSceneAssets() noexcept {

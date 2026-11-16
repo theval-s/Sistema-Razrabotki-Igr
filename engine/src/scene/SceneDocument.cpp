@@ -185,13 +185,16 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
     }
     if (components.contains("NavigationRegion")) {
         const auto& json = components.at("NavigationRegion");
-        Fields(json, {"halfExtents", "cellSize", "cellHeight", "agentHeight", "agentRadius", "agentClimb", "agentSlope"});
+        Fields(json, {"halfExtents", "cellSize", "cellHeight", "agentHeight", "agentRadius", "agentClimb", "agentSlope",
+                      "navMesh"});
         const auto extents = Numbers<3>(json.at("halfExtents"));
         if (extents[0] <= 0 || extents[1] <= 0 || extents[2] <= 0)
             throw std::invalid_argument("NavigationRegion half extents must be positive");
         entity.navigationRegion = NavigationRegion{{extents[0], extents[1], extents[2]},
             {Number(json.at("cellSize")), Number(json.at("cellHeight")), Number(json.at("agentHeight")),
-             Number(json.at("agentRadius")), Number(json.at("agentClimb")), Number(json.at("agentSlope"))}};
+             Number(json.at("agentRadius")), Number(json.at("agentClimb")), Number(json.at("agentSlope"))}, {}};
+        if (json.contains("navMesh") && !json.at("navMesh").is_null())
+            entity.navigationRegion->navMesh = Reference(json.at("navMesh"));
     }
     if (components.contains("NavigationSource")) {
         const auto& json = components.at("NavigationSource");
@@ -532,6 +535,7 @@ Json Encode(const SceneDocument& document) {
             components["NavigationRegion"] = {{"halfExtents", Encode(region.halfExtents)},
                 {"cellSize", s.cellSize}, {"cellHeight", s.cellHeight}, {"agentHeight", s.agentHeight},
                 {"agentRadius", s.agentRadius}, {"agentClimb", s.agentClimb}, {"agentSlope", s.agentSlope}};
+            if (region.navMesh.id.IsValid()) components["NavigationRegion"]["navMesh"] = Encode(region.navMesh);
         }
         if (entity.navigationSource)
             components["NavigationSource"] = {{"useCollider", entity.navigationSource->useCollider}};

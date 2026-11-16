@@ -198,6 +198,10 @@ public:
         DirectX::SimpleMath::Vector3 start, DirectX::SimpleMath::Vector3 goal,
         entt::entity region = entt::null) const;
     [[nodiscard]] ENGINE_API bool BuildNavigation(entt::entity region, std::string& error);
+    /// Writes the region's built mesh to `file` (a .navmesh), replacing it. Fails if nothing is built.
+    /// Scene loads read it back through NavigationRegion::navMesh.
+    [[nodiscard]] ENGINE_API bool SaveNavigation(entt::entity region, const std::filesystem::path& file,
+                                                 std::string& error) const;
     /// Rescans the catalogs of both registries after asset files were added, moved or removed
     /// on disk. False, with the reason, when the scan was not clean (AssetSystem::RescanCatalog).
     [[nodiscard]] ENGINE_API bool RescanAssetCatalogs(std::string& error);

@@ -1,9 +1,12 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <engine/assets/AssetCatalog.hpp>
 #include <engine/core/Uuid.hpp>
 #include <span>
+#include <string>
 #include <vector>
 #include <SimpleMath.h>
 #include <engine/engine_export.hpp>
@@ -23,6 +26,7 @@ struct NavigationSettings {
 struct NavigationRegion {
     DirectX::SimpleMath::Vector3 halfExtents{10, 3, 10};
     NavigationSettings settings;
+    AssetReference navMesh; // baked .navmesh data, loaded with the scene; empty until baked
     bool operator==(const NavigationRegion&) const = default;
 };
 
@@ -54,6 +58,10 @@ public:
     void ClearCrowd() const;
     void Clear();
     void Draw(DebugDraw& draw) const;
+    /// The built mesh as .navmesh file contents owned by `region`; empty if nothing is built.
+    [[nodiscard]] std::vector<std::uint8_t> Serialize(EntityUuid region) const;
+    /// Replaces the mesh with Serialize() output and reports its owner. A failure preserves the previous mesh.
+    [[nodiscard]] bool Deserialize(std::span<const std::uint8_t> data, EntityUuid& region, std::string& error);
 
     /// Projects both endpoints onto the mesh. Returns an empty path if either
     /// projection fails, the goal is unreachable, or the query exceeds capacity.

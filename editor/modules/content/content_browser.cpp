@@ -80,6 +80,7 @@ constexpr engine::CatalogAssetKind FilterKinds[] = {
     engine::CatalogAssetKind::AudioClip,
     engine::CatalogAssetKind::UiDocument, engine::CatalogAssetKind::UiStylesheet,
     engine::CatalogAssetKind::UiTemplate, engine::CatalogAssetKind::Font,
+    engine::CatalogAssetKind::NavMesh,
 };
 
 /// Files dragged in from outside the editor are copied, whatever the drag proposed: reporting
