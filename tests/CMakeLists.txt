@@ -195,6 +195,22 @@ if(SRI_BUILD_EDITOR)
     )
     add_test(NAME scene_history_tests COMMAND scene_history_tests)
 
+    add_executable(navigation_bake_tests
+        navigation_bake_tests.cpp
+        ../editor/modules/scene/navigation_bake.cpp
+        ../editor/modules/scene/navigation_bake.hpp
+    )
+    target_include_directories(navigation_bake_tests PRIVATE ../editor/modules/scene)
+    target_link_libraries(navigation_bake_tests PRIVATE editor_core Engine::Engine GTest::gtest_main Qt6::Core)
+    set_project_warnings(navigation_bake_tests)
+    set_target_properties(navigation_bake_tests PROPERTIES FOLDER tests)
+    add_custom_command(TARGET navigation_bake_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:navigation_bake_tests> $<TARGET_FILE_DIR:navigation_bake_tests>
+        COMMAND_EXPAND_LISTS VERBATIM
+    )
+    add_test(NAME navigation_bake_tests COMMAND navigation_bake_tests)
+
     add_executable(edit_actions_tests edit_actions_tests.cpp)
     target_link_libraries(edit_actions_tests PRIVATE editor_core Engine::Engine GTest::gtest Qt6::Widgets)
     set_project_warnings(edit_actions_tests)

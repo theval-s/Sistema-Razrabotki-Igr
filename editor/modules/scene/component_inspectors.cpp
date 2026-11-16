@@ -50,6 +50,7 @@
 #include <editor/scene_events.hpp>
 #include <editor/scene_history.hpp>
 
+#include "navigation_bake.hpp"
 #include "property_form.hpp"
 
 namespace {
@@ -253,10 +254,23 @@ void buildNavigationRegion(PropertyForm& form, editor::EditorContext& context, e
     form.addFloat(QObject::tr("Agent radius"), field(scene, entity, &Region::settings, &Settings::agentRadius));
     form.addFloat(QObject::tr("Maximum step"), field(scene, entity, &Region::settings, &Settings::agentClimb));
     form.addFloat(QObject::tr("Maximum slope (degrees)"), field(scene, entity, &Region::settings, &Settings::agentSlope));
+    auto* status = new QLabel;
+    status->setWordWrap(true);
+    form.addRow(QObject::tr("Baked data"), status, [&context, entity, status] {
+        if (const QString text = navigationBakeStatus(context.engine(), entity); text != status->text())
+            status->setText(text);
+    });
     auto* bake = new QPushButton(QObject::tr("Bake Navigation Mesh"));
     QObject::connect(bake, &QPushButton::clicked, bake, [&context, entity, bake] {
+        auto& document = context.sceneDocument();
+        if (document.filePath().empty()) {
+            const auto answer = QMessageBox::question(bake, QObject::tr("Navigation Region"),
+                QObject::tr("The NavMesh is saved next to the scene. Save the scene first?"),
+                QMessageBox::Save | QMessageBox::Cancel);
+            if (answer != QMessageBox::Save || !document.saveInteractive(bake, false)) return;
+        }
         std::string error;
-        if (!context.engine().BuildNavigation(entity, error))
+        if (!bakeNavigation(context.engine(), context.history(), document.filePath(), entity, error))
             QMessageBox::warning(bake, QObject::tr("Navigation Region"), QString::fromStdString(error));
     });
     form.addRow({}, bake, [&context, bake] { bake->setEnabled(!context.engine().IsPlaying()); });

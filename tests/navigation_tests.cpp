@@ -36,8 +36,10 @@ TEST(NavigationMeshFile, RoundTripKeepsPathsSettingsAndOwner) {
     EXPECT_FALSE(loaded.FindPath(From, To).empty());
     EXPECT_EQ(loaded.FindPath(From, To), mesh.FindPath(From, To));
     EXPECT_EQ(loaded.Serialize(owner), file);
+    EXPECT_EQ(loaded.GetSettings(), engine::NavigationSettings{});
     EXPECT_TRUE(loaded.RegisterAgent(owner, From, 3));
     EXPECT_TRUE(engine::NavigationMesh{}.Serialize(owner).empty());
+    EXPECT_FALSE(engine::NavigationMesh{}.GetSettings());
 }
 
 TEST(NavigationMeshFile, RejectsDamagedFilesAndKeepsTheMesh) {

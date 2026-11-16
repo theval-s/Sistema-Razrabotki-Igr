@@ -58,6 +58,8 @@ public:
     void ClearCrowd() const;
     void Clear();
     void Draw(DebugDraw& draw) const;
+    /// What the mesh was built with; nullopt if nothing is built.
+    [[nodiscard]] std::optional<NavigationSettings> GetSettings() const;
     /// The built mesh as .navmesh file contents owned by `region`; empty if nothing is built.
     [[nodiscard]] std::vector<std::uint8_t> Serialize(EntityUuid region) const;
     /// Replaces the mesh with Serialize() output and reports its owner. A failure preserves the previous mesh.

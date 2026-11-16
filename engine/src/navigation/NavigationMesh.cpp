@@ -304,6 +304,11 @@ void NavigationMesh::Draw(DebugDraw& draw) const {
     }
 }
 
+std::optional<NavigationSettings> NavigationMesh::GetSettings() const {
+    if (!impl_) return std::nullopt;
+    return impl_->settings;
+}
+
 std::vector<std::uint8_t> NavigationMesh::Serialize(EntityUuid region) const {
     if (!impl_) return {};
     const auto* tile = static_cast<const dtNavMesh&>(*impl_->mesh).getTile(0);

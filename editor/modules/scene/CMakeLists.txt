@@ -4,6 +4,8 @@ sri_add_editor_module(editor_module_scene
     inspector_panel.hpp
     component_inspectors.cpp
     component_inspectors.hpp
+    navigation_bake.cpp
+    navigation_bake.hpp
     property_form.cpp
     property_form.hpp
 )
