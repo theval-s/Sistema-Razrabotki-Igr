@@ -101,6 +101,52 @@ TEST(AssetCatalog, RenamePreservesIdentityAndDuplicatesAreRejected) {
     EXPECT_EQ(catalog.Find(uuid)->path, "game/models/renamed.obj"); // failed scan is transactional
 }
 
+TEST(AssetCatalog, AudioClipsGenerateMetadataResolveByUuidAndPreserveIdentityOnRename) {
+    Fixture fixture;
+    using engine::CatalogAssetKind;
+    const char* names[] = {"effect.WAV", "ambience.flac", "music.Mp3"};
+    for (const auto* name : names) {
+        const auto file = fixture.root / "game/models" / name;
+        std::ofstream(file) << "catalog fixture; decoding is not required";
+        EXPECT_EQ(engine::CatalogKindForFile(file), CatalogAssetKind::AudioClip);
+    }
+    EXPECT_FALSE(engine::CatalogKindForFile("unsupported.ogg"));
+    std::size_t generated = 0;
+    std::string error;
+    ASSERT_TRUE(engine::GenerateMissingAssetMetadata(fixture.root / "game", generated, error)) << error;
+    EXPECT_EQ(generated, 3u);
+    ASSERT_TRUE(engine::GenerateMissingAssetMetadata(fixture.root / "game", generated, error)) << error;
+    EXPECT_EQ(generated, 0u);
+    engine::AssetCatalog catalog;
+    ASSERT_TRUE(catalog.Scan(fixture.root / "game", {}, error)) << error;
+    EXPECT_EQ(catalog.List(CatalogAssetKind::AudioClip).size(), 3u);
+    for (const auto* name : names) {
+        const auto* entry = catalog.FindPath(std::string("game/models/") + name);
+        ASSERT_NE(entry, nullptr);
+        EXPECT_NE(catalog.Find(entry->metadata.id, CatalogAssetKind::AudioClip), nullptr);
+        EXPECT_EQ(catalog.Find(entry->metadata.id, CatalogAssetKind::Texture), nullptr);
+        std::string json;
+        ASSERT_TRUE(engine::SerializeAssetMetadata(entry->metadata, json, error)) << error;
+        EXPECT_NE(json.find("\"audioClip\""), std::string::npos);
+        engine::AssetMetadata parsed;
+        ASSERT_TRUE(engine::ParseAssetMetadata(json, parsed, error)) << error;
+        EXPECT_EQ(parsed.id, entry->metadata.id);
+        EXPECT_EQ(parsed.kind, CatalogAssetKind::AudioClip);
+        json.insert(json.find('{') + 1, "\"centerOnLoad\": false,");
+        EXPECT_FALSE(engine::ParseAssetMetadata(json, parsed, error));
+        EXPECT_EQ(parsed.kind, CatalogAssetKind::AudioClip);
+    }
+    const auto id = catalog.FindPath("game/models/effect.WAV")->metadata.id;
+    const auto before = fixture.root / "game/models/effect.WAV";
+    const auto after = fixture.root / "game/models/renamed.wav";
+    std::filesystem::rename(before, after);
+    std::filesystem::rename(engine::AssetMetadataPath(before), engine::AssetMetadataPath(after));
+    ASSERT_TRUE(catalog.Scan(fixture.root / "game", {}, error)) << error;
+    ASSERT_NE(catalog.Find(id, CatalogAssetKind::AudioClip), nullptr);
+    EXPECT_EQ(catalog.Find(id)->path, "game/models/renamed.wav");
+    EXPECT_EQ(catalog.FindPath("game/models/effect.WAV"), nullptr);
+}
+
 TEST(AssetCatalog, EvictedSlotsCannotResolveOldHandles) {
     engine::AssetTable<int> table;
     engine::AssetDesc first;

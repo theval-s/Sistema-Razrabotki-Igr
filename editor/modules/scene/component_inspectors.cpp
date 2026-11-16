@@ -36,6 +36,7 @@
 #include <entt/core/type_info.hpp>
 
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/audio/AudioSubsystem.hpp>
 #include <engine/engine.hpp>
 #include <engine/physics/PhysicsComponents.hpp>
 #include <engine/rendering/RenderComponents.hpp>
@@ -44,6 +45,7 @@
 #include <editor/asset_picker.hpp>
 #include <editor/editor_context.hpp>
 #include <editor/scene_document.hpp>
+#include <editor/scene_events.hpp>
 #include <editor/scene_history.hpp>
 
 #include "property_form.hpp"
@@ -277,6 +279,194 @@ void buildCamera(PropertyForm& form, editor::EditorContext& context, const entt:
                   {.step = 0.01, .decimals = 3, .minimum = 0.001, .maximum = 1.0e4});
     form.addFloat(QObject::tr("Far plane"), field(scene, entity, &engine::Camera::farPlane),
                   {.step = 1.0, .decimals = 2, .minimum = 0.01, .maximum = 1.0e6});
+}
+
+QString audioListenerDiagnostic(editor::EditorContext& context) {
+    const auto& scene = context.scene();
+    if (context.engine().IsPlaying()) {
+        if (const auto* audio = context.engine().GetSubsystem<engine::AudioSubsystem>()) {
+            const auto diagnostic = audio->GetListenerDiagnostic();
+            if (!diagnostic.empty()) return QString::fromStdString(diagnostic);
+            const auto listener = audio->GetEffectiveListener();
+            if (scene.IsValid(listener))
+                return QObject::tr("Effective listener: %1").arg(QString::fromStdString(scene.GetName(listener)));
+        }
+    }
+    int count = 0;
+    entt::entity listener = entt::null;
+    scene.ForEach<engine::AudioListener>([&](entt::entity entity, const engine::AudioListener& value) {
+        if (value.enabled) { ++count; listener = entity; }
+    });
+    if (count > 1) return QObject::tr("Conflicting enabled listeners (%1). Disable all but one; 3D output is suppressed.").arg(count);
+    if (count == 1) return QObject::tr("Explicit listener: %1").arg(QString::fromStdString(scene.GetName(listener)));
+    const auto camera = scene.GetActiveCamera();
+    if (scene.IsValid(camera) && scene.HasComponent<engine::Camera>(camera))
+        return QObject::tr("Fallback listener: active scene camera (%1).").arg(QString::fromStdString(scene.GetName(camera)));
+    return QObject::tr("No enabled listener or active scene camera. 3D output is suppressed; 2D audio remains available.");
+}
+
+void buildAudioListener(PropertyForm& form, editor::EditorContext& context, entt::entity entity) {
+    form.addBool(QObject::tr("Enabled"), field(context.scene(), entity, &engine::AudioListener::enabled));
+    form.addText(QObject::tr("Listener"), [&context] { return audioListenerDiagnostic(context); });
+    form.addText({}, [] { return QObject::tr("One enabled explicit listener per scene. Local -Z is forward; +Y is up."); });
+}
+
+// Validate a copy before notifying Scene. Rejected edits produce neither authored changes nor undo steps.
+template<class T>
+Binding<T> audioField(engine::Scene& scene, entt::entity entity, T engine::AudioSource::*member,
+                      const std::shared_ptr<std::string>& error) {
+    auto binding = field(scene, entity, member);
+    binding.set = [&scene, entity, member, error](const T& value) {
+        const auto* source = std::as_const(scene).TryGetComponent<engine::AudioSource>(entity);
+        if (!source) return;
+        auto candidate = *source;
+        candidate.*member = value;
+        if (!engine::ValidateAudioSource(candidate, *error)) return;
+        error->clear();
+        if (candidate != *source)
+            scene.Modify<engine::AudioSource>(entity, [&](auto& changed) { changed = candidate; });
+    };
+    return binding;
+}
+
+template<class T>
+void addAudioChoice(PropertyForm& form, editor::EditorContext& context, entt::entity entity,
+                    const QString& label, T engine::AudioSource::*member,
+                    std::initializer_list<std::pair<const char*, T>> choices,
+                    const std::shared_ptr<std::string>& error) {
+    auto binding = audioField(context.scene(), entity, member, error);
+    auto* combo = new QComboBox;
+    for (const auto& [text, value] : choices) combo->addItem(QObject::tr(text), static_cast<int>(value));
+    QObject::connect(combo, &QComboBox::activated, combo, [&context, combo, binding, label](int index) {
+        const auto value = static_cast<T>(combo->itemData(index).toInt());
+        context.history().edit(QObject::tr("Change %1").arg(label), [&] { binding.set(value); });
+    });
+    form.addRow(label, combo, [combo, binding] {
+        if (const auto* value = binding.get(); value && !combo->view()->isVisible()) {
+            const QSignalBlocker blocker(combo);
+            combo->setCurrentIndex(combo->findData(static_cast<int>(*value)));
+        }
+    });
+}
+
+void buildAudioSource(PropertyForm& form, editor::EditorContext& context, entt::entity entity) {
+    using Source = engine::AudioSource;
+    auto& scene = context.scene();
+    auto error = std::make_shared<std::string>();
+    auto previewVoice = std::make_shared<engine::AudioVoiceHandle>();
+    auto previewClip = std::make_shared<std::optional<engine::AssetReference>>();
+    const auto audio = [&context] { return context.engine().GetSubsystem<engine::AudioSubsystem>(); };
+    form.addBool(QObject::tr("Enabled"), audioField(scene, entity, &Source::enabled, error));
+
+    auto* picker = new editor::AssetPicker(context.engine().GetSceneAssets().GetCatalog(),
+                                          engine::CatalogAssetKind::AudioClip, QObject::tr("None"));
+    picker->setMinimumContentsLength(12);
+    QObject::connect(picker, &QComboBox::currentIndexChanged, picker,
+                     [&context, &scene, entity, picker, error, audio, previewVoice](int index) {
+        const auto* source = std::as_const(scene).TryGetComponent<Source>(entity);
+        if (!source || index < 0 || source->clip == picker->reference()) return;
+        if (auto* subsystem = audio()) subsystem->StopPreview();
+        *previewVoice = {};
+        auto binding = audioField(scene, entity, &Source::clip, error);
+        context.history().edit(QObject::tr("Change Audio Clip"), [&] { binding.set(picker->reference()); });
+    });
+    form.addRow(QObject::tr("Clip"), picker, [&scene, entity, picker] {
+        const auto* source = std::as_const(scene).TryGetComponent<Source>(entity);
+        if (!source || picker->hasFocus() || picker->lineEdit()->hasFocus() || picker->view()->isVisible()) return;
+        const QSignalBlocker blocker(picker);
+        if (!source->clip) { picker->setCurrentIndex(0); return; }
+        if (!picker->selectId(source->clip->id)) {
+            picker->reload();
+            if (picker->selectId(source->clip->id)) return;
+            picker->setCurrentIndex(-1);
+            picker->lineEdit()->setPlaceholderText(QObject::tr("%1 (missing)").arg(QString::fromStdString(
+                source->clip->path.empty() ? source->clip->id.ToString() : source->clip->path)));
+        }
+    });
+    form.addBool(QObject::tr("Play on start"), audioField(scene, entity, &Source::playOnStart, error));
+    form.addBool(QObject::tr("Looping"), audioField(scene, entity, &Source::looping, error));
+    addAudioChoice(form, context, entity, QObject::tr("Loading"), &Source::loading,
+                   {{"Buffered", engine::AudioLoadingMode::Buffered}, {"Streamed", engine::AudioLoadingMode::Streamed}}, error);
+    addAudioChoice(form, context, entity, QObject::tr("Bus"), &Source::bus,
+                   {{"Music", engine::AudioBus::Music}, {"SFX", engine::AudioBus::SFX}, {"UI", engine::AudioBus::UI}}, error);
+    form.addFloat(QObject::tr("Volume (0–1)"), audioField(scene, entity, &Source::volume, error),
+                   {.step = 0.05, .decimals = 3, .minimum = 0, .maximum = 1});
+    constexpr PropertyForm::NumberFormat positive{.step = 0.1, .decimals = 3, .minimum = 0.001, .maximum = 1.0e6};
+    form.addFloat(QObject::tr("Pitch (ratio)"), audioField(scene, entity, &Source::pitch, error), positive);
+    addAudioChoice(form, context, entity, QObject::tr("Spatial mode"), &Source::spatial,
+                   {{"2D", engine::AudioSpatialMode::TwoD}, {"3D (mono clip)", engine::AudioSpatialMode::ThreeD}}, error);
+    auto* spatial = new PropertyForm;
+    form.addRow(spatial, [&scene, entity, spatial] {
+        const auto* source = std::as_const(scene).TryGetComponent<Source>(entity);
+        spatial->setVisible(source && source->spatial == engine::AudioSpatialMode::ThreeD);
+        spatial->refresh();
+    });
+    addAudioChoice(*spatial, context, entity, QObject::tr("Attenuation"), &Source::attenuation,
+                   {{"None", engine::AudioAttenuation::None}, {"Inverse", engine::AudioAttenuation::Inverse},
+                    {"Linear", engine::AudioAttenuation::Linear}, {"Exponential", engine::AudioAttenuation::Exponential}}, error);
+    spatial->addFloat(QObject::tr("Minimum distance (m)"), audioField(scene, entity, &Source::minDistance, error), positive);
+    spatial->addFloat(QObject::tr("Maximum distance (m)"), audioField(scene, entity, &Source::maxDistance, error), positive);
+    spatial->addFloat(QObject::tr("Rolloff (factor)"), audioField(scene, entity, &Source::rolloff, error),
+                      {.step = 0.1, .decimals = 3, .minimum = 0, .maximum = 1.0e6});
+    spatial->addText({}, [] { return QObject::tr("1 scene unit = 1 metre. Maximum distance is an attenuation bound, not a hard silence radius. 3D point emitters require mono clips."); });
+    spatial->addText(QObject::tr("Listener"), [&context] { return audioListenerDiagnostic(context); });
+
+    auto* buttons = new QWidget;
+    auto* row = new QHBoxLayout(buttons);
+    row->setContentsMargins(0, 0, 0, 0);
+    auto* preview = new QPushButton(QObject::tr("Preview"));
+    auto* stop = new QPushButton(QObject::tr("Stop"));
+    preview->setToolTip(QObject::tr("Audition the clip in 2D, independently of Edit pause. Does not start the scene source."));
+    row->addWidget(preview);
+    row->addWidget(stop);
+    QObject::connect(preview, &QPushButton::clicked, preview, [&context, &scene, entity, audio, error, previewVoice, previewClip] {
+        const auto* source = std::as_const(scene).TryGetComponent<Source>(entity);
+        if (context.engine().IsPlaying() || !source || !source->clip) return;
+        if (auto* subsystem = audio()) {
+            *previewClip = source->clip;
+            *previewVoice = subsystem->Preview(*source->clip, *error);
+        }
+    });
+    QObject::connect(stop, &QPushButton::clicked, stop, [audio, previewVoice, error] {
+        if (auto* subsystem = audio()) subsystem->StopPreview();
+        *previewVoice = {};
+        error->clear();
+    });
+    // Stop only this form's voice: deleteLater() may run after another inspector has started auditioning.
+    QObject::connect(&form, &QObject::destroyed, &context.sceneEvents(), [audio, previewVoice] {
+        if (auto* subsystem = audio()) subsystem->Stop(*previewVoice);
+    });
+    form.addRow(buttons, [&context, &scene, entity, audio, previewVoice, previewClip, preview, stop] {
+        const auto* source = std::as_const(scene).TryGetComponent<Source>(entity);
+        auto* subsystem = audio();
+        if (subsystem && *previewVoice && (!source || source->clip != *previewClip)) {
+            subsystem->Stop(*previewVoice);
+            *previewVoice = {};
+        }
+        preview->setEnabled(!context.engine().IsPlaying() && subsystem && subsystem->IsAvailable() && source && source->clip &&
+            context.engine().GetSceneAssets().GetCatalog().Find(source->clip->id, engine::CatalogAssetKind::AudioClip));
+        const auto status = subsystem ? subsystem->GetStatus(*previewVoice) : engine::AudioVoiceStatus::Invalid;
+        stop->setEnabled(status == engine::AudioVoiceStatus::Pending || status == engine::AudioVoiceStatus::Playing ||
+                         status == engine::AudioVoiceStatus::Paused);
+    });
+    form.addText(QObject::tr("Audio status"), [&context, &scene, entity, audio, previewVoice, error] {
+        if (!error->empty()) return QString::fromStdString(*error);
+        const auto* source = std::as_const(scene).TryGetComponent<Source>(entity);
+        if (source && source->clip && !context.engine().GetSceneAssets().GetCatalog().Find(source->clip->id, engine::CatalogAssetKind::AudioClip))
+            return QObject::tr("Audio clip is missing. The authored reference is preserved.");
+        auto* subsystem = audio();
+        if (!subsystem) return QObject::tr("Audio subsystem is unavailable.");
+        if (!subsystem->IsAvailable()) return QString::fromStdString(subsystem->GetDiagnostic());
+        const auto voice = context.engine().IsPlaying() ? subsystem->GetSourceVoice(entity) : *previewVoice;
+        switch (subsystem->GetStatus(voice)) {
+        case engine::AudioVoiceStatus::Pending: return QObject::tr("Loading…");
+        case engine::AudioVoiceStatus::Playing: return QObject::tr("Playing");
+        case engine::AudioVoiceStatus::Paused: return QObject::tr("Paused");
+        case engine::AudioVoiceStatus::Failed: return QString::fromStdString(subsystem->GetVoiceError(voice));
+        case engine::AudioVoiceStatus::Finished: return QObject::tr("Finished");
+        default: return QObject::tr("Stopped");
+        }
+    });
 }
 
 void buildDirectionalLight(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
@@ -817,6 +1007,10 @@ std::span<const ComponentInspector> componentInspectors() {
          addComponent<engine::NavigationSource>, removeComponent<engine::NavigationSource>},
         {entt::type_hash<engine::Camera>::value(), QObject::tr("Camera"), buildCamera, addComponent<engine::Camera>,
          removeComponent<engine::Camera>},
+        {entt::type_hash<engine::AudioSource>::value(), QObject::tr("Audio Source"), buildAudioSource,
+         addComponent<engine::AudioSource>, removeComponent<engine::AudioSource>},
+        {entt::type_hash<engine::AudioListener>::value(), QObject::tr("Audio Listener"), buildAudioListener,
+         addComponent<engine::AudioListener>, removeComponent<engine::AudioListener>},
         {entt::type_hash<engine::DirectionalLight>::value(), QObject::tr("Directional Light"), buildDirectionalLight,
          addComponent<engine::DirectionalLight>, removeComponent<engine::DirectionalLight>},
         {entt::type_hash<engine::PointLight>::value(), QObject::tr("Point Light"), buildPointLight,

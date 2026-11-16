@@ -1,6 +1,7 @@
 #include <engine/scripting/LuaComponentBindings.hpp>
 #include <engine/engine.hpp>
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/audio/AudioComponents.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/rendering/RenderingResourceManager.hpp>
 #include <cmath>
@@ -35,6 +36,8 @@ template<class F> decltype(auto) Dispatch(const std::string& type, F&& f) {
     if (type == "Script") return f(std::type_identity<ScriptComponent>{});
     if (type == "GamePersistence") return f(std::type_identity<GamePersistence>{});
     if (type == "Bounds") return f(std::type_identity<Bounds>{});
+    if (type == "AudioSource") return f(std::type_identity<AudioSource>{});
+    if (type == "AudioListener") return f(std::type_identity<AudioListener>{});
     throw std::runtime_error("Unsupported component type: " + type);
 }
 AssetReference Resolve(LuaBindingsContext& context, const std::string& name, CatalogAssetKind kind) {
@@ -77,8 +80,55 @@ struct Fields {
             Require(entry.first.get_type() == sol::type::string && names.contains(entry.first.as<std::string>()), "Unknown component field");
     }
 };
+template<class T> void AudioEnum(Fields& f, const char* name, T& value, std::initializer_list<const char*> names) {
+    const auto index = static_cast<unsigned>(value);
+    Require(index < names.size(), "Invalid audio enum");
+    std::string text = *(names.begin() + index);
+    f(name, text);
+    unsigned next = 0;
+    for (const auto* candidate : names) {
+        if (text == candidate) { value = static_cast<T>(next); return; }
+        ++next;
+    }
+    throw std::runtime_error(std::string("Invalid audio enum: ") + name);
+}
 template<class T> void Codec(Fields& f, T& c, LuaBindingsContext& context) {
-    if constexpr (std::is_same_v<T, Camera>) {
+    if constexpr (std::is_same_v<T, AudioListener>) {
+        f("enabled", c.enabled);
+    } else if constexpr (std::is_same_v<T, AudioSource>) {
+        // Empty string explicitly clears the optional clip; omitted/nil preserves it.
+        // Valid missing UUIDs remain authorable, like missing scene asset references.
+        f.names.insert("clip");
+        if (f.read) {
+            sol::object clip = f.table["clip"];
+            if (clip.valid() && clip.get_type() != sol::type::nil) {
+                Require(clip.get_type() == sol::type::string, "clip must be a UUID/path string (empty clears it)");
+                const auto text = clip.as<std::string>();
+                if (text.empty()) c.clip.reset();
+                else if (auto id = AssetUuid::Parse(text); id && id->IsValid()) {
+                    if (!c.clip || c.clip->id != *id) c.clip = AssetReference{*id, {}};
+                } else c.clip = Resolve(context, text, CatalogAssetKind::AudioClip);
+            }
+        } else f.table["clip"] = c.clip ? c.clip->id.ToString() : std::string{};
+        f("enabled", c.enabled); f("playOnStart", c.playOnStart); f("looping", c.looping);
+        AudioEnum(f, "loading", c.loading, {"Buffered", "Streamed"});
+        AudioEnum(f, "bus", c.bus, {"Music", "SFX", "UI"});
+        if (f.read) {
+            const sol::object volume = f.table["volume"];
+            if (volume.valid() && volume.get_type() != sol::type::nil) {
+                Require(volume.get_type() == sol::type::number, "Expected number");
+                const double gain = volume.as<double>();
+                Require(std::isfinite(gain) && gain >= 0 && gain <= 1, "Audio volume must be in [0,1]");
+            }
+        }
+        f("volume", c.volume); f("pitch", c.pitch);
+        AudioEnum(f, "spatial", c.spatial, {"TwoD", "ThreeD"});
+        AudioEnum(f, "attenuation", c.attenuation, {"None", "Inverse", "Linear", "Exponential"});
+        f("minDistance", c.minDistance); f("maxDistance", c.maxDistance); f("rolloff", c.rolloff);
+        std::string error;
+        const bool valid = ValidateAudioSource(c, error);
+        Require(valid, error.c_str());
+    } else if constexpr (std::is_same_v<T, Camera>) {
         f("fovY", c.fovY); f("nearPlane", c.nearPlane); f("farPlane", c.farPlane);
         Require(c.fovY > 0 && c.fovY < 3.14159265f && c.nearPlane > 0 && c.farPlane > c.nearPlane, "Invalid camera frustum");
     } else if constexpr (std::is_same_v<T, DirectionalLight> || std::is_same_v<T, PointLight> || std::is_same_v<T, SpotLight>) {

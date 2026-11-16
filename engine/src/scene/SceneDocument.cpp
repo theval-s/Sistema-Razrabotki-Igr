@@ -35,6 +35,54 @@ float Number(const Json& j) {
     return value;
 }
 
+bool Boolean(const Json& j) {
+    if (!j.is_boolean()) throw std::invalid_argument("expected boolean audio field");
+    return j.get<bool>();
+}
+
+std::string_view AudioName(AudioLoadingMode value) {
+    switch (value) {
+    case AudioLoadingMode::Buffered: return "buffered";
+    case AudioLoadingMode::Streamed: return "streamed";
+    }
+    throw std::invalid_argument("invalid audio loading mode");
+}
+
+std::string_view AudioName(AudioBus value) {
+    switch (value) {
+    case AudioBus::Music: return "music";
+    case AudioBus::SFX: return "sfx";
+    case AudioBus::UI: return "ui";
+    }
+    throw std::invalid_argument("invalid audio bus");
+}
+
+std::string_view AudioName(AudioSpatialMode value) {
+    switch (value) {
+    case AudioSpatialMode::TwoD: return "2d";
+    case AudioSpatialMode::ThreeD: return "3d";
+    }
+    throw std::invalid_argument("invalid audio spatial mode");
+}
+
+std::string_view AudioName(AudioAttenuation value) {
+    switch (value) {
+    case AudioAttenuation::None: return "none";
+    case AudioAttenuation::Inverse: return "inverse";
+    case AudioAttenuation::Linear: return "linear";
+    case AudioAttenuation::Exponential: return "exponential";
+    }
+    throw std::invalid_argument("invalid audio attenuation");
+}
+
+template <class T>
+T AudioEnum(const Json& j, std::initializer_list<T> values) {
+    if (!j.is_string()) throw std::invalid_argument("expected audio enum string");
+    const auto name = j.get<std::string>();
+    for (const auto value : values) if (AudioName(value) == name) return value;
+    throw std::invalid_argument("invalid audio enum: " + name);
+}
+
 template <std::size_t N>
 std::array<float, N> Numbers(const Json& j) {
     if (!j.is_array() || j.size() != N) throw std::invalid_argument("wrong numeric array size");
@@ -93,7 +141,35 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         entity.editorFolder = j.at("editorFolder").get<std::string>();
     }
     const auto& components = j.at("components");
-    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "BehaviorTree", "RigidBody", "Collider", "NavigationRegion", "NavigationSource"});
+    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "BehaviorTree", "RigidBody", "Collider", "NavigationRegion", "NavigationSource", "AudioSource", "AudioListener"});
+    if (components.contains("AudioSource")) {
+        const auto& json = components.at("AudioSource");
+        Fields(json, {"clip", "enabled", "playOnStart", "looping", "loading", "bus", "volume", "pitch",
+                      "spatial", "attenuation", "minDistance", "maxDistance", "rolloff"});
+        AudioSource value;
+        if (!json.at("clip").is_null()) value.clip = Reference(json.at("clip"));
+        value.enabled = Boolean(json.at("enabled"));
+        value.playOnStart = Boolean(json.at("playOnStart"));
+        value.looping = Boolean(json.at("looping"));
+        value.loading = AudioEnum(json.at("loading"), {AudioLoadingMode::Buffered, AudioLoadingMode::Streamed});
+        value.bus = AudioEnum(json.at("bus"), {AudioBus::Music, AudioBus::SFX, AudioBus::UI});
+        value.volume = Number(json.at("volume"));
+        value.pitch = Number(json.at("pitch"));
+        value.spatial = AudioEnum(json.at("spatial"), {AudioSpatialMode::TwoD, AudioSpatialMode::ThreeD});
+        value.attenuation = AudioEnum(json.at("attenuation"),
+            {AudioAttenuation::None, AudioAttenuation::Inverse, AudioAttenuation::Linear, AudioAttenuation::Exponential});
+        value.minDistance = Number(json.at("minDistance"));
+        value.maxDistance = Number(json.at("maxDistance"));
+        value.rolloff = Number(json.at("rolloff"));
+        std::string error;
+        if (!ValidateAudioSource(value, error)) throw std::invalid_argument(error);
+        entity.audioSource = std::move(value);
+    }
+    if (components.contains("AudioListener")) {
+        const auto& json = components.at("AudioListener");
+        Fields(json, {"enabled"});
+        entity.audioListener = AudioListener{Boolean(json.at("enabled"))};
+    }
     if (components.contains("RigidBody")) {
         const auto& body = components.at("RigidBody");
         Fields(body, {"motionType", "mass", "friction", "restitution"});
@@ -288,6 +364,13 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
 }
 
 void Validate(const SceneDocument& document) {
+    std::size_t enabledListeners = 0;
+    for (const auto& entity : document.entities) {
+        std::string error;
+        if (entity.audioSource && !ValidateAudioSource(*entity.audioSource, error)) throw std::invalid_argument(error);
+        if (entity.audioListener && entity.audioListener->enabled && ++enabledListeners > 1)
+            throw std::invalid_argument("multiple enabled explicit audio listeners");
+    }
     std::unordered_map<EntityUuid, std::size_t, EntityUuidHash> ids;
     for (std::size_t i = 0; i < document.entities.size(); ++i)
         if (!ids.emplace(document.entities[i].id, i).second)
@@ -414,6 +497,19 @@ Json Encode(const SceneDocument& document) {
         }
         if (entity.navigationSource)
             components["NavigationSource"] = {{"useCollider", entity.navigationSource->useCollider}};
+        if (entity.audioSource) {
+            const auto& source = *entity.audioSource;
+            std::string error;
+            if (!ValidateAudioSource(source, error)) throw std::invalid_argument(error);
+            components["AudioSource"] = {{"clip", source.clip ? Encode(*source.clip) : Json(nullptr)},
+                {"enabled", source.enabled}, {"playOnStart", source.playOnStart}, {"looping", source.looping},
+                {"loading", AudioName(source.loading)}, {"bus", AudioName(source.bus)},
+                {"volume", source.volume}, {"pitch", source.pitch}, {"spatial", AudioName(source.spatial)},
+                {"attenuation", AudioName(source.attenuation)}, {"minDistance", source.minDistance},
+                {"maxDistance", source.maxDistance}, {"rolloff", source.rolloff}};
+        }
+        if (entity.audioListener)
+            components["AudioListener"] = {{"enabled", entity.audioListener->enabled}};
         if (entity.collider) {
             const auto& c = *entity.collider;
             const char* shape = "Box";
@@ -501,6 +597,8 @@ SceneEntityDefinition CaptureDefinition(const Scene& scene, const AssetSystem& a
     if (const auto* body = scene.TryGetComponent<RigidBody>(entity)) definition.rigidBody = *body;
     if (const auto* region = scene.TryGetComponent<NavigationRegion>(entity)) definition.navigationRegion = *region;
     if (const auto* source = scene.TryGetComponent<NavigationSource>(entity)) definition.navigationSource = *source;
+    if (const auto* source = scene.TryGetComponent<AudioSource>(entity)) definition.audioSource = *source;
+    if (const auto* listener = scene.TryGetComponent<AudioListener>(entity)) definition.audioListener = *listener;
     if (const auto* box = scene.TryGetComponent<Collider>(entity)) definition.collider = *box;
     if (const auto* bounds = scene.TryGetComponent<Bounds>(entity)) definition.bounds = *bounds;
     if (const auto* persistence = scene.TryGetComponent<GamePersistence>(entity)) definition.persistence = *persistence;
@@ -561,6 +659,8 @@ void ApplyEntity(const SceneEntityDefinition& definition, AssetSystem& assets, S
     MatchComponent(destination, entity, definition.collider);
     MatchComponent(destination, entity, definition.navigationRegion);
     MatchComponent(destination, entity, definition.navigationSource);
+    MatchComponent(destination, entity, definition.audioSource);
+    MatchComponent(destination, entity, definition.audioListener);
     MatchComponent(destination, entity, definition.bounds);
     MatchComponent(destination, entity, definition.persistence);
     MatchComponent(destination, entity, definition.script);

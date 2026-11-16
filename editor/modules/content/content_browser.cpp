@@ -75,6 +75,7 @@ constexpr engine::CatalogAssetKind FilterKinds[] = {
     engine::CatalogAssetKind::MaterialInstance, engine::CatalogAssetKind::Shader,
     engine::CatalogAssetKind::Script,
     engine::CatalogAssetKind::BehaviorTree,
+    engine::CatalogAssetKind::AudioClip,
     engine::CatalogAssetKind::UiDocument, engine::CatalogAssetKind::UiStylesheet,
     engine::CatalogAssetKind::UiTemplate, engine::CatalogAssetKind::Font,
 };
@@ -88,21 +89,26 @@ public:
 
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override {
+        copyExternal(event);
         View::dragEnterEvent(event);
         copyExternal(event);
     }
     void dragMoveEvent(QDragMoveEvent* event) override {
+        copyExternal(event);
         View::dragMoveEvent(event);
         copyExternal(event);
     }
     void dropEvent(QDropEvent* event) override {
+        // The model emits its operation during the base handler, before we report
+        // the accepted action back to the source.
+        copyExternal(event);
         View::dropEvent(event);
         copyExternal(event);
     }
 
 private:
     static void copyExternal(QDropEvent* event) {
-        if (event->source() == nullptr && event->isAccepted() && (event->possibleActions() & Qt::CopyAction)) {
+        if (event->source() == nullptr && (event->possibleActions() & Qt::CopyAction)) {
             event->setDropAction(Qt::CopyAction);
         }
     }
@@ -128,6 +134,10 @@ public:
 
 void setUpDragAndDrop(QAbstractItemView& view) {
     view.setDragDropMode(QAbstractItemView::DragDrop);
+    // QListView::setMovement(Static) disables viewport drops directly. Setting
+    // DragDrop again can leave acceptDrops already true on the view, so Qt does
+    // not propagate it back to the viewport.
+    view.viewport()->setAcceptDrops(true);
     view.setDefaultDropAction(Qt::MoveAction);  // Ctrl copies
     view.setDragDropOverwriteMode(true);        // drop onto folders, not between items
     view.setDropIndicatorShown(true);
@@ -398,7 +408,7 @@ void ContentBrowser::buildActions() {
 
     import_ = add(QStringLiteral("import"), tr("Import..."), {}, [this] { importAssets(); });
     import_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
-    import_->setToolTip(tr("Copies images and models into the shown folder"));
+    import_->setToolTip(tr("Copies images, models and audio clips into the shown folder"));
     import_button_->setDefaultAction(import_);
     instance_from_texture_ = add(QStringLiteral("create-material-instance"), tr("Create Material Instance..."), {},
                                  [this] { newMaterialInstance(selectedPaths().value(0)); });

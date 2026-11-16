@@ -100,17 +100,19 @@ bool selectReference(editor::AssetPicker* picker, const std::optional<engine::As
 
 }  // namespace
 
-// The extensions CatalogKindForFile() takes as textures and as meshes.
+// The extensions CatalogKindForFile() takes as textures, meshes and audio clips.
 const QString ImagePatterns = QStringLiteral("*.png *.jpg *.jpeg *.tif *.tiff *.dds *.bmp");
 const QString ModelPatterns = QStringLiteral("*.fbx *.gltf *.glb *.obj *.dae *.blend *.ply");
+const QString AudioPatterns = QStringLiteral("*.wav *.flac *.mp3");
 
 QString imageFilter() {
     return NewAssetDialog::tr("Images (%1)").arg(ImagePatterns);
 }
 
 QString importFilter() {
-    return QStringList{NewAssetDialog::tr("Images and models (%1 %2)").arg(ImagePatterns, ModelPatterns),
+    return QStringList{NewAssetDialog::tr("Images, models and audio (%1 %2 %3)").arg(ImagePatterns, ModelPatterns, AudioPatterns),
                        imageFilter(), NewAssetDialog::tr("Models (%1)").arg(ModelPatterns),
+                       NewAssetDialog::tr("Audio clips (%1)").arg(AudioPatterns),
                        NewAssetDialog::tr("All files (*)")}
         .join(QStringLiteral(";;"));
 }

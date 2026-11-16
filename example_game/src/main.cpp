@@ -1,4 +1,5 @@
 #include <engine/physics/PhysicsSubsystem.hpp>
+#include <engine/audio/AudioSubsystem.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -212,6 +213,14 @@ public:
             world.camera.aspectRatio = static_cast<float>(surface.width) / static_cast<float>(surface.height);
         }
         UpdateCamera(world.camera, controls_, static_cast<float>(frame.deltaSeconds));
+        // This host owns a render camera rather than an authored scene Camera.
+        // Keep the explicit audio listener on that same pose, including mouse-look.
+        if (const auto listener = GetEngine().GetScene().FindById("375c7852-3506-4aba-a2bc-2006c5471001"); listener != entt::null) {
+            auto& transform = GetEngine().GetScene().GetTransform(listener);
+            transform.position = world.camera.position;
+            transform.rotation = DirectX::SimpleMath::Quaternion::CreateFromYawPitchRoll(
+                world.camera.yaw, world.camera.pitch, 0);
+        }
         if (controls_.Pressed("Save")) {
             std::string error;
             if (!GetEngine().SaveGame("game/example.save.json", error)) engine::log::Game().error("Save game: {}", error);
@@ -272,6 +281,7 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
     uiConfig.enableDebugger = true;
 #endif
     engine.AddSubsystem<engine::UiSubsystem>(std::move(uiConfig));
+    engine.AddSubsystem<engine::AudioSubsystem>();
     engine.AddSubsystem<engine::ScriptSubsystem>();
     engine.AddSubsystem<ExampleGameLogic>(window);
     engine.AddSubsystem<engine::PhysicsSubsystem>();

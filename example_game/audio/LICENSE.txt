@@ -1,0 +1,11 @@
+Example audio and generator: CC0 1.0 Universal
+
+To the extent possible under law, the contributors to this example have waived
+all copyright and related or neighboring rights to generate.py, effect.wav,
+orbit-mono.wav, ambience-stereo.wav and their audio .meta sidecars.
+
+These assets are original, procedurally generated PCM; no third-party recordings,
+samples or music were used. You may copy, modify and distribute them, including
+commercially, without attribution. Provided without warranty.
+
+Full dedication: https://creativecommons.org/publicdomain/zero/1.0/legalcode

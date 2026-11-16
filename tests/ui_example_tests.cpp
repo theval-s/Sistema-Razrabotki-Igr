@@ -1,5 +1,6 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/audio/AudioSubsystem.hpp>
 #include <engine/core/Log.hpp>
 #include <engine/engine.hpp>
 #include <engine/input/InputSubsystem.hpp>
@@ -10,6 +11,7 @@
 #include <gtest/gtest.h>
 #include <spdlog/sinks/callback_sink.h>
 #include <filesystem>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -29,6 +31,7 @@ protected:
     Engine host{EngineConfig{.taskThreads = 1}};
     InputSubsystem* input = host.AddSubsystem<InputSubsystem>();
     UiSubsystem* ui = host.AddSubsystem<UiSubsystem>(UiSubsystemConfig{.renderer = UiRendererBackend::Null});
+    AudioSubsystem* audio = host.AddSubsystem<AudioSubsystem>(AudioConfig{.output = AudioOutputMode::Offline});
     ScriptSubsystem* scripts = host.AddSubsystem<ScriptSubsystem>();
     std::string error;
 
@@ -42,6 +45,8 @@ protected:
         AssetPathResolver::SetGameRoot(gameRoot);
         log::Sinks()->add_sink(sink);
         ASSERT_TRUE(host.Initialize());
+        const auto listener = host.GetScene().CreateEntity("offline UI listener");
+        ASSERT_NE(host.GetScene().AddComponent<AudioListener>(listener), nullptr);
     }
 
     void TearDown() override {
@@ -56,6 +61,7 @@ protected:
     }
 
     void StartExample() {
+        audio->BeginSession();
         const auto* entry = host.GetAssets().GetCatalog().FindPath("game/scripts/ui/example_ui.lua");
         ASSERT_NE(entry, nullptr);
         const std::vector<AutoloadDefinition> definitions{
@@ -91,7 +97,7 @@ TEST_F(UiExampleTest, ActualAutoloadLoadsFontsStylesDocumentsAndTypedArrayBindin
     auto stats = UiRuntimeAccess::Inspect(*ui);
     EXPECT_EQ(stats.documents, 3u);
     EXPECT_EQ(stats.models, 3u);
-    EXPECT_EQ(stats.subscriptions, 4u);
+    EXPECT_EQ(stats.subscriptions, 9u); // Four existing actions, four gains, and the UI sound test.
     Lua("assert(Autoloads.ExampleUI ~= nil); assert(not Time.IsPaused()); assert(Input.GetCursorMode() == CursorMode.Locked)");
     // Feed the actual physical action bound by the shipped autoload.
     input->OnPhysicalKey(PhysicalKey::P, true);
@@ -148,8 +154,12 @@ TEST_F(UiExampleTest, NativeLoadedActualPauseDocumentDeliversOrderedKeyboardClic
     UiModelDesc settings;
     settings.name = "example_settings";
     settings.schema.fields = {{"player", {UiValueKind::String, {}, {}}},
-                              {"volume", {UiValueKind::Number, {}, {}}}};
-    settings.initialValues = StateValue::Object{{"player", "Native player"}, {"volume", 75}};
+                              {"volume", {UiValueKind::Number, {}, {}}},
+                              {"music", {UiValueKind::Number, {}, {}}},
+                              {"sfx", {UiValueKind::Number, {}, {}}},
+                              {"ui", {UiValueKind::Number, {}, {}}}};
+    settings.initialValues = StateValue::Object{{"player", "Native player"}, {"volume", 75},
+                                               {"music", 50}, {"sfx", 75}, {"ui", 75}};
     UiModel model;
     ASSERT_TRUE(ui->CreateModel(owner, settings, model, error)) << error;
     UiDocument document;
@@ -170,10 +180,12 @@ TEST_F(UiExampleTest, NativeLoadedActualPauseDocumentDeliversOrderedKeyboardClic
     }, subscription, error)) << error;
     host.Tick();
     // Traverse the actual authored form, starting at Resume and wrapping through
-    // the range control, editable player name, then back to the generic button.
-    PressKey(Key::Tab, PhysicalKey::Tab);
-    host.Tick();
-    EXPECT_FALSE(ui->GetCaptureState().textInput);
+    // four range controls, the UI test button, editable name, then Resume.
+    for (int i = 0; i < 5; ++i) {
+        PressKey(Key::Tab, PhysicalKey::Tab);
+        host.Tick();
+        EXPECT_FALSE(ui->GetCaptureState().textInput);
+    }
     PressKey(Key::Tab, PhysicalKey::Tab);
     host.Tick();
     EXPECT_TRUE(ui->GetCaptureState().textInput);
@@ -193,5 +205,52 @@ TEST_F(UiExampleTest, NativeLoadedActualPauseDocumentDeliversOrderedKeyboardClic
     ui->EndNativeSession(session);
     host.Tick();
     EXPECT_EQ(UiRuntimeAccess::Inspect(*ui).documents, 0u);
+}
+
+TEST_F(UiExampleTest, ActualPausedSettingsChangeIndependentAudioGainsAndPlayUiSoundOffline) {
+    StartExample();
+    ASSERT_FALSE(HasFatalFailure());
+    EXPECT_FLOAT_EQ(audio->GetMasterVolume(), 0.75f);
+    EXPECT_FLOAT_EQ(audio->GetBusVolume(AudioBus::Music), 0.5f);
+    EXPECT_FLOAT_EQ(audio->GetBusVolume(AudioBus::SFX), 0.75f);
+    EXPECT_FLOAT_EQ(audio->GetBusVolume(AudioBus::UI), 0.75f);
+
+    input->OnPhysicalKey(PhysicalKey::P, true);
+    host.Tick();
+    input->OnPhysicalKey(PhysicalKey::P, false);
+    host.Tick();
+    ASSERT_TRUE(host.IsPaused());
+
+    // Show focuses the document; Tab enters the authored form in DOM order.
+    const AudioBus buses[] = {AudioBus::Music, AudioBus::SFX, AudioBus::UI};
+    const float initial[] = {0.75f, 0.5f, 0.75f, 0.75f};
+    for (int i = 0; i < 4; ++i) {
+        PressKey(Key::Tab, PhysicalKey::Tab);
+        host.Tick();
+        PressKey(Key::Left, PhysicalKey::Left);
+        host.Tick();
+        const float gain = i == 0 ? audio->GetMasterVolume() : audio->GetBusVolume(buses[i - 1]);
+        EXPECT_LT(gain, initial[i]) << "slider " << i;
+        EXPECT_GT(gain, 0.0f);
+        // Editing a later slider must not write the earlier or untouched buses.
+        for (int j = i + 1; j < 4; ++j)
+            EXPECT_FLOAT_EQ(audio->GetBusVolume(buses[j - 1]), initial[j]);
+    }
+
+    // With Music paused, an offline block must be silent before the UI click.
+    std::vector<float> samples(4096);
+    ASSERT_TRUE(audio->MixOffline(samples, error)) << error;
+    for (float sample : samples) EXPECT_FLOAT_EQ(sample, 0.0f);
+    const auto voices = audio->GetVoiceCount();
+    PressKey(Key::Tab, PhysicalKey::Tab); // Test UI sound, after the four ranges.
+    host.Tick();
+    PressKey(Key::Space, PhysicalKey::Space);
+    host.Tick();
+    EXPECT_TRUE(host.IsPaused());
+    EXPECT_EQ(audio->GetVoiceCount(), voices + 1);
+    ASSERT_TRUE(audio->MixOffline(samples, error)) << error;
+    double energy = 0;
+    for (float sample : samples) energy += std::abs(sample);
+    EXPECT_GT(energy, 0.0) << "UI click must produce samples while Music remains paused";
 }
 } // namespace

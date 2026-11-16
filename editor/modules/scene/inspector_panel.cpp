@@ -24,6 +24,9 @@
 #include <editor/scene_events.hpp>
 #include <editor/scene_history.hpp>
 #include <editor/selection.hpp>
+#include <editor/scene_document.hpp>
+#include <engine/audio/AudioSubsystem.hpp>
+#include <engine/engine.hpp>
 
 #include "component_inspectors.hpp"
 #include "property_form.hpp"
@@ -91,6 +94,9 @@ InspectorPanel::InspectorPanel(editor::EditorContext& context, QWidget* parent) 
     auto* timer = new QTimer(this);
     connect(timer, &QTimer::timeout, this, &InspectorPanel::refresh);
     timer->start(500);
+    connect(&context_.sceneDocument(), &editor::SceneDocument::opened, this, [this] {
+        setEntity(context_.selection().primary());
+    });
 
     // Only on a new primary: rebuilding for the same entity would reset the rotation angles being edited.
     editor::Selection& selection = context_.selection();
@@ -103,6 +109,7 @@ InspectorPanel::InspectorPanel(editor::EditorContext& context, QWidget* parent) 
 }
 
 void InspectorPanel::setEntity(const entt::entity entity) {
+    if (auto* audio = context_.engine().GetSubsystem<engine::AudioSubsystem>()) audio->StopPreview();
     entity_ = entity;
     // Fresh forms even if the components are the same: theirs show the previous entity.
     rebuildSections(listedComponents());
@@ -112,6 +119,7 @@ void InspectorPanel::setEntity(const entt::entity entity) {
 void InspectorPanel::refresh() {
     const engine::Scene& scene = context_.scene();
     if (entity_ != entt::null && !scene.IsValid(entity_)) {
+        if (auto* audio = context_.engine().GetSubsystem<engine::AudioSubsystem>()) audio->StopPreview();
         entity_ = entt::null;  // destroyed meanwhile
     }
     header_->setEnabled(entity_ != entt::null);
@@ -163,6 +171,7 @@ InspectorPanel::ComponentList InspectorPanel::listedComponents() const {
 }
 
 void InspectorPanel::rebuildSections(const ComponentList& types) {
+    if (auto* audio = context_.engine().GetSubsystem<engine::AudioSubsystem>()) audio->StopPreview();
     forms_.clear();
     shown_types_.clear();
 

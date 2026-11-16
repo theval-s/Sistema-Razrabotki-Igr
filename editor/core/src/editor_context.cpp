@@ -13,6 +13,7 @@
 #include <DockWidget.h>
 
 #include <engine/engine.hpp>
+#include <engine/audio/AudioSubsystem.hpp>
 #include <engine/project/Project.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 
@@ -79,6 +80,7 @@ const engine::Project& EditorContext::project() const noexcept {
 
 bool EditorContext::updateProject(engine::Project project, std::string& error) {
     if (!project.Save(error)) return false;
+    if (auto* audio = engine_.GetSubsystem<engine::AudioSubsystem>()) audio->StopPreview();
     project_ = std::move(project);
     return true;
 }

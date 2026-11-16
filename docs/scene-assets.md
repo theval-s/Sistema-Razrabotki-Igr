@@ -13,7 +13,7 @@ For `game/models/table/model.obj`, create `model.obj.meta` next to it:
 ~~~
 
 Valid kinds: `mesh`, `texture`, `shader`, `material`, `materialInstance`,
-`scene`. `centerOnLoad` is only valid for meshes. The generator preserves
+`scene`, `audioClip` (WAV/FLAC/MP3). `centerOnLoad` is only valid for meshes. The generator preserves
 existing sidecars and creates new UUIDs for recognized files lacking them:
 
 ~~~text
@@ -72,6 +72,31 @@ an unassigned slot uses `"script": null`. Lua tables and instance IDs are not sa
 See [scripting.md](scripting.md) for attachment and lifecycle details. The codec
 it rejects unknown fields/components, duplicate keys, cycles, invalid numbers,
 and bad active camera/light selections before scene switching.
+
+## Audio components
+
+Scenes store the C++ `AudioSource` and `AudioListener` components under the exact
+JSON keys `AudioSource` and `AudioListener` alongside `Transform`:
+
+```json
+"AudioSource": {
+  "clip": { "id": "375c7852-3506-4aba-a2bc-2006c5472002", "path": "game/audio/orbit-mono.wav" },
+  "enabled": true, "playOnStart": true, "looping": true,
+  "loading": "buffered", "bus": "sfx", "volume": 0.35, "pitch": 1,
+  "spatial": "3d", "attenuation": "inverse",
+  "minDistance": 2, "maxDistance": 30, "rolloff": 1
+},
+"AudioListener": { "enabled": true }
+```
+
+Scene JSON audio enum strings are lowercase (`buffered`/`streamed`,
+`music`/`sfx`/`ui`, `2d`/`3d`, `none`/`inverse`/`linear`/`exponential`), unlike Lua enum strings.
+An unassigned source uses `"clip": null`. UUID references survive missing files;
+playback cursors/handles are not serialized. ThreeD clips must be mono. Distances
+are metres; maxDistance bounds attenuation, not a hard cull radius. Exactly one
+enabled explicit listener overrides the active scene camera fallback. Multiple
+enabled explicit listeners fail document validation. Parenting uses world poses.
+See [audio.md](audio.md) for all fields, lifecycle, pause and packaging rules.
 
 ## Code
 

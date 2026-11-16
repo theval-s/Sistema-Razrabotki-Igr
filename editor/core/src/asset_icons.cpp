@@ -40,6 +40,7 @@ Style styleOf(const engine::CatalogAssetKind kind) {
     case engine::CatalogAssetKind::UiStylesheet: return {"RCSS", QColor(0x62, 0x85, 0x35)};
     case engine::CatalogAssetKind::UiTemplate: return {"RMLT", QColor(0x55, 0x75, 0x95)};
     case engine::CatalogAssetKind::Font: return {"FONT", QColor(0x85, 0x65, 0x55)};
+    case engine::CatalogAssetKind::AudioClip: return {"AUDIO", QColor(0x95, 0x55, 0x95)};
     }
     return {"?", Qt::gray};
 }
@@ -119,6 +120,7 @@ QString assetKindName(const engine::CatalogAssetKind kind) {
     case engine::CatalogAssetKind::UiStylesheet: return QObject::tr("UI Stylesheets");
     case engine::CatalogAssetKind::UiTemplate: return QObject::tr("UI Templates");
     case engine::CatalogAssetKind::Font: return QObject::tr("Fonts");
+    case engine::CatalogAssetKind::AudioClip: return QObject::tr("Audio Clips");
     }
     return {};
 }

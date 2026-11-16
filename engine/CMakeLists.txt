@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(spdlog CONFIG REQUIRED)
 find_package(directxtk CONFIG REQUIRED)
 find_package(RmlUi 6.3 CONFIG REQUIRED)
+find_path(MINIAUDIO_INCLUDE_DIR NAMES miniaudio.h REQUIRED)
 
 set(ENGINE_UI_SOURCES
     src/ui/UiDx11Renderer.cpp
@@ -52,6 +53,8 @@ if(NOT TARGET Lua::Lua)
 endif()
 
 set(ENGINE_PUBLIC_HEADERS
+    include/engine/audio/AudioComponents.hpp
+    include/engine/audio/AudioSubsystem.hpp
     include/engine/core/HandleMap.hpp
     include/engine/core/Log.hpp
     include/engine/core/ResourceID.hpp
@@ -102,6 +105,9 @@ set(ENGINE_PUBLIC_HEADERS
 )
 
 set(ENGINE_SOURCES
+    src/audio/AudioSubsystem.cpp
+    src/audio/Miniaudio.cpp
+    src/audio/Miniaudio.hpp
     src/scripting/ScriptProperties.cpp
     src/core/HandleMap.cpp
     src/core/Log.cpp
@@ -138,6 +144,7 @@ set(ENGINE_SOURCES
     src/scripting/LuaBehaviorTree.cpp
     src/scripting/ScriptSubsystem.cpp
     src/scripting/LuaBindings.cpp
+    src/scripting/LuaAudioBindings.cpp
     src/scripting/LuaEntityHandle.cpp
     src/scripting/LuaSceneBindings.cpp
     src/scripting/LuaComponentBindings.cpp
@@ -220,6 +227,7 @@ target_include_directories(engine
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${RMLUI_BACKEND_DIR}
+        ${MINIAUDIO_INCLUDE_DIR}
 )
 
 target_include_directories(engine_static
@@ -230,6 +238,7 @@ target_include_directories(engine_static
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${RMLUI_BACKEND_DIR}
+        ${MINIAUDIO_INCLUDE_DIR}
 )
 
 # The generated header makes ENGINE_API empty for static consumers.
@@ -241,7 +250,7 @@ target_link_libraries(engine
     PUBLIC
         spdlog::spdlog Microsoft::DirectXTK
     PRIVATE
-        d3d11 d3dcompiler dxgi dxguid ole32 imm32 windowscodecs
+        d3d11 d3dcompiler dxgi dxguid ole32 imm32 windowscodecs winmm
         rmlui_dx11_backend RmlUi::Core $<$<CONFIG:Debug>:RmlUi::Debugger>
 )
 
@@ -249,7 +258,7 @@ target_link_libraries(engine_static
     PUBLIC
         spdlog::spdlog Microsoft::DirectXTK
     PRIVATE
-        d3d11 d3dcompiler dxgi dxguid ole32 imm32 windowscodecs
+        d3d11 d3dcompiler dxgi dxguid ole32 imm32 windowscodecs winmm
         rmlui_dx11_backend RmlUi::Core $<$<CONFIG:Debug>:RmlUi::Debugger>
 )
 
