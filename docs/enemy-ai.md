@@ -300,9 +300,9 @@ Set `heightOffset` to the distance from the enemy's origin to its feet. For a un
 the floor that is `0.5`. Path points lie on the floor, and the enemy is placed `heightOffset`
 above them.
 
-Baked NavMeshes are kept only in memory, and Play and Stop keep them. Bake again after opening
-the scene. A level opened with `Scene.OpenLevel`, a loaded save and a packaged game have no
-NavMesh yet, so enemies there walk in straight lines.
+The bake is saved to a `.navmesh` file next to the scene, so save the scene after baking. The
+NavMesh then loads with the scene: in the editor, in Play, after `Scene.OpenLevel`, from a save
+and in the packaged game. Bake again after you move the floor or walls.
 
 For many enemies that should avoid each other, use DetourCrowd agents instead of `FindPath`
 (see "Движение толпы" in [navigation.md](navigation.md)).
@@ -321,5 +321,6 @@ For many enemies that should avoid each other, use DetourCrowd agents instead of
   They still move at the right speed, in larger steps.
 - **No path?** `FindPath` needs the start and goal within about 1 unit horizontally and 2 units
   vertically of the baked mesh. Check `heightOffset`, and check that the mesh covers both points.
+  If the NavMesh's **Baked data** row in the inspector says "bake again", bake it.
 - **No damage?** The player needs the `Player` tag and a script with a `TakeDamage` function.
   Otherwise the enemy logs the `CallScript` error as a warning.

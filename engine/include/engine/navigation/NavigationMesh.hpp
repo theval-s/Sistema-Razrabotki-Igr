@@ -75,4 +75,9 @@ private:
     std::shared_ptr<Impl> impl_;
 };
 
+/// Reads the .navmesh `bake` refers to into `mesh`. False with the reason if it is missing, damaged or
+/// another region's; `mesh` is then unchanged.
+[[nodiscard]] ENGINE_API bool LoadNavigationBake(const AssetCatalog& catalog, const AssetReference& bake,
+                                                 EntityUuid region, NavigationMesh& mesh, std::string& error);
+
 }

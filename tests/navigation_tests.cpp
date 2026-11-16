@@ -67,6 +67,33 @@ TEST(NavigationMeshFile, RejectsDamagedFilesAndKeepsTheMesh) {
     EXPECT_EQ(mesh.FindPath(From, To), path);
 }
 
+TEST(NavigationMeshFile, LoadsABakeOnlyForItsRegion) {
+    const auto root = std::filesystem::temp_directory_path() / ("sri-nav-bake-" + engine::NewUuid());
+    std::filesystem::create_directories(root);
+    const engine::EntityUuid owner(engine::NewUuid());
+    const auto data = Floor().Serialize(owner);
+    const auto file = root / "Level.NavMesh.navmesh";
+    std::string error;
+    ASSERT_TRUE(engine::WriteFileAtomic(file, {reinterpret_cast<const char*>(data.data()), data.size()}, error)) << error;
+    const engine::AssetMetadata metadata{engine::NewUuid(), engine::CatalogAssetKind::NavMesh};
+    ASSERT_TRUE(engine::WriteAssetMetadata(file, metadata, error)) << error;
+    engine::AssetCatalog catalog;
+    ASSERT_TRUE(catalog.Scan(root, {}, error)) << error;
+
+    engine::NavigationMesh mesh;
+    const engine::AssetReference bake{metadata.id, "game/Level.NavMesh.navmesh"};
+    EXPECT_FALSE(engine::LoadNavigationBake(catalog, {engine::AssetUuid(engine::NewUuid()), {}}, owner, mesh, error));
+    EXPECT_EQ(error, "the baked data is missing");
+    EXPECT_FALSE(engine::LoadNavigationBake(catalog, bake, engine::EntityUuid(engine::NewUuid()), mesh, error));
+    EXPECT_EQ(error, "the baked data belongs to another NavMesh");
+    EXPECT_FALSE(mesh.GetSettings());
+    ASSERT_TRUE(engine::LoadNavigationBake(catalog, bake, owner, mesh, error)) << error;
+    EXPECT_EQ(mesh.FindPath(From, To), Floor().FindPath(From, To));
+
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
 TEST(NavigationScene, BakedMeshesLoadWithTheScene) {
     const auto root = std::filesystem::temp_directory_path() / ("sri-nav-" + engine::NewUuid());
     const auto previous = engine::AssetPathResolver::GetGameRoot();

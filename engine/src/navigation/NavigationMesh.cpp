@@ -1,5 +1,6 @@
 #include <engine/navigation/NavigationMesh.hpp>
 
+#include <engine/core/FileSystem.hpp>
 #include <engine/rendering/DebugDraw.hpp>
 #include <Recast.h>
 #include <DetourAlloc.h>
@@ -377,6 +378,25 @@ bool NavigationMesh::Deserialize(std::span<const std::uint8_t> data, EntityUuid&
     next->settings = settings;
     impl_ = std::move(next);
     region = EntityUuid(FormatUuidBytes(owner));
+    return true;
+}
+
+bool LoadNavigationBake(const AssetCatalog& catalog, const AssetReference& bake, EntityUuid region,
+                        NavigationMesh& mesh, std::string& error) {
+    const auto* entry = catalog.Find(bake.id, CatalogAssetKind::NavMesh);
+    if (!entry) {
+        error = "the baked data is missing";
+        return false;
+    }
+    std::vector<std::uint8_t> data;
+    EntityUuid owner;
+    NavigationMesh loaded;
+    if (!ReadBinaryFile(entry->source, data, error) || !loaded.Deserialize(data, owner, error)) return false;
+    if (owner != region) {
+        error = "the baked data belongs to another NavMesh";
+        return false;
+    }
+    mesh = std::move(loaded);
     return true;
 }
 

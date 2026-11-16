@@ -670,19 +670,12 @@ void LoadNavigation(const Scene& scene, const AssetCatalog& catalog,
                     std::unordered_map<EntityUuid, NavigationMesh, EntityUuidHash>& meshes) {
     scene.ForEach<NavigationRegion>([&](entt::entity entity, const NavigationRegion& region) {
         if (!region.navMesh.id.IsValid()) return;
-        const auto id = scene.GetId(entity);
-        const auto fail = [&](const std::string& reason) {
-            log::Engine().warn("NavMesh '{}' ({}): {}. Bake it again.", scene.GetName(entity), region.navMesh.path, reason);
-        };
-        const auto* entry = catalog.Find(region.navMesh.id, CatalogAssetKind::NavMesh);
-        if (!entry) return fail("the baked data is missing");
-        std::vector<std::uint8_t> data;
-        std::string error;
-        EntityUuid owner;
         NavigationMesh mesh;
-        if (!ReadBinaryFile(entry->source, data, error) || !mesh.Deserialize(data, owner, error)) return fail(error);
-        if (owner != id) return fail("the baked data belongs to another NavMesh");
-        meshes.insert_or_assign(id, std::move(mesh));
+        if (std::string error; !LoadNavigationBake(catalog, region.navMesh, scene.GetId(entity), mesh, error)) {
+            log::Engine().warn("NavMesh '{}' ({}): {}. Bake it again.", scene.GetName(entity), region.navMesh.path, error);
+            return;
+        }
+        meshes.insert_or_assign(scene.GetId(entity), std::move(mesh));
     });
 }
 }  // namespace

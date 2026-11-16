@@ -9,6 +9,7 @@
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/core/Utf.hpp>
+#include <engine/navigation/NavigationMesh.hpp>
 #include <engine/project/Project.hpp>
 #include <engine/project/RuntimeSettings.hpp>
 #include <engine/scene/SceneDocument.hpp>
@@ -290,6 +291,16 @@ namespace {
                                    "SkinnedMeshRenderer.mesh");
                     checkReference(entity.skinnedRenderer->materialInstance, engine::CatalogAssetKind::MaterialInstance,
                                    "SkinnedMeshRenderer.materialInstance");
+                }
+                if (entity.navigationRegion) {
+                    const auto& bake = entity.navigationRegion->navMesh;
+                    engine::NavigationMesh mesh;
+                    if (!bake.id.IsValid()) {
+                        warnings.push_back(context + "NavigationRegion is not baked, so the game has no NavMesh for it");
+                    } else if (!engine::LoadNavigationBake(catalog, bake, entity.id, mesh, error)) {
+                        errors.push_back(context + "NavigationRegion.navMesh " + bake.id.ToString() +
+                            (bake.path.empty() ? "" : " (" + bake.path + ")") + ": " + error + ", bake it again");
+                    }
                 }
                 if (entity.animator) {
                     checkReference(entity.animator->skeleton, engine::CatalogAssetKind::Skeleton, "Animator.skeleton");

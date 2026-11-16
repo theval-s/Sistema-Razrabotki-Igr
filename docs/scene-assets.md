@@ -13,7 +13,7 @@ For `game/models/table/model.obj`, create `model.obj.meta` next to it:
 ~~~
 
 Valid kinds: `mesh`, `texture`, `shader`, `material`, `materialInstance`,
-`scene`, `audioClip` (WAV/FLAC/MP3). `centerOnLoad` is only valid for meshes. The generator preserves
+`scene`, `audioClip` (WAV/FLAC/MP3), `navMesh` (`.navmesh`, see below). `centerOnLoad` is only valid for meshes. The generator preserves
 existing sidecars and creates new UUIDs for recognized files lacking them:
 
 ~~~text
@@ -97,6 +97,31 @@ are metres; maxDistance bounds attenuation, not a hard cull radius. Exactly one
 enabled explicit listener overrides the active scene camera fallback. Multiple
 enabled explicit listeners fail document validation. Parenting uses world poses.
 See [audio.md](audio.md) for all fields, lifecycle, pause and packaging rules.
+
+## Navigation components
+
+A `NavigationRegion` stores its bounds and agent settings, and `navMesh` refers to its baked
+`.navmesh` asset. An unbaked region leaves `navMesh` out. Mark floor and wall geometry with
+`NavigationSource`:
+
+```json
+"NavigationRegion": {
+  "halfExtents": [10, 3, 10],
+  "cellSize": 0.2, "cellHeight": 0.1, "agentHeight": 2, "agentRadius": 0.4,
+  "agentClimb": 0.4, "agentSlope": 45,
+  "navMesh": { "id": "5b0f8c1e-3d47-4a8e-9a51-0c6f2e7d9b13", "path": "game/scenes/Level.NavMesh.navmesh" }
+},
+"NavigationSource": { "useCollider": true }
+```
+
+A `.navmesh` file is binary and versioned. It records the UUID of the region that baked it, and a
+scene load rejects a file baked for another region. A region whose file is missing, damaged,
+another region's or from an incompatible engine version loads without a mesh, and the engine
+logs a warning. The editor's **Bake Navigation Mesh** writes the file and sets the reference (see
+[navigation.md](navigation.md)). A C++ host can do the same: `Engine::BuildNavigation(region, error)`,
+then `Engine::SaveNavigation(region, file, error)`, then a `navMesh` sidecar and the
+`NavigationRegion::navMesh` reference. `sri-build` fails on broken bakes and warns about unbaked
+regions.
 
 ## Code
 
