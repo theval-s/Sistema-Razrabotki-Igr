@@ -27,6 +27,7 @@ Writing games in Lua with the editor:
 | [audio.md](audio.md) | Audio clips, 2D/mono 3D sources, listeners, Lua/C++ playback, buses, pause, device recovery and packaging |
 | [behavior-trees.md](behavior-trees.md) | `.bt.lua` tree assets, condition and action scripts, attaching trees to agents |
 | [navigation.md](navigation.md) | NavMesh baking, pathfinding and crowds from Lua (in Russian) |
+| [enemy-ai.md](enemy-ai.md) | A basic chasing, attacking enemy as one script or a behavior tree, with NavMesh paths |
 | [ui.md](ui.md) | Game UI with RML/RCSS: documents, styles, models, events, preview and reload |
 | [ui-lua-facade.md](ui-lua-facade.md) | The exact Lua UI API and its lifetime rules |
 
