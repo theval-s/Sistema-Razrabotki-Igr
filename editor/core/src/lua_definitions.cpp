@@ -188,6 +188,13 @@ function Quaternion:Compose(other) end
 ---@class MaterialParametersSnapshot
 ---@field specularColor Vector3 Nonnegative RGB.
 ---@field shininess number Nonnegative.
+---@class AnimationPlaybackState
+---@field ready boolean
+---@field playing boolean
+---@field transitioning boolean
+---@field time_seconds number
+---@field duration number
+---@field error string
 
 )"
 R"(---@class Entity
@@ -302,6 +309,32 @@ function Entity:HasScriptMethod(name) end
 ---@return boolean success
 ---@return any ...
 function Entity:CallScript(name, ...) end
+---Starts a catalogued clip. An asset reference's id is authoritative; path is a diagnostic hint.
+---@param clipRef string|{id:string,path?:string} Clip UUID, logical path, or asset reference.
+---@param fadeSeconds? number Finite, nonnegative; defaults to zero.
+---@param loop? boolean Defaults to true.
+---@return boolean success
+---@return string error Empty on success.
+function Entity:play_animation(clipRef, fadeSeconds, loop) end
+---@param paused? boolean Defaults to true.
+---@return boolean success
+---@return string error
+function Entity:pause_animation(paused) end
+---@return boolean success
+---@return string error
+function Entity:stop_animation() end
+---Requires a loaded clip and no pending transition.
+---@param seconds number Finite and nonnegative.
+---@return boolean success
+---@return string error
+function Entity:seek_animation(seconds) end
+---@param speed number Finite and nonnegative.
+---@return boolean success
+---@return string error
+function Entity:set_animation_speed(speed) end
+---Returns a detached snapshot, or nil if no playback state is available.
+---@return AnimationPlaybackState?
+function Entity:animation_state() end
 
 ---Available only in GameObject script instances, not autoloads or shared modules.
 ---@type Entity

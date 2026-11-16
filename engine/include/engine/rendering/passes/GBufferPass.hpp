@@ -18,6 +18,7 @@ struct ENGINE_API GBufferPass : RenderPass {
 
 private:
     ShaderHandle vertexShader_;
+    ShaderHandle skinnedVertexShader_;
     ShaderHandle pixelShader_;
     MeshHandle lightSphere_;
 };

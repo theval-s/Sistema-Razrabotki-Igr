@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include <cstdint>
+#include <engine/assets/AssetCatalog.hpp>
 
 #include <engine/rendering/resources/RenderedMesh.hpp>
 #include <engine/rendering/resources/ShaderContext.hpp>
@@ -36,6 +37,46 @@ struct MeshAsset {
     std::shared_ptr<const MeshGeometry> geometry;
 };
 
+namespace detail {
+struct SkeletonData;
+struct AnimationData;
+}
+
+/// Immutable CPU assets. The ozz representation stays private to the engine.
+struct SkeletonAsset {
+    std::shared_ptr<const detail::SkeletonData> data;
+    std::uint64_t signature = 0;
+    std::uint32_t jointCount = 0;
+};
+
+struct AnimationClipAsset {
+    std::shared_ptr<const detail::AnimationData> data;
+    std::uint64_t skeletonSignature = 0;
+    float duration = 0.0f;
+};
+
+/// All arrays use the section's palette order, not skeleton order. Bounds are
+/// in joint bind-local space and conservatively enclose every influenced vertex.
+struct SkinBinding {
+    std::vector<std::uint16_t> joints;
+    std::vector<DirectX::SimpleMath::Matrix> inverseBind;
+    std::vector<DirectX::SimpleMath::Matrix> restPalette;
+    std::vector<Aabb> jointBounds;
+};
+
+struct SkinnedMeshSection {
+    MeshHandle mesh;
+    std::uint32_t materialSlot = 0;
+    std::shared_ptr<const SkinBinding> binding;
+};
+
+struct SkinnedMeshAsset {
+    std::vector<SkinnedMeshSection> sections;
+    Aabb bounds; // asset-local rest-pose bounds
+    std::uint64_t skeletonSignature = 0;
+    AssetReference skeletonReference;
+};
+
 struct TextureAsset {
     TextureHandle texture;
 };
@@ -63,6 +104,19 @@ struct AssetValueKind;
 template <>
 struct AssetValueKind<MeshAsset> {
     static constexpr AssetKind value = AssetKind::Mesh;
+};
+
+template <>
+struct AssetValueKind<SkeletonAsset> {
+    static constexpr AssetKind value = AssetKind::Skeleton;
+};
+template <>
+struct AssetValueKind<AnimationClipAsset> {
+    static constexpr AssetKind value = AssetKind::AnimationClip;
+};
+template <>
+struct AssetValueKind<SkinnedMeshAsset> {
+    static constexpr AssetKind value = AssetKind::SkinnedMesh;
 };
 
 template <>

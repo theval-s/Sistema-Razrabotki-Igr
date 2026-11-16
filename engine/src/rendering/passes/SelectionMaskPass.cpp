@@ -16,6 +16,8 @@ void CreateMask(RenderingResourceManager& manager, RenderingResources& resources
 void SelectionMaskPass::Initialize(RenderingResourceManager& manager, RenderingContext&, RenderingResources& resources) {
     defaultVS_ = manager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
                                        {.defines = {{"MATERIAL_GBUFFER_VS"}}});
+    skinnedDefaultVS_ = manager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
+        {.defines = {{"MATERIAL_GBUFFER_VS"}, {"ENGINE_SKINNED", "1"}}});
     visiblePS_ = manager.CompileShader(L"engine/SelectionMask.hlsl", ShaderType::Pixel);
     occludedPS_ = manager.CompileShader(L"engine/SelectionMask.hlsl", ShaderType::Pixel,
                                         {.defines = {{"OCCLUDED"}}});
@@ -26,6 +28,7 @@ void SelectionMaskPass::Destroy(RenderingResourceManager& manager, RenderingCont
     manager.DestroyTexture(resources.selectionMask);
     resources.selectionMask = {};
     manager.DestroyShader(defaultVS_);
+    manager.DestroyShader(skinnedDefaultVS_);
     manager.DestroyShader(visiblePS_);
     manager.DestroyShader(occludedPS_);
 }
@@ -42,7 +45,7 @@ void SelectionMaskPass::Render(RenderWorld& world, RenderingContext& context, Re
 
     RenderWorld selected;
     selected.sceneItems = world.selectedSceneItems;
-    const auto draws = BuildMaterialDrawList(selected, context.GetResourceManager(), false, defaultVS_);
+    const auto draws = BuildMaterialDrawList(selected, context.GetResourceManager(), false, defaultVS_, {}, skinnedDefaultVS_);
     context.SetViewport(resources.screenWith, resources.screenHeight);
     context.SetRenderTargets({resources.selectionMask}, resources.gBuffer.depthTexture, true);
     // Accumulate channels separately when several selected objects overlap.
@@ -68,6 +71,7 @@ void SelectionMaskPass::Render(RenderWorld& world, RenderingContext& context, Re
                 data.worldMatrix = draw.item->worldMatrix;
                 data.normalMatrix = draw.item->worldMatrix.Invert().Transpose();
             });
+            resources.BindSkinning(context, draw.item->skinning.get());
             context.DrawMesh(draw.item->mesh);
         }
     }

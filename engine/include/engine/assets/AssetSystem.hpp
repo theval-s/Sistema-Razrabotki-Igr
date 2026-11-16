@@ -66,6 +66,15 @@ public:
     /// JSON names are exe-relative. Extensionless names gain .material.json / .material-instance.json.
     entt::resource<MaterialAsset> LoadMaterial(std::string_view name);
     entt::resource<MaterialInstanceAsset> LoadMaterialInstance(std::string_view name);
+    entt::resource<SkeletonAsset> LoadSkeleton(std::string_view name);
+    entt::resource<AnimationClipAsset> LoadAnimationClip(std::string_view name);
+    entt::resource<SkinnedMeshAsset> LoadSkinnedMesh(std::string_view name);
+    AssetHandle<SkeletonAsset> RequestSkeleton(std::string_view name);
+    AssetHandle<AnimationClipAsset> RequestAnimationClip(std::string_view name);
+    AssetHandle<SkinnedMeshAsset> RequestSkinnedMesh(std::string_view name);
+    AssetHandle<SkeletonAsset> RequestSkeleton(const AssetReference& reference);
+    AssetHandle<AnimationClipAsset> RequestAnimationClip(const AssetReference& reference);
+    AssetHandle<SkinnedMeshAsset> RequestSkinnedMesh(const AssetReference& reference);
     /// Reimport a saved asset and atomically replace its live GPU contents on the main thread.
     /// Unloaded names are read on their next request. A failure leaves ready values untouched.
     bool Reload(std::string_view name, AssetKind kind, std::string& error);
@@ -94,6 +103,7 @@ public:
     /// Why the last scan was not clean; empty when it was.
     [[nodiscard]] const std::string& GetCatalogError() const noexcept { return catalogError_; }
     [[nodiscard]] std::optional<AssetReference> ReferenceFor(AssetHandle<MeshAsset> handle) const;
+    [[nodiscard]] std::optional<AssetReference> ReferenceFor(AssetHandle<SkinnedMeshAsset> handle) const;
     [[nodiscard]] std::optional<AssetReference> ReferenceFor(AssetHandle<MaterialInstanceAsset> handle) const;
     /// Ready only after the JSON, declared shaders and referenced assets are ready.
     AssetHandle<MaterialAsset> RequestMaterial(std::string_view name);
@@ -136,6 +146,13 @@ public:
     [[nodiscard]] bool IsReady(const AssetHandle<T> handle) const {
         const typename AssetTable<T>::Record* record = Table<T>().Get(handle);
         return record != nullptr && record->state == AssetState::Ready;
+    }
+
+    /// Failed also covers a retired generation (including a failed request).
+    template <typename T>
+    [[nodiscard]] AssetState GetState(AssetHandle<T> handle) const {
+        const auto* record = Table<T>().Get(handle);
+        return record ? record->state : AssetState::Failed;
     }
 
 private:
@@ -183,6 +200,12 @@ private:
             return materials_;
         } else if constexpr (std::is_same_v<T, MaterialInstanceAsset>) {
             return materialInstances_;
+        } else if constexpr (std::is_same_v<T, SkeletonAsset>) {
+            return skeletons_;
+        } else if constexpr (std::is_same_v<T, AnimationClipAsset>) {
+            return animationClips_;
+        } else if constexpr (std::is_same_v<T, SkinnedMeshAsset>) {
+            return skinnedMeshes_;
         } else {
             static_assert(sizeof(T) == 0, "not an asset value type");
         }
@@ -198,6 +221,9 @@ private:
     AssetTable<ShaderAsset> shaders_;
     AssetTable<MaterialAsset> materials_;
     AssetTable<MaterialInstanceAsset> materialInstances_;
+    AssetTable<SkeletonAsset> skeletons_;
+    AssetTable<AnimationClipAsset> animationClips_;
+    AssetTable<SkinnedMeshAsset> skinnedMeshes_;
     AssetCatalog catalog_;
     /// A rescanned catalog waiting for the running importer jobs to finish.
     std::optional<AssetCatalog> pendingCatalog_;

@@ -13,11 +13,13 @@ bool ReadDefinition(const AssetDesc& desc, bool instance, std::string& text, std
     return ReadTextFile(AssetPathResolver::ResolveMaterial(desc, instance), text, error, 1024 * 1024);
 }
 
-struct HookStage { MaterialHook hook; ShaderType stage; const char* define; };
+struct HookStage { MaterialHook hook; ShaderType stage; const char* define; bool skinned = false; };
 constexpr std::array Stages{
     HookStage{MaterialHook::ShadowVS, ShaderType::Vertex, "MATERIAL_SHADOW_VS"},
     HookStage{MaterialHook::GBufferVS, ShaderType::Vertex, "MATERIAL_GBUFFER_VS"},
-    HookStage{MaterialHook::GBufferPS, ShaderType::Pixel, "MATERIAL_GBUFFER_PS"}
+    HookStage{MaterialHook::GBufferPS, ShaderType::Pixel, "MATERIAL_GBUFFER_PS"},
+    HookStage{MaterialHook::GBufferVS, ShaderType::Vertex, "MATERIAL_GBUFFER_VS", true},
+    HookStage{MaterialHook::ShadowVS, ShaderType::Vertex, "MATERIAL_SHADOW_VS", true}
 };
 
 } // namespace
@@ -39,8 +41,9 @@ bool MaterialImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, CpuPayload&
         for (size_t i = 0; i < Stages.size(); ++i) {
             const auto& stage = Stages[i];
             if (!HasHook(parsed.definition.hooks, stage.hook)) continue;
-            auto compiled = ShaderContext::CompileCpu(path, stage.stage,
-                {.defines = {{stage.define, "1"}, {"MATERIAL_HAS_HOOK", "1"}}});
+            ShaderCompileOptions options{.defines = {{stage.define, "1"}, {"MATERIAL_HAS_HOOK", "1"}}};
+            if (stage.skinned) options.defines.push_back({"ENGINE_SKINNED", "1"});
+            auto compiled = ShaderContext::CompileCpu(path, stage.stage, options);
             if (!compiled) {
                 error = "HLSL compilation failed for material '" + desc.name + "' (" + stage.define + ")";
                 return false;
@@ -60,7 +63,8 @@ bool MaterialImporter::UploadGpu(const UploadTransfer& transfer, const CpuPayloa
         return false;
     }
     ShaderSet shaders;
-    const std::array targets{&shaders.shadowPassVS, &shaders.gBufferPassVS, &shaders.gBufferPassPS};
+    const std::array targets{&shaders.shadowPassVS, &shaders.gBufferPassVS, &shaders.gBufferPassPS,
+        &shaders.skinnedGBufferPassVS, &shaders.skinnedShadowPassVS};
     const auto rollback = [&] {
         for (const auto target : targets) if (*target) transfer.resources->DestroyShader(*target);
     };

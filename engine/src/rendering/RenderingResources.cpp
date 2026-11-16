@@ -1,4 +1,5 @@
 ﻿#include <engine/rendering/RenderingResources.hpp>
+#include <algorithm>
 
 namespace engine {
 
@@ -13,6 +14,7 @@ void RenderingResources::Initialize(RenderingResourceManager& resourceManager) {
     objectCBuffer.Initialize(resourceManager);
     shadowCascadesCBuffer.Initialize(resourceManager);
     lightCBuffer.Initialize(resourceManager);
+    skinningCBuffer.Initialize(resourceManager);
 
     constexpr uint32_t white = 0xffffffffu;
     D3D11_SUBRESOURCE_DATA data{.pSysMem = &white, .SysMemPitch = sizeof(white)};
@@ -31,6 +33,7 @@ void RenderingResources::Destroy(RenderingResourceManager& resourceManager) {
     objectCBuffer.Destroy(resourceManager);
     shadowCascadesCBuffer.Destroy(resourceManager);
     lightCBuffer.Destroy(resourceManager);
+    skinningCBuffer.Destroy(resourceManager);
 }
 
 void RenderingResources::BindCBuffers(RenderingContext& context) {
@@ -40,6 +43,20 @@ void RenderingResources::BindCBuffers(RenderingContext& context) {
     context.BindCBuffer(BindSlots::CBuffer::Object, objectCBuffer.GetHandle());
     context.BindCBuffer(BindSlots::CBuffer::ShadowCascades, shadowCascadesCBuffer.GetHandle());
     context.BindCBuffer(BindSlots::CBuffer::Pass0, lightCBuffer.GetHandle());
+}
+
+void RenderingResources::BindSkinning(RenderingContext& context, const SkinningPalette* palette) {
+    if (!palette) {
+        context.UnbindCBuffer(BindSlots::CBuffer::Skinning);
+        return;
+    }
+    skinningCBuffer.Update(context, [&](SkinningBufferData& data) {
+        // Never read beyond the submitted palette or leave data from a previous draw.
+        data.matrices.fill(Matrix::Identity);
+        std::copy_n(palette->matrices.begin(), std::min(palette->matrices.size(), MaxSkinningJoints),
+                    data.matrices.begin());
+    });
+    context.BindCBuffer(BindSlots::CBuffer::Skinning, skinningCBuffer.GetHandle());
 }
 
 }

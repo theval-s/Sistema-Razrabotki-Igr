@@ -33,6 +33,9 @@ std::string_view KindName(CatalogAssetKind kind) {
     case CatalogAssetKind::UiTemplate: return "ui_template";
     case CatalogAssetKind::Font: return "font";
     case CatalogAssetKind::AudioClip: return "audioClip";
+    case CatalogAssetKind::Skeleton: return "skeleton";
+    case CatalogAssetKind::AnimationClip: return "animationClip";
+    case CatalogAssetKind::SkinnedMesh: return "skinnedMesh";
     }
     return {};
 }
@@ -101,7 +104,8 @@ AssetMetadata MetadataFromJson(const Json& j) {
     for (const auto candidate : {CatalogAssetKind::Mesh, CatalogAssetKind::Texture, CatalogAssetKind::Shader,
                                   CatalogAssetKind::Material, CatalogAssetKind::MaterialInstance, CatalogAssetKind::Scene, CatalogAssetKind::Script,
                                   CatalogAssetKind::UiDocument, CatalogAssetKind::UiStylesheet, CatalogAssetKind::UiTemplate, CatalogAssetKind::Font,
-                                  CatalogAssetKind::BehaviorTree, CatalogAssetKind::AudioClip}) {
+                                  CatalogAssetKind::BehaviorTree, CatalogAssetKind::AudioClip, CatalogAssetKind::Skeleton,
+                                  CatalogAssetKind::AnimationClip, CatalogAssetKind::SkinnedMesh}) {
         if (kind == KindName(candidate)) { meta.kind = candidate; found = true; break; }
     }
     if (!found || (j.contains("centerOnLoad") && meta.kind != CatalogAssetKind::Mesh))
@@ -123,6 +127,9 @@ std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& 
     if (name.ends_with(".material-instance.json")) return CatalogAssetKind::MaterialInstance;
     if (name.ends_with(".material.json")) return CatalogAssetKind::Material;
     if (name.ends_with(".scene.json")) return CatalogAssetKind::Scene;
+    if (name.ends_with(".skeleton.json")) return CatalogAssetKind::Skeleton;
+    if (name.ends_with(".animation.json")) return CatalogAssetKind::AnimationClip;
+    if (name.ends_with(".skinned-mesh.json")) return CatalogAssetKind::SkinnedMesh;
     if (name.ends_with(".bt.lua")) return CatalogAssetKind::BehaviorTree;
     const std::string ext = NormalizeName(ToGenericUtf8(path.extension()));
     if (ext == ".hlsl") return CatalogAssetKind::Shader;

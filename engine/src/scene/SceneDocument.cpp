@@ -141,7 +141,7 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         entity.editorFolder = j.at("editorFolder").get<std::string>();
     }
     const auto& components = j.at("components");
-    Fields(components, {"Transform", "MeshRenderer", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "BehaviorTree", "RigidBody", "Collider", "NavigationRegion", "NavigationSource", "AudioSource", "AudioListener"});
+    Fields(components, {"Transform", "MeshRenderer", "SkinnedMeshRenderer", "Animator", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "BehaviorTree", "RigidBody", "Collider", "NavigationRegion", "NavigationSource", "AudioSource", "AudioListener"});
     if (components.contains("AudioSource")) {
         const auto& json = components.at("AudioSource");
         Fields(json, {"clip", "enabled", "playOnStart", "looping", "loading", "bus", "volume", "pitch",
@@ -320,6 +320,26 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         entity.renderer = SceneEntityDefinition::Mesh{Reference(renderer.at("mesh")),
                                                        Reference(renderer.at("materialInstance"))};
     }
+    if (components.contains("SkinnedMeshRenderer")) {
+        const auto& renderer = components.at("SkinnedMeshRenderer");
+        Fields(renderer, {"mesh", "materialInstance"});
+        entity.skinnedRenderer = SceneEntityDefinition::Mesh{Reference(renderer.at("mesh")),
+                                                              Reference(renderer.at("materialInstance"))};
+    }
+    if (components.contains("Animator")) {
+        const auto& data = components.at("Animator");
+        Fields(data, {"skeleton", "clip", "speed", "loop", "playOnStart"});
+        Animator value;
+        if (!data.at("skeleton").is_null()) value.skeleton = Reference(data.at("skeleton"));
+        if (!data.at("clip").is_null()) value.clip = Reference(data.at("clip"));
+        value.speed = Number(data.at("speed"));
+        if (value.speed < 0) throw std::invalid_argument("Animator speed must be nonnegative");
+        if (!data.at("loop").is_boolean() || !data.at("playOnStart").is_boolean())
+            throw std::invalid_argument("Animator loop and playOnStart must be boolean");
+        value.loop = data.at("loop").get<bool>();
+        value.playOnStart = data.at("playOnStart").get<bool>();
+        entity.animator = value;
+    }
     if (components.contains("Camera")) {
         const auto& camera = components.at("Camera");
         Fields(camera, {"fovY", "nearPlane", "farPlane"});
@@ -394,6 +414,8 @@ void Validate(const SceneDocument& document) {
         if (!folders.insert(folder).second) throw std::invalid_argument("duplicate editor folder: " + folder);
     }
     for (const auto& entity : document.entities) {
+        if (entity.renderer && entity.skinnedRenderer)
+            throw std::invalid_argument("MeshRenderer and SkinnedMeshRenderer cannot coexist");
         if (entity.rigidBody.has_value() != entity.collider.has_value())
             throw std::invalid_argument("RigidBody and Collider must be provided together");
         if (!entity.rigidBody) continue;
@@ -458,6 +480,22 @@ Json Encode(const SceneDocument& document) {
         if (entity.renderer)
             components["MeshRenderer"] = {{"mesh", Encode(entity.renderer->mesh)},
                                           {"materialInstance", Encode(entity.renderer->materialInstance)}};
+        if (entity.skinnedRenderer)
+            components["SkinnedMeshRenderer"] = {{"mesh", Encode(entity.skinnedRenderer->mesh)},
+                {"materialInstance", Encode(entity.skinnedRenderer->materialInstance)}};
+        if (entity.animator) {
+            const auto& animator = *entity.animator;
+            const auto optionalReference = [](const AssetReference& reference) -> Json {
+                if (!reference.id.IsValid() && !reference.path.empty())
+                    throw std::invalid_argument("invalid Animator reference");
+                return reference.id.IsValid() ? Encode(reference) : Json(nullptr);
+            };
+            if (!std::isfinite(animator.speed) || animator.speed < 0)
+                throw std::invalid_argument("Animator speed must be finite and nonnegative");
+            components["Animator"] = {{"skeleton", optionalReference(animator.skeleton)},
+                {"clip", optionalReference(animator.clip)}, {"speed", animator.speed},
+                {"loop", animator.loop}, {"playOnStart", animator.playOnStart}};
+        }
         if (entity.camera)
             components["Camera"] = {{"fovY", entity.camera->fovY}, {"nearPlane", entity.camera->nearPlane},
                                     {"farPlane", entity.camera->farPlane}};
@@ -567,14 +605,16 @@ Json Encode(const SceneDocument& document) {
 }
 
 // The renderer's authored references, or its loaded assets' if it has none; nothing if they aren't file-backed.
-std::optional<SceneEntityDefinition::Mesh> RendererReferences(const MeshRenderer& renderer, const AssetSystem& assets) {
+template <class Renderer>
+std::optional<SceneEntityDefinition::Mesh> RendererReferences(const Renderer& renderer, const AssetSystem& assets) {
     auto authored = [&](const AssetReference& ref, CatalogAssetKind kind) -> std::optional<AssetReference> {
         if (!ref.id.IsValid()) return std::nullopt;
         if (const auto* entry = assets.GetCatalog().Find(ref.id, kind))
             return AssetReference{ref.id, entry->path};
         return ref; // missing asset: keep the hand-editable recovery hint
     };
-    auto mesh = authored(renderer.meshReference, CatalogAssetKind::Mesh);
+    constexpr auto meshKind = std::is_same_v<Renderer, MeshRenderer> ? CatalogAssetKind::Mesh : CatalogAssetKind::SkinnedMesh;
+    auto mesh = authored(renderer.meshReference, meshKind);
     if (!mesh) mesh = assets.ReferenceFor(renderer.mesh);
     auto material = authored(renderer.materialReference, CatalogAssetKind::MaterialInstance);
     if (!material) material = assets.ReferenceFor(renderer.materialInstance);
@@ -584,6 +624,11 @@ std::optional<SceneEntityDefinition::Mesh> RendererReferences(const MeshRenderer
 
 MeshRenderer RequestRenderer(const SceneEntityDefinition::Mesh& references, AssetSystem& assets) {
     return {assets.RequestMesh(references.mesh), assets.RequestMaterialInstance(references.materialInstance),
+            references.mesh, references.materialInstance};
+}
+
+SkinnedMeshRenderer RequestSkinnedRenderer(const SceneEntityDefinition::Mesh& references, AssetSystem& assets) {
+    return {assets.RequestSkinnedMesh(references.mesh), assets.RequestMaterialInstance(references.materialInstance),
             references.mesh, references.materialInstance};
 }
 
@@ -613,6 +658,12 @@ SceneEntityDefinition CaptureDefinition(const Scene& scene, const AssetSystem& a
         if (!definition.renderer)
             throw std::invalid_argument("renderer has no file-backed mesh or material instance on " + definition.id.ToString());
     }
+    if (const auto* renderer = scene.TryGetComponent<SkinnedMeshRenderer>(entity)) {
+        definition.skinnedRenderer = RendererReferences(*renderer, assets);
+        if (!definition.skinnedRenderer)
+            throw std::invalid_argument("skinned renderer has no file-backed mesh or material instance on " + definition.id.ToString());
+    }
+    if (const auto* animator = scene.TryGetComponent<Animator>(entity)) definition.animator = *animator;
     if (const auto* component = scene.TryGetComponent<Camera>(entity)) definition.camera = *component;
     if (const auto* component = scene.TryGetComponent<DirectionalLight>(entity)) definition.directionalLight = *component;
     if (const auto* component = scene.TryGetComponent<PointLight>(entity)) definition.pointLight = *component;
@@ -651,6 +702,15 @@ void ApplyEntity(const SceneEntityDefinition& definition, AssetSystem& assets, S
     } else if (RendererReferences(*renderer, assets) != definition.renderer) {
         destination.Modify<MeshRenderer>(entity, [&](MeshRenderer& changed) { changed = RequestRenderer(*definition.renderer, assets); });
     }
+    const auto* skinned = std::as_const(destination).TryGetComponent<SkinnedMeshRenderer>(entity);
+    if (!definition.skinnedRenderer) {
+        if (skinned) destination.RemoveComponent<SkinnedMeshRenderer>(entity);
+    } else if (!skinned) {
+        destination.AddComponent<SkinnedMeshRenderer>(entity, RequestSkinnedRenderer(*definition.skinnedRenderer, assets));
+    } else if (RendererReferences(*skinned, assets) != definition.skinnedRenderer) {
+        destination.Modify<SkinnedMeshRenderer>(entity, [&](SkinnedMeshRenderer& changed) { changed = RequestSkinnedRenderer(*definition.skinnedRenderer, assets); });
+    }
+    MatchComponent(destination, entity, definition.animator);
     MatchComponent(destination, entity, definition.camera);
     MatchComponent(destination, entity, definition.directionalLight);
     MatchComponent(destination, entity, definition.pointLight);

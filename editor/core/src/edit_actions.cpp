@@ -25,6 +25,7 @@
 #include <nlohmann/json.hpp>
 
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/animation/AnimationComponents.hpp>
 #include <engine/engine.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/scene/Scene.hpp>
@@ -53,6 +54,10 @@ void growBounds(const engine::Scene& scene, engine::AssetSystem& assets, const e
     const engine::Aabb* local = nullptr;
     if (const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity)) {
         if (const auto mesh = assets.Peek(renderer->mesh)) local = &mesh->bounds;
+    }
+    if (const auto* renderer = scene.TryGetComponent<engine::SkinnedMeshRenderer>(entity)) {
+        if (renderer->posedBounds) local = &*renderer->posedBounds;
+        else if (const auto mesh = assets.Peek(renderer->mesh)) local = &mesh->bounds;
     }
     if (local == nullptr) {
         if (const auto* bounds = scene.TryGetComponent<engine::Bounds>(entity)) local = &bounds->local;

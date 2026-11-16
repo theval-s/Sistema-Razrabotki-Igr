@@ -61,6 +61,7 @@ struct BindSlots {
         constexpr static BindSlot Pass2{7, shaderStageAll};
 
         constexpr static BindSlot MaterialCustomBuffer{8, shaderStageAll};
+        constexpr static BindSlot Skinning{9, ShaderStage::Vertex};
     };
 
     struct Texture {

@@ -1,4 +1,4 @@
-﻿#ifndef SHADER_TYPES_INCLUDE_H
+#ifndef SHADER_TYPES_INCLUDE_H
 #define SHADER_TYPES_INCLUDE_H
 
 struct MaterialVertex {
@@ -11,12 +11,20 @@ struct GBufferVertexInput {
     float4 pos : POSITION0;
     float3 normal : NORMAL0;
     float2 tex : TEXCOORD0;
+#ifdef ENGINE_SKINNED
+    uint4 joints : BLENDINDICES0;
+    float4 weights : BLENDWEIGHT0;
+#endif
 };
 
 struct ShadowVertexInput {
     float4 pos : POSITION0;
     float3 normal : NORMAL0;
     float2 tex : TEXCOORD0;
+#ifdef ENGINE_SKINNED
+    uint4 joints : BLENDINDICES0;
+    float4 weights : BLENDWEIGHT0;
+#endif
 };
 
 struct ShadowVertexOutput {

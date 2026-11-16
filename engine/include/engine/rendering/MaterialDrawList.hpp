@@ -18,16 +18,19 @@ struct MaterialDraw {
 // A separate ordering is built for each pass; the submitted world stays untouched.
 inline std::vector<MaterialDraw> BuildMaterialDrawList(const RenderWorld& world,
     const RenderingResourceManager& manager, bool shadow, ShaderHandle defaultVS,
-    ShaderHandle defaultPS = {}) {
+    ShaderHandle defaultPS = {}, ShaderHandle defaultSkinnedVS = {}) {
     std::vector<MaterialDraw> draws;
     draws.reserve(world.renderItems.size() + world.sceneItems.size());
     const auto append = [&](const RenderItem& item) {
         const auto* instance = manager.TryGetMaterialInstance(item.materialInstance);
         const auto* material = instance ? manager.TryGetMaterial(instance->material) : nullptr;
         if (!material) return;
-        const auto vs = shadow ? material->shaders.shadowPassVS : material->shaders.gBufferPassVS;
+        const auto vs = item.skinning
+            ? (shadow ? material->shaders.skinnedShadowPassVS : material->shaders.skinnedGBufferPassVS)
+            : (shadow ? material->shaders.shadowPassVS : material->shaders.gBufferPassVS);
         const auto ps = shadow ? ShaderHandle{} : material->shaders.gBufferPassPS;
-        draws.push_back({&item, instance, material, vs ? vs : defaultVS, ps ? ps : defaultPS});
+        const auto fallbackVS = item.skinning ? defaultSkinnedVS : defaultVS;
+        draws.push_back({&item, instance, material, vs ? vs : fallbackVS, ps ? ps : defaultPS});
     };
     for (const auto& item : world.renderItems) append(item);
     for (const auto& item : world.sceneItems) append(item);

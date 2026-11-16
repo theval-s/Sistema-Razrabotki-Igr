@@ -1,4 +1,5 @@
 #include <engine/physics/PhysicsSubsystem.hpp>
+#include <engine/animation/AnimationSubsystem.hpp>
 #include <engine/audio/AudioSubsystem.hpp>
 #include <algorithm>
 #include <cmath>
@@ -182,6 +183,7 @@ public:
         bindings.BindAction("Save", Binding::Keyboard(PhysicalKey::F5));
         bindings.BindAction("Load", Binding::Keyboard(PhysicalKey::F9));
         bindings.BindAction("Raycast", Binding::Keyboard(PhysicalKey::R));
+        bindings.BindAction("Animation", Binding::Keyboard(PhysicalKey::C));
         controls_ = input_->Activate("Gameplay");
         auto& world = rendering_->GetWorld();
 
@@ -240,6 +242,18 @@ public:
         }
         const float time = static_cast<float>(frame.simulationTimeSeconds);
         auto& scene = GetEngine().GetScene();
+        if (controls_.Pressed("Animation")) {
+            const auto bot = scene.FindFirstByName("TestBot Idle");
+            if (bot != entt::null) {
+                const engine::AssetReference clip = walking_
+                    ? engine::AssetReference{"b52e7e3e-920c-48b7-b782-8f403e061004", "game/models/TestBot/idle.animation.json"}
+                    : engine::AssetReference{"b52e7e3e-920c-48b7-b782-8f403e061005", "game/models/TestBot/walk.animation.json"};
+                std::string error;
+                if (GetEngine().GetSubsystem<engine::AnimationSubsystem>()->Play(bot, clip, 0.35f, true, error))
+                    walking_ = !walking_;
+                else engine::log::Game().warn("Animation: {}", error);
+            }
+        }
         if (const auto cube = scene.FindById(CubeId); cube != entt::null) {
             auto& transform = scene.GetTransform(cube);
             transform.rotation = DirectX::SimpleMath::Quaternion::CreateFromYawPitchRoll(time * 0.35f, 0, 0);
@@ -252,10 +266,12 @@ private:
     engine::RenderingSubsystem* rendering_ = nullptr;
     engine::InputSubsystem* input_ = nullptr;
     engine::InputSubsystem::Context controls_;
+    bool walking_ = false;
 };
 
 
-int main(int /*argumentCount*/, char** /*arguments*/) {
+int main(int argumentCount, char** arguments) {
+    const bool animationDemo = argumentCount > 1 && std::string_view(arguments[1]) == "--animation";
     static engine::Engine* enginePtr;
 
     engine::WindowResizedCallback* windowCallback = [](int newWidth, int newHeight){
@@ -285,6 +301,7 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
     engine.AddSubsystem<engine::ScriptSubsystem>();
     engine.AddSubsystem<ExampleGameLogic>(window);
     engine.AddSubsystem<engine::PhysicsSubsystem>();
+    engine.AddSubsystem<engine::AnimationSubsystem>();
     engine.AddSubsystem<engine::RenderExtractionSubsystem>();
     if (!engine.GetScene().RegisterController("example/sign", MotionRegistration(false)) ||
         !engine.GetScene().RegisterController("example/hammer", MotionRegistration(true)) ||
@@ -292,8 +309,10 @@ int main(int /*argumentCount*/, char** /*arguments*/) {
     enginePtr = &engine;
     if (!engine.Initialize()) return 1;
     std::string error;
-    if (!engine.LoadScene(engine::AssetReference{"2a9a7998-f44d-44d8-8fc3-57e78da18796",
-                                                 "game/scenes/demo.scene.json"}, error)) {
+    const engine::AssetReference startup = animationDemo
+        ? engine::AssetReference{"b52e7e3e-920c-48b7-b782-8f403e061006", "game/scenes/animation.scene.json"}
+        : engine::AssetReference{"2a9a7998-f44d-44d8-8fc3-57e78da18796", "game/scenes/demo.scene.json"};
+    if (!engine.LoadScene(startup, error)) {
         engine::log::Game().error("Cannot load scene: {}", error);
         return 1;
     }

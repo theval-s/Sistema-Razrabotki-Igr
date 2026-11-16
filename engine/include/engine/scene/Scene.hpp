@@ -27,6 +27,7 @@
 #include <engine/scene/Controller.hpp>
 #include <engine/scene/SceneQueries.hpp>
 #include <engine/rendering/RenderComponents.hpp>
+#include <engine/animation/AnimationComponents.hpp>
 
 namespace engine {
 struct Camera;
@@ -278,6 +279,7 @@ private:
                                                  std::is_same_v<T, Tags> || std::is_same_v<T, EditorFolder>;
     template <class T>
     static constexpr bool IsSerializableComponent = std::is_same_v<T, MeshRenderer> ||
+        std::is_same_v<T, SkinnedMeshRenderer> || std::is_same_v<T, Animator> ||
         std::is_same_v<T, Camera> || std::is_same_v<T, DirectionalLight> ||
         std::is_same_v<T, PointLight> || std::is_same_v<T, SpotLight> || std::is_same_v<T, Bounds> ||
         std::is_same_v<T, GamePersistence> || std::is_same_v<T, RigidBody> || std::is_same_v<T, Collider> ||

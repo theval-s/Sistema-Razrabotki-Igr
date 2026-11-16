@@ -17,6 +17,9 @@ enum class AssetKind : uint8_t {
     Shader,
     Material,
     MaterialInstance,
+    Skeleton,
+    AnimationClip,
+    SkinnedMesh,
     Count
 };
 

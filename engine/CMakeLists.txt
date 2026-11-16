@@ -81,6 +81,7 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/rendering/resources/Material.hpp
     include/engine/rendering/resources/RenderedMesh.hpp
     include/engine/rendering/resources/ShaderContext.hpp
+    include/engine/rendering/resources/Skinning.hpp
     include/engine/rendering/resources/Texture.hpp
     include/engine/rendering/resources/VertexLayout.hpp
     include/engine/rendering/resources/VertexLayoutCache.hpp
@@ -94,6 +95,7 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/ai/BehaviorTreeComponent.hpp
     include/engine/scripting/ScriptSubsystem.hpp
     include/engine/scripting/LuaBindings.hpp
+    include/engine/scripting/LuaAnimationBindings.hpp
     include/engine/scripting/LuaBindingsContext.hpp
     include/engine/scripting/LuaEntityHandle.hpp
     include/engine/scripting/LuaSceneBindings.hpp
@@ -145,6 +147,7 @@ set(ENGINE_SOURCES
     src/scripting/ScriptSubsystem.cpp
     src/scripting/LuaBindings.cpp
     src/scripting/LuaAudioBindings.cpp
+    src/scripting/LuaAnimationBindings.cpp
     src/scripting/LuaEntityHandle.cpp
     src/scripting/LuaSceneBindings.cpp
     src/scripting/LuaComponentBindings.cpp
@@ -166,6 +169,8 @@ set(ENGINE_SHADERS
     shaders/MaterialTemplate.hlsl
     shaders/ShadowCSMPass.hlsl
     shaders/ShadowVS.hlsl
+    shaders/ShaderTypes.hlsl
+    shaders/Skinning.hlsl
 )
 
 # Keep shaders visible in IDE projects without invoking Visual Studio's HLSL compiler.
@@ -352,6 +357,8 @@ file(READ "${MATERIAL_SCHEMA_FILE}" MATERIAL_SCHEMA_JSON)
 configure_file(cmake/MaterialSchema.hpp.in generated/MaterialSchema.hpp @ONLY)
 
 set(ENGINE_CORE_HEADERS
+    include/engine/animation/AnimationComponents.hpp
+    include/engine/animation/AnimationSubsystem.hpp
     include/engine/navigation/NavigationMesh.hpp
     include/engine/input/CursorPolicy.hpp
     include/engine/input/InputSubsystem.hpp
@@ -394,6 +401,7 @@ set(ENGINE_CORE_HEADERS
 )
 
 set(ENGINE_CORE_SOURCES
+    src/animation/AnimationSubsystem.cpp
     src/navigation/NavigationMesh.cpp
     src/rendering/RenderingSubsystem.cpp
     src/input/InputSubsystem.cpp
@@ -404,6 +412,7 @@ set(ENGINE_CORE_SOURCES
     src/assets/AssetCatalog.cpp
     src/assets/AssetSystem.cpp
     src/assets/AssimpMeshImporter.cpp
+    src/assets/SkeletalAssetImporter.cpp
     src/assets/ShaderImporter.cpp
     src/assets/TextureImporter.cpp
     src/assets/MaterialDefinition.cpp
@@ -434,7 +443,7 @@ foreach(engine_target IN ITEMS engine engine_static)
         target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
         # Assimp is PRIVATE on purpose: AssimpMeshImporter.cpp is its only user and no
         # public header mentions it. Static consumers still get it via the link-only interface.
-        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid Lua::Lua sol2::sol2 Jolt::Jolt RecastNavigation::Recast RecastNavigation::Detour RecastNavigation::DetourCrowd)
+        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid Lua::Lua sol2::sol2 Jolt::Jolt RecastNavigation::Recast RecastNavigation::Detour RecastNavigation::DetourCrowd ozz_animation ozz_animation_offline)
     endif()
 endforeach()
 

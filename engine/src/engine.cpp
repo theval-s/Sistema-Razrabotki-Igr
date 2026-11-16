@@ -672,7 +672,10 @@ void Engine::CommitScene(const SceneDocument& document) {
         scripting->ClearSceneScripts();
         scripting->GetRuntime().ClearEntityInstances();
     }
-    if (auto* rendering = GetSubsystem<RenderingSubsystem>()) rendering->GetWorld().sceneItems.clear();
+    if (auto* rendering = GetSubsystem<RenderingSubsystem>()) {
+        rendering->GetWorld().sceneItems.clear();
+        rendering->GetWorld().selectedSceneItems.clear();
+    }
     impl_->scene.SetControllerInstantiationEnabled(false);
     impl_->scene.Clear();
     impl_->sceneAssets->UnloadAll();

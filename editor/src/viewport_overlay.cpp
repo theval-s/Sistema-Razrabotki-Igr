@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <utility>
 
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/animation/AnimationSubsystem.hpp>
 #include <engine/engine.hpp>
 #include <engine/physics/PhysicsSubsystem.hpp>
 #include <engine/rendering/DebugDraw.hpp>
@@ -111,6 +113,20 @@ void ViewportOverlaySubsystem::LateUpdate(const engine::FrameContext&) {
                 const auto override = GetEngine().GetEntityMaterialOverride(entity);
                 world.selectedSceneItems.push_back({scene.GetWorldMatrix(entity), mesh->mesh,
                                                     override ? override : material->instance});
+            }
+        }
+        if (const auto* renderer = scene.TryGetComponent<engine::SkinnedMeshRenderer>(entity)) {
+            const auto mesh = assets.Peek(renderer->mesh);
+            const auto material = assets.Peek(renderer->materialInstance);
+            if (!mesh || !material) continue;
+            const auto* animation = GetEngine().GetSubsystem<engine::AnimationSubsystem>();
+            const auto pose = animation ? animation->GetPose(entity) : nullptr;
+            const auto override = GetEngine().GetEntityMaterialOverride(entity);
+            for (const auto& section : mesh->sections) {
+                if (!section.binding) continue;
+                auto palette = engine::BuildSkinningPalette(*section.binding, mesh->skeletonSignature, pose.get());
+                if (palette) world.selectedSceneItems.push_back({scene.GetWorldMatrix(entity), section.mesh,
+                    override ? override : material->instance, std::move(palette)});
             }
         }
     }
