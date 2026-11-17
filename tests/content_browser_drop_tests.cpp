@@ -1,12 +1,15 @@
 #include "content_browser.hpp"
 #include "asset_filter_model.hpp"
+#include "asset_operations.hpp"
 
 #include <editor/editor_context.hpp>
 #include <editor/paths.hpp>
 #include <editor/viewport_tool_bar.hpp>
+#include <engine/ai/BehaviorTreeSource.hpp>
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/core/FileSystem.hpp>
+#include <engine/core/Uuid.hpp>
 #include <engine/engine.hpp>
 #include <engine/project/Project.hpp>
 
@@ -144,6 +147,32 @@ TEST_F(ContentBrowserDrop, ExplorerAudioCopiesIntoCurrentFolder) { dropAudio(fal
 TEST_F(ContentBrowserDrop, ExplorerAudioCopiesInListMode) { dropAudio(false, false, true); }
 TEST_F(ContentBrowserDrop, ExplorerDragOfProjectFileStillCopies) { dropAudio(true); }
 TEST_F(ContentBrowserDrop, EngineFolderRejectsExternalAudio) { dropAudio(false, true); }
+
+TEST_F(ContentBrowserDrop, NewBehaviorTreeComesWithAnActionToRun) {
+    const std::filesystem::path ai = project.ContentDir() / "ai";
+    std::filesystem::create_directories(ai);
+    std::string error;
+    ASSERT_TRUE(engine::CreateNewFile(ai / "Guard.action.lua", "return {}", error)) << error;
+    ASSERT_TRUE(engine::WriteAssetMetadata(ai / "Guard.action.lua", {engine::NewUuid(), engine::CatalogAssetKind::Script},
+                                           error)) << error;
+    content::AssetOperations operations(context, &window);
+    ASSERT_TRUE(operations.createBehaviorTree(editor::toQString(ai / "Guard.bt.lua")));
+
+    // Guard.action.lua was taken, so the starter is the next name.
+    std::string text;
+    ASSERT_TRUE(engine::ReadTextFile(ai / "Guard.bt.lua", text, error)) << error;
+    engine::ai::TreeSource tree;
+    ASSERT_TRUE(engine::ai::ReadTreeSource(text, tree, error)) << error;
+    ASSERT_EQ(tree.nodes.size(), 1u);
+    EXPECT_EQ(tree.nodes[0].script, "game/ai/guard2.action.lua");  // logical names are lowercase
+    EXPECT_EQ(engine::ai::WriteTreeSource(tree), text) << "the graph editor saves it without a warning";
+
+    const std::filesystem::path engine_root = editor::toPath(directory.filePath("engine"));
+    std::filesystem::create_directories(engine_root);
+    engine::AssetCatalog catalog;
+    ASSERT_TRUE(catalog.Scan(project.ContentDir(), engine_root, error)) << error;
+    EXPECT_TRUE(engine::ai::ValidateTreeSource(tree, catalog, error)) << error;
+}
 
 }  // namespace
 

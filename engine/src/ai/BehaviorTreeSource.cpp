@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
+#include <unordered_map>
 
 #include <sol/sol.hpp>
 
@@ -224,6 +225,42 @@ std::string WriteTreeSource(const TreeSource& tree) {
     }
     text += "    },\n}\n";
     return text;
+}
+
+bool ValidateTreeSource(const TreeSource& tree, const AssetCatalog& catalog, std::string& error) {
+    try {
+        std::unordered_map<std::string, std::size_t> ids;
+        for (std::size_t i = 0; i < tree.nodes.size(); ++i) ids.emplace(tree.nodes[i].id, i);
+        const auto index = [&](const std::string& id, const std::string& what) {
+            const auto found = ids.find(id);
+            if (found == ids.end()) Fail(what + ": no node '" + id + "'");
+            return found->second;
+        };
+        const auto root = index(tree.root, "root");
+        std::vector<Node> nodes;
+        nodes.reserve(tree.nodes.size());
+        for (const auto& source : tree.nodes) {
+            const auto what = "node '" + source.id + "'";
+            Node node{source.id, source.kind, {}, {}, source.parameters};
+            if (source.kind == NodeKind::Condition || source.kind == NodeKind::Action) {
+                if (source.script.empty()) Fail(what + ": no script");
+                // As the runtime resolves it: a UUID, else a path.
+                const auto* script = catalog.Find(std::string_view(source.script), CatalogAssetKind::Script);
+                if (script == nullptr) script = catalog.FindPath(source.script);
+                if (script == nullptr || script->metadata.kind != CatalogAssetKind::Script)
+                    Fail(what + ": no script asset '" + source.script + "'");
+                node.script = {script->metadata.id, script->path};
+            }
+            for (const auto& child : source.children) node.children.push_back(index(child, what));
+            nodes.push_back(std::move(node));
+        }
+        if (!TreeDefinition::Create(std::move(nodes), root, error)) return false;
+    } catch (const std::exception& exception) {
+        error = exception.what();
+        return false;
+    }
+    error.clear();
+    return true;
 }
 
 }

@@ -73,7 +73,12 @@ public:
     /// Places the trees top-down, sized by `geometry`: the root's first, then any unreachable ones.
     void arrange(QtNodes::AbstractNodeGeometry& geometry);
     [[nodiscard]] const Node* node(NodeId id) const;
+    /// The node called `name`, or InvalidNodeId.
+    [[nodiscard]] NodeId find(const std::string& name) const;
     [[nodiscard]] NodeId root() const { return root_; }
+    /// While the game runs, the node an agent runs: drawn with a selected node's border, or red where it faulted.
+    void setActive(NodeId id, bool faulted);
+    [[nodiscard]] NodeId active() const { return active_; }
 
     // Edits for the panel, which records them for undo.
     /// A new node with an unused ID, unconnected; the first in an empty graph becomes the root.
@@ -137,6 +142,8 @@ private:
     NodeId next_ = 0;
     QStringList problems_;
     bool editable_ = false;
+    NodeId active_ = QtNodes::InvalidNodeId;
+    bool faulted_ = false;
 };
 
 }  // namespace behavior

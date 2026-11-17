@@ -112,10 +112,14 @@ public:
     void setAssetEditor(engine::CatalogAssetKind kind, AssetEditor open);
     /// Opens `source` in the editor set for its kind. False when there is none.
     bool openAsset(const std::filesystem::path& source);
-    /// Offers to save what `id` has open, before the editor closes or a build reads files from disk.
-    /// False if the user cancelled. An empty function removes it; a module removes its own in shutdown().
+    /// Offers to save what `id` has open, before the editor closes, Play starts or a build reads
+    /// files from disk. False if the user cancelled. An empty function removes it; a module removes
+    /// its own in shutdown().
     using UnsavedCheck = std::function<bool(QWidget* parent)>;
     void setUnsavedCheck(const QString& id, UnsavedCheck check);
+    /// Offers to save everything with an unsaved check, but not the scene, which Play runs as it is.
+    /// False if the user cancelled.
+    bool maybeSaveFiles(QWidget* parent);
     /// Offers to save the scene, then everything with an unsaved check. False if the user cancelled.
     bool maybeSaveAll(QWidget* parent);
 

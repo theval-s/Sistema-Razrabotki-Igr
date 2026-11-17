@@ -47,10 +47,12 @@ const engine::CatalogEntry* findScript(const engine::AssetCatalog& catalog, cons
     return entry != nullptr && entry->metadata.kind == engine::CatalogAssetKind::Script ? entry : nullptr;
 }
 
+enum class Highlight { None, Running, Faulted };
+
 /// The default node style tinted by kind, so the four kinds tell apart at a glance.
-const QVariant& styleOf(const NodeKind kind) {
-    static const std::array<QVariant, 4> styles = [] {
-        std::array<QVariant, 4> result;
+const QVariant& styleOf(const NodeKind kind, const Highlight highlight = Highlight::None) {
+    static const std::array<std::array<QVariant, 3>, 4> styles = [] {
+        std::array<std::array<QVariant, 3>, 4> result;
         for (const NodeKind each : NodeKinds) {
             QColor color;
             switch (each) {
@@ -64,11 +66,17 @@ const QVariant& styleOf(const NodeKind kind) {
             style.GradientColor1 = color;
             style.GradientColor2 = color.darker(110);
             style.GradientColor3 = color.darker(120);
-            result[static_cast<std::size_t>(each)] = style.toJson().toVariantMap();
+            auto& kind = result[static_cast<std::size_t>(each)];
+            kind[static_cast<std::size_t>(Highlight::None)] = style.toJson().toVariantMap();
+            style.PenWidth = style.HoveredPenWidth = 3.0f;
+            style.NormalBoundaryColor = style.SelectedBoundaryColor;
+            kind[static_cast<std::size_t>(Highlight::Running)] = style.toJson().toVariantMap();
+            style.NormalBoundaryColor = style.SelectedBoundaryColor = style.ErrorColor;
+            kind[static_cast<std::size_t>(Highlight::Faulted)] = style.toJson().toVariantMap();
         }
         return result;
     }();
-    return styles[static_cast<std::size_t>(kind)];
+    return styles[static_cast<std::size_t>(kind)][static_cast<std::size_t>(highlight)];
 }
 
 QJsonObject parametersToJson(const engine::ScriptPropertyMap& parameters) {
@@ -107,6 +115,7 @@ void TreeGraph::load(const engine::ai::TreeSource& tree, const engine::AssetCata
     catalog_ = &catalog;
     nodes_.clear();
     root_ = InvalidNodeId;
+    active_ = InvalidNodeId;
     rootName_ = tree.root;
     next_ = 0;
 
@@ -298,6 +307,25 @@ void TreeGraph::arrange(QtNodes::AbstractNodeGeometry& geometry) {
 const TreeGraph::Node* TreeGraph::node(const NodeId id) const {
     const auto found = nodes_.find(id);
     return found != nodes_.end() ? &found->second : nullptr;
+}
+
+TreeGraph::NodeId TreeGraph::find(const std::string& name) const {
+    const auto found =
+        std::ranges::find(nodes_, name, [](const auto& entry) -> const std::string& { return entry.second.source.id; });
+    return found != nodes_.end() ? found->first : InvalidNodeId;
+}
+
+void TreeGraph::setActive(const NodeId id, const bool faulted) {
+    if (id == active_ && faulted == faulted_) {
+        return;
+    }
+    const NodeId was = std::exchange(active_, id);
+    faulted_ = faulted;
+    for (const NodeId repaint : {was, id}) {
+        if (nodes_.contains(repaint)) {
+            Q_EMIT nodeUpdated(repaint);
+        }
+    }
 }
 
 TreeGraph::NodeId TreeGraph::create(const NodeKind kind, const QPointF position) {
@@ -558,7 +586,7 @@ QVariant TreeGraph::nodeData(const NodeId id, const NodeRole role) const {
     case NodeRole::Caption:
         return QStringLiteral("%1 %2 %3").arg(kindName(kind), QChar(0x00B7), toQString(found->source.id));
     case NodeRole::Style:
-        return styleOf(kind);
+        return styleOf(kind, id != active_ ? Highlight::None : faulted_ ? Highlight::Faulted : Highlight::Running);
     case NodeRole::InPortCount:
         return id == root_ ? 0u : 1u;
     case NodeRole::OutPortCount:

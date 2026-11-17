@@ -104,10 +104,32 @@ a missing node, appear as problems and are dropped on save. A tree with problems
 can be saved, but it won't load until you fix them.
 
 The panel's title shows `*` while there are unsaved changes. The editor offers to
-save them before it closes, before a build, and before you open another tree.
-Play runs the saved file. When the file changes on disk, the panel reloads it,
-and asks first if you have unsaved changes. A file that isn't a valid tree can't
-be edited in the graph. Fix it with **Open Lua Source**.
+save them before it closes, before Play, before a build, and before you open
+another tree. Play and the built game run the saved file. When the file changes on
+disk, the panel reloads it, and asks first if you have unsaved changes. A file that
+isn't a valid tree can't be edited in the graph. Fix it with **Open Lua Source**.
+
+Building the game checks every tree. The build fails on one that wouldn't load,
+such as a leaf whose script is missing or a node the root never reaches.
+
+## Watch a tree during Play
+
+While Play runs, the **Behavior Tree** panel follows one entity that runs the open
+tree. The node it runs now gets the border of a selected node. A tree whose actions
+finish within a frame has no running node between frames. The panel then marks the
+leaf that the latest update ran last.
+
+The **Play** box above the node's details shows:
+
+- **Entity**: the entity the panel follows. Select an entity that runs the tree to
+  follow it, or pick one from the list.
+- **Status**: the tree's latest result and the node, such as `Running at chase`.
+  When a script error stops the tree, the status shows the error in red, and the
+  node that raised it gets a red border.
+- **Blackboard**: the entity's `ctx.blackboard`, updated a few times a second.
+
+The running tree is the file as it was saved when Play started. Edits you save
+during Play take effect the next time you press Play.
 
 ## Attach and control agents
 
@@ -115,9 +137,9 @@ In the editor, select an entity and choose **Add Component → Behavior Tree**.
 Select the `.bt.lua` asset in **Tree**. Use **Enabled** to start or stop the
 tree and **Apply Parameters** to apply the entity's JSON overrides. For the
 pulse demo, enter `{"pulseEnabled": true, "seconds": 1}`. Save the scene to
-keep the attachment and its settings. To create a Lua definition with metadata,
-use **New → Behavior Tree** in the content browser. Before Play, open the new
-tree and choose the starter action's script.
+keep the attachment and its settings. **New → Behavior Tree** in the content
+browser creates a tree and a starter action beside it, `<name>.action.lua`, for
+the tree to run. Replace the action's `Tick` with your own.
 
 From a gameplay script, attach the same tree to two scene entities.
 

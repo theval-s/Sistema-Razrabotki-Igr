@@ -1,8 +1,12 @@
 #include <gtest/gtest.h>
 
 #include <engine/ai/BehaviorTreeSource.hpp>
+#include <engine/assets/AssetCatalog.hpp>
+#include <engine/core/Uuid.hpp>
 
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 
 namespace {
@@ -105,6 +109,60 @@ TEST(BehaviorTreeSource, RunsWithoutLibrariesAndWithinLimits) {
     EXPECT_NE(readError("while true do end").find("too long"), std::string::npos);
     EXPECT_NE(readError(R"(local s = "x" for i = 1, 40 do s = s .. s end)").find("memory"), std::string::npos);
     EXPECT_NE(readError("\x1bLua").find("binary"), std::string::npos);
+}
+
+/// A game root holding the pulse demo's three leaf scripts, cataloged.
+struct Scripts {
+    std::filesystem::path root = std::filesystem::temp_directory_path() / ("sri-bt-source-" + engine::NewUuid());
+    engine::AssetCatalog catalog;
+
+    Scripts() {
+        std::filesystem::create_directories(root / "game" / "ai");
+        std::filesystem::create_directories(root / "engine");
+        std::string error;
+        for (const char* name : {"enabled.condition.lua", "pulse.action.lua", "idle.action.lua"}) {
+            const auto file = root / "game" / "ai" / name;
+            std::ofstream(file) << "return {}";
+            EXPECT_TRUE(engine::WriteAssetMetadata(file, {engine::NewUuid(), engine::CatalogAssetKind::Script}, error))
+                << error;
+        }
+        EXPECT_TRUE(catalog.Scan(root / "game", root / "engine", error)) << error;
+    }
+    ~Scripts() {
+        std::error_code ignored;
+        std::filesystem::remove_all(root, ignored);
+    }
+};
+
+TEST(BehaviorTreeSource, ValidatesWhatTheRuntimeWouldLoad) {
+    Scripts scripts;
+    std::string error;
+    EXPECT_TRUE(engine::ai::ValidateTreeSource(pulse(), scripts.catalog, error)) << error;
+    const auto rejects = [&](const TreeSource& tree, const std::string_view expected) {
+        EXPECT_FALSE(engine::ai::ValidateTreeSource(tree, scripts.catalog, error)) << expected;
+        EXPECT_NE(error.find(expected), std::string::npos) << error;
+    };
+
+    TreeSource tree = pulse();
+    tree.nodes[3].script = "game/ai/missing.action.lua";
+    rejects(tree, "node 'wait': no script asset 'game/ai/missing.action.lua'");
+    tree = pulse();
+    tree.nodes[4].script.clear();
+    rejects(tree, "node 'idle': no script");
+    tree = pulse();
+    tree.nodes[0].children.push_back("ghost");
+    rejects(tree, "node 'main': no node 'ghost'");
+    tree = pulse();
+    tree.root = "nobody";
+    rejects(tree, "root: no node 'nobody'");
+    tree = pulse();
+    tree.nodes[0].children = {"pulse"};
+    rejects(tree, "unreachable");
+
+    // The runtime also takes a script by UUID.
+    tree = pulse();
+    tree.nodes[4].script = scripts.catalog.FindPath("game/ai/idle.action.lua")->metadata.id.ToString();
+    EXPECT_TRUE(engine::ai::ValidateTreeSource(tree, scripts.catalog, error)) << error;
 }
 
 }  // namespace

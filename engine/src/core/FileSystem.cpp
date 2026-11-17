@@ -1,8 +1,10 @@
 #include <engine/core/FileSystem.hpp>
 
+#include <chrono>
 #include <fstream>
 #include <random>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 #include <engine/core/PathUtils.hpp>
@@ -55,7 +57,12 @@ bool WriteFileAtomic(const std::filesystem::path& file, const std::string_view d
     temporary += ".tmp." + std::to_string(random());
     if (!CreateNewFile(temporary, data, error)) return false;
     std::error_code ec;
-    std::filesystem::rename(temporary, file, ec);  // replaces an existing file
+    // A virus scanner may hold a file it just saw change, which blocks replacing it for a moment.
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        std::filesystem::rename(temporary, file, ec);  // replaces an existing file
+        if (ec != std::errc::permission_denied) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
     if (ec) {
         error = "cannot replace " + ToUtf8(file) + ": " + ec.message();
         std::filesystem::remove(temporary, ec);

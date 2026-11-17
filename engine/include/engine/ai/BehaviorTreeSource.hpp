@@ -35,5 +35,8 @@ struct TreeSource {
 [[nodiscard]] ENGINE_API bool ReadTreeSource(std::string_view source, TreeSource& tree, std::string& error);
 /// The .bt.lua text the editor saves; ReadTreeSource gives `tree` back.
 [[nodiscard]] ENGINE_API std::string WriteTreeSource(const TreeSource& tree);
+/// Whether the runtime would load `tree`: every leaf names a script asset in `catalog`, by UUID
+/// or path, and the nodes form one tree. False with `error` naming the first problem.
+[[nodiscard]] ENGINE_API bool ValidateTreeSource(const TreeSource& tree, const AssetCatalog& catalog, std::string& error);
 
 }

@@ -2,22 +2,27 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QComboBox>
 #include <QCursor>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QDeadlineTimer>
+#include <QGroupBox>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QPointer>
 #include <QPushButton>
+#include <QTableWidget>
 #include <QTimer>
 #include <QUndoStack>
 
 #include <QtNodes/BasicGraphicsScene>
 #include <QtNodes/GraphicsView>
+#include <QtNodes/NodeStyle>
 #include <QtNodes/internal/ConnectionGraphicsObject.hpp>
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
 #include <QtNodes/internal/UndoCommands.hpp>
@@ -515,6 +520,65 @@ TEST(BehaviorTreePanel, PastesWhereTheMenuOpened) {
     EXPECT_NEAR(graph.node(*copy)->position.y(), at.y(), 0.01);
 }
 
+TEST(BehaviorTreePanel, FollowsAnAgentWhileTheGameRuns) {
+    Scripts scripts;
+    const auto file = scripts.root / "game" / "ai" / "pulse.bt.lua";
+    std::string error;
+    ASSERT_TRUE(engine::WriteFileAtomic(file, engine::ai::WriteTreeSource(pulse()), error)) << error;
+    ASSERT_TRUE(engine::WriteAssetMetadata(file, {engine::NewUuid(), engine::CatalogAssetKind::BehaviorTree}, error))
+        << error;
+    engine::AssetMetadata metadata;
+    ASSERT_TRUE(engine::ReadAssetMetadata(file, metadata, error)) << error;
+    behavior::TreePanel panel(scripts.catalog);
+    panel.open(file);
+    TreeGraph& graph = graphOf(panel);
+
+    using State = engine::LuaRuntime::BehaviorAgentState;
+    using Agent = behavior::TreePanel::Agent;
+    const auto pulser = static_cast<entt::entity>(7);
+    const auto other = static_cast<entt::entity>(9);
+    std::map<entt::entity, State> states;
+    states[other] = {metadata.id, "Running", "wait", "", {{"pulses", "3"}}};
+    panel.setGame({[&](const engine::AssetUuid& tree) {
+                       return tree == metadata.id ? std::vector<Agent>{{pulser, QStringLiteral("Pulser"), false},
+                                                                       {other, QStringLiteral("Other"), true}}
+                                                  : std::vector<Agent>();
+                   },
+                   [&](const entt::entity entity) {
+                       const auto found = states.find(entity);
+                       return found != states.end() ? std::optional(found->second) : std::nullopt;
+                   }});
+
+    // It watches the entity selected in the editor, and draws its node as if selected.
+    EXPECT_EQ(graph.active(), Wait);
+    const QtNodes::NodeStyle style(QJsonDocument::fromVariant(graph.nodeData(Wait, NodeRole::Style)).object());
+    EXPECT_EQ(style.NormalBoundaryColor, style.SelectedBoundaryColor);
+    EXPECT_TRUE(showsLabel(panel, QStringLiteral("Running at wait")));
+    auto* blackboard = panel.findChild<QTableWidget*>();
+    ASSERT_EQ(blackboard->rowCount(), 1);
+    EXPECT_EQ(blackboard->item(0, 0)->text(), QStringLiteral("pulses"));
+    EXPECT_EQ(blackboard->item(0, 1)->text(), QStringLiteral("3"));
+
+    states[other] = {metadata.id, "Faulted", "enabled", "enabled.condition.lua:2: boom", {}};
+    EXPECT_TRUE(waitFor([&] { return graph.active() == Enabled; }));
+    EXPECT_TRUE(showsLabel(panel, QStringLiteral("Faulted at enabled: enabled.condition.lua:2: boom")));
+    EXPECT_EQ(blackboard->rowCount(), 0);
+
+    // Picked by hand, it stays on the other entity.
+    auto* agents = panel.findChild<QComboBox*>();
+    ASSERT_EQ(agents->currentText(), QStringLiteral("Other"));
+    agents->setCurrentIndex(0);
+    Q_EMIT agents->activated(0);
+    EXPECT_EQ(graph.active(), QtNodes::InvalidNodeId);
+    EXPECT_TRUE(showsLabel(panel, QStringLiteral("Waiting for its first update.")));
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 150);
+    EXPECT_EQ(agents->currentText(), QStringLiteral("Pulser"));
+
+    panel.setGame({});
+    EXPECT_EQ(graph.active(), QtNodes::InvalidNodeId);
+    EXPECT_TRUE(panel.findChild<QGroupBox*>()->isHidden());
+}
+
 TEST(BehaviorTreePanel, LeavesAFileItCantReadAlone) {
     Scripts scripts;
     const auto file = scripts.root / "game" / "ai" / "broken.bt.lua";
@@ -533,5 +597,17 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     testing::InitGoogleTest(&argc, argv);
+    // A message box that nothing answers would hang the run: fail the test instead.
+    QTimer watchdog;
+    QPointer<QMessageBox> waiting;
+    QObject::connect(&watchdog, &QTimer::timeout, [&waiting] {
+        auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+        if (box != nullptr && box == waiting) {
+            ADD_FAILURE() << "Nothing answered: " << box->text().toStdString();
+            box->reject();
+        }
+        waiting = box;
+    });
+    watchdog.start(2000);
     return RUN_ALL_TESTS();
 }

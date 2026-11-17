@@ -71,6 +71,8 @@ public:
     bool updateMaterialInstance(const QString& path, const engine::MaterialInstanceDefinition& definition);
     /// Write a new .lua script from the default template at `path`, with its meta. False on failure.
     bool createScript(const QString& path, bool followNavigation = false);
+    /// Writes a new tree at `path` and a starter action beside it for the tree to run, with their metas.
+    /// False on failure.
     bool createBehaviorTree(const QString& path);
     /// Adds metas and rescans
     void adoptNewFiles();

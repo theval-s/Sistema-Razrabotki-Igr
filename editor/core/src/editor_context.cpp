@@ -211,11 +211,12 @@ void EditorContext::setUnsavedCheck(const QString& id, UnsavedCheck check) {
     }
 }
 
-bool EditorContext::maybeSaveAll(QWidget* parent) {
-    if (!sceneDocument().maybeSave(parent)) {
-        return false;
-    }
+bool EditorContext::maybeSaveFiles(QWidget* parent) {
     return std::ranges::all_of(unsaved_checks_, [parent](const auto& entry) { return entry.second(parent); });
+}
+
+bool EditorContext::maybeSaveAll(QWidget* parent) {
+    return sceneDocument().maybeSave(parent) && maybeSaveFiles(parent);
 }
 
 void EditorContext::placeNewPanels() {

@@ -1,6 +1,8 @@
 #include "LuaBehaviorTree.hpp"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <stdexcept>
 #include <utility>
 
@@ -85,6 +87,49 @@ const char* Name(ExitReason reason) {
     return "Faulted";
 }
 
+std::string Number(const double value) {
+    std::array<char, 32> buffer{};
+    const auto written = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+    return {buffer.data(), written.ptr};
+}
+
+/// A blackboard value as the editor shows it.
+std::string Text(const sol::object& value) {
+    using DirectX::SimpleMath::Vector2;
+    using DirectX::SimpleMath::Vector3;
+    switch (value.get_type()) {
+    case sol::type::boolean: return value.as<bool>() ? "true" : "false";
+    case sol::type::number: return Number(value.as<double>());
+    case sol::type::string: return '"' + value.as<std::string>() + '"';
+    case sol::type::function: return "function";
+    case sol::type::table: {
+        std::size_t entries = 0;
+        for (const auto& entry : value.as<sol::table>()) {
+            (void)entry;
+            ++entries;
+        }
+        return "table, " + std::to_string(entries) + (entries == 1 ? " entry" : " entries");
+    }
+    case sol::type::userdata:
+        if (value.is<Vector3>()) {
+            const auto v = value.as<Vector3>();
+            return "(" + Number(v.x) + ", " + Number(v.y) + ", " + Number(v.z) + ")";
+        }
+        if (value.is<Vector2>()) {
+            const auto v = value.as<Vector2>();
+            return "(" + Number(v.x) + ", " + Number(v.y) + ")";
+        }
+        if (value.is<LuaEntityHandle>()) {
+            const auto& entity = value.as<const LuaEntityHandle&>();
+            return entity.IsValid() ? "Entity '" + entity.GetScene()->GetName(entity.Resolve()) + "'" : "Entity, destroyed";
+        }
+        return "userdata";
+    case sol::type::thread: return "thread";
+    case sol::type::lightuserdata: return "userdata";
+    default: return "nil";
+    }
+}
+
 NodeKind Kind(const std::string& name) {
     if (name == "Sequence") return NodeKind::Sequence;
     if (name == "Selector") return NodeKind::Selector;
@@ -119,13 +164,15 @@ public:
     void Exit(std::size_t node, ExitReason reason) override {
         if (leaves_[node].valid()) (void)Call(node, "OnExit", false, Name(reason));
     }
-    const std::string& LastNode() const noexcept { return lastNode_; }
+    // The leaf called last, if any.
+    const Node* LastNode() const noexcept { return last_; }
+    const sol::table& Blackboard() const noexcept { return blackboard_; }
 
 private:
     template<class... Args>
     sol::object Call(std::size_t index, const char* name, bool required, Args&&... args) {
         const auto& node = definition_->Nodes()[index];
-        lastNode_ = node.id + " [" + node.script.id.ToString() + "]";
+        last_ = &node;
         auto& leaf = leaves_[index];
         if (!leaf.valid()) leaf = load_(node.script, CatalogAssetKind::Script);
         const auto callback = leaf.raw_get<sol::object>(name);
@@ -160,7 +207,7 @@ private:
     LuaBehaviorTree::LoadAsset load_;
     sol::table blackboard_;
     std::vector<sol::table> leaves_;
-    std::string lastNode_;
+    const Node* last_ = nullptr;
 };
 
 static void Exhausted(lua_State* state, lua_Debug*) {
@@ -300,6 +347,7 @@ void LuaBehaviorTree::Tick(Scene& scene, double dt) {
                 auto executor = std::make_unique<LuaBehaviorLeaves>(lua_, LuaEntityHandle::FromScene(scene, id),
                                                                    definition, agent.overrides, load_);
                 agent.leaves = executor.get();
+                agent.blackboard = executor->Blackboard();
                 agent.tree = std::make_unique<TreeInstance>(std::move(definition), std::move(executor));
             }
             if (!agent.tree || budget == 0) continue;
@@ -310,15 +358,33 @@ void LuaBehaviorTree::Tick(Scene& scene, double dt) {
             budget -= result.steps;
         } catch (const std::exception& error) {
             if (budget) --budget;
-            const auto* leaves = agent.tree ? agent.leaves : nullptr;
-            log::Lua().error("Behavior tree {} on {} at {}: {}", agent.asset.ToString(),
-                             scene.GetId(id).ToString(), leaves ? leaves->LastNode() : "definition", error.what());
+            const auto* last = agent.tree ? agent.leaves->LastNode() : nullptr;
+            agent.node = last ? last->id : std::string();
+            agent.fault = error.what();
+            const auto* tree = catalog_.Find(agent.asset);
+            log::Lua().error("Behavior tree {} on '{}' at {}: {}", tree ? tree->path : agent.asset.ToString(),
+                             scene.GetName(id), last ? last->id : "definition", error.what());
             agent.tree.reset();
             agent.leaves = nullptr;
             agent.status = "Faulted";
         }
     }
     nextAgent_ = cursor == start ? cursor + 1 : cursor;
+}
+
+std::optional<LuaRuntime::BehaviorAgentState> LuaBehaviorTree::State(entt::entity entity) const {
+    const auto found = agents_.find(entity);
+    if (found == agents_.end()) return std::nullopt;
+    const auto& agent = found->second;
+    LuaRuntime::BehaviorAgentState state{agent.asset, agent.status, agent.node, agent.fault, {}};
+    if (const auto* last = agent.tree ? agent.leaves->LastNode() : nullptr) state.node = last->id;
+    if (agent.blackboard.valid()) {
+        sol::table blackboard = agent.blackboard;
+        for (const auto& [key, value] : blackboard)
+            state.blackboard.emplace_back(key.get_type() == sol::type::string ? key.as<std::string>() : Text(key), Text(value));
+        std::ranges::sort(state.blackboard);
+    }
+    return state;
 }
 
 void LuaBehaviorTree::Remove(entt::entity id) noexcept {

@@ -3,6 +3,7 @@
 #include <engine/ai/BehaviorTree.hpp>
 #include <engine/ai/BehaviorTreeComponent.hpp>
 #include <engine/scripting/LuaEntityHandle.hpp>
+#include <engine/scripting/LuaRuntime.hpp>
 #include <sol/sol.hpp>
 #include <functional>
 #include <unordered_map>
@@ -22,6 +23,7 @@ public:
     void Tick(Scene& scene, double dt);
     void Remove(entt::entity entity) noexcept;
     void Clear() noexcept;
+    [[nodiscard]] std::optional<LuaRuntime::BehaviorAgentState> State(entt::entity entity) const;
 
 private:
     struct Agent {
@@ -31,6 +33,9 @@ private:
         LuaBehaviorLeaves* leaves = nullptr;
         double lastTickTime = 0;
         std::string status = "Pending";
+        sol::table blackboard;  // outlives the tree, which a fault drops
+        std::string node;       // the leaf that faulted
+        std::string fault;
     };
 
     std::shared_ptr<const TreeDefinition> LoadDefinition(const AssetReference& reference);

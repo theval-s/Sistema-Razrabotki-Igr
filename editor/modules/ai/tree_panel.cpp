@@ -8,7 +8,9 @@
 #include <QFile>
 #include <QFileSystemWatcher>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
@@ -20,7 +22,9 @@
 #include <QPushButton>
 #include <QScopedValueRollback>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QSplitter>
+#include <QTableWidget>
 #include <QTimer>
 #include <QToolBar>
 #include <QUndoCommand>
@@ -229,9 +233,33 @@ TreePanel::TreePanel(const engine::AssetCatalog& catalog, QWidget* parent)
     scroll->setWidgetResizable(true);
     scroll->setMinimumWidth(240);
 
+    game_box_ = new QGroupBox(tr("Play"));
+    agents_ = new QComboBox;
+    agents_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    agents_->setMinimumContentsLength(8);
+    connect(agents_, &QComboBox::activated, this, &TreePanel::showGame);
+    agent_status_ = valueLabel({});
+    blackboard_ = new QTableWidget(0, 2);
+    blackboard_->setHorizontalHeaderLabels({tr("Blackboard"), tr("Value")});
+    blackboard_->verticalHeader()->hide();
+    blackboard_->horizontalHeader()->setStretchLastSection(true);
+    blackboard_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    auto* game = new QFormLayout(game_box_);
+    game->addRow(tr("Entity"), agents_);
+    game->addRow(tr("Status"), agent_status_);
+    game->addRow(blackboard_);
+    game_box_->hide();
+    game_timer_ = new QTimer(this);
+    game_timer_->setInterval(100);
+    connect(game_timer_, &QTimer::timeout, this, &TreePanel::showGame);
+
+    auto* side = new QSplitter(Qt::Vertical);
+    side->addWidget(game_box_);
+    side->addWidget(scroll);
+
     auto* splitter = new QSplitter;
     splitter->addWidget(view_);
-    splitter->addWidget(scroll);
+    splitter->addWidget(side);
     splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 1);
     splitter->setSizes({900, 340});
@@ -252,6 +280,7 @@ TreePanel::TreePanel(const engine::AssetCatalog& catalog, QWidget* parent)
 }
 
 TreePanel::~TreePanel() {
+    game_timer_->stop();
     // The scene goes before the panel's widgets; tearing it down must not update them.
     disconnect(scene_.get(), nullptr, this, nullptr);
     disconnect(&scene_->undoStack(), nullptr, this, nullptr);
@@ -347,6 +376,9 @@ void TreePanel::reload() {
     const bool read = engine::ReadTextFile(source_, text, error) && engine::ai::ReadTreeSource(text, tree, error);
     disk_ = std::move(text);
     load_error_ = read ? QString() : tr("Can't show this tree: %1").arg(QString::fromStdString(error));
+    engine::AssetMetadata metadata;
+    tree_id_ = engine::ReadAssetMetadata(source_, metadata, error) ? metadata.id : engine::AssetUuid();
+    followed_ = entt::null;  // another tree's agents: follow the selection again
     // Editing an empty graph would save over the file we couldn't read.
     graph_.setEditable(read);
     graph_.load(tree, catalog_);
@@ -356,6 +388,93 @@ void TreePanel::reload() {
     updateState();
     fit();
     scheduleDetails();
+}
+
+void TreePanel::setGame(Game game) {
+    game_ = std::move(game);
+    followed_ = entt::null;
+    if (game_.agents && game_.state) {
+        if (game_box_->isHidden()) {
+            game_box_->show();
+            auto* side = static_cast<QSplitter*>(game_box_->parentWidget());
+            side->setSizes({side->height() / 2, side->height() / 2});  // the node's details keep half
+        }
+        game_timer_->start();
+        showGame();
+        return;
+    }
+    game_timer_->stop();
+    game_box_->hide();
+    agent_list_.clear();
+    agents_->clear();
+    blackboard_->setRowCount(0);
+    graph_.setActive(InvalidNodeId, false);
+}
+
+void TreePanel::showGame() {
+    if (!game_.agents || !game_.state) {
+        return;
+    }
+    std::vector<Agent> agents = tree_id_.IsValid() ? game_.agents(tree_id_) : std::vector<Agent>();
+    // Watch the one picked here, until the editor selects another.
+    const int picked = agents_->currentIndex();
+    entt::entity watched = picked >= 0 && picked < std::ssize(agent_list_) ? agent_list_[picked].entity : entt::null;
+    const auto selected = std::ranges::find_if(agents, &Agent::selected);
+    if (const entt::entity selection = selected != agents.end() ? selected->entity : entt::null; selection != followed_) {
+        followed_ = selection;
+        watched = selection != entt::null ? selection : watched;
+    }
+    const auto same = [](const Agent& a, const Agent& b) { return a.entity == b.entity && a.name == b.name; };
+    if (!std::ranges::equal(agents, agent_list_, same)) {
+        const QSignalBlocker blocker(agents_);
+        agents_->clear();
+        for (const Agent& agent : agents) {
+            agents_->addItem(agent.name);
+        }
+        agent_list_ = std::move(agents);
+    }
+    const auto found = std::ranges::find(agent_list_, watched, &Agent::entity);
+    const int index = found != agent_list_.end() ? static_cast<int>(found - agent_list_.begin()) : agent_list_.empty() ? -1 : 0;
+    agents_->setCurrentIndex(index);
+    agents_->setEnabled(!agent_list_.empty());
+
+    const auto state = index >= 0 ? game_.state(agent_list_[index].entity) : std::nullopt;
+    const bool faulted = state && state->status == "Faulted";
+    QString status;
+    QString fault;
+    if (agent_list_.empty()) {
+        status = tr("No entity runs this tree. Give one a Behavior Tree component that uses it.");
+    } else if (!state) {
+        status = tr("Waiting for its first update.");
+    } else {
+        status = QString::fromStdString(state->status);
+        if (!state->node.empty()) {
+            status = tr("%1 at %2").arg(status, QString::fromStdString(state->node));
+        }
+        if (faulted) {
+            fault = QString::fromStdString(state->fault);
+            status = tr("%1: %2").arg(status, fault.section(QLatin1Char('\n'), 0, 0));  // the traceback goes in the tooltip
+        }
+    }
+    agent_status_->setText(status);
+    agent_status_->setToolTip(fault);
+    if (const QString style = faulted ? QString::fromLatin1(ProblemStyle) : QString(); agent_status_->styleSheet() != style) {
+        agent_status_->setStyleSheet(style);
+    }
+    graph_.setActive(state ? graph_.find(state->node) : InvalidNodeId, faulted);
+
+    const auto entries = state ? state->blackboard : decltype(state->blackboard)();
+    blackboard_->setRowCount(static_cast<int>(entries.size()));
+    for (int row = 0; row < blackboard_->rowCount(); ++row) {
+        const auto& [key, value] = entries[static_cast<std::size_t>(row)];
+        for (const auto& [column, text] : {std::pair(0, &key), std::pair(1, &value)}) {
+            if (QTableWidgetItem* item = blackboard_->item(row, column)) {
+                item->setText(QString::fromStdString(*text));
+            } else {
+                blackboard_->setItem(row, column, new QTableWidgetItem(QString::fromStdString(*text)));
+            }
+        }
+    }
 }
 
 void TreePanel::fileChanged() {
