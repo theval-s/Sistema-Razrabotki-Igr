@@ -31,6 +31,7 @@ Writing games in Lua with the editor:
 | [ui.md](ui.md) | Game UI with RML/RCSS: documents, styles, models, events, preview and reload |
 | [ui-lua-facade.md](ui-lua-facade.md) | The exact Lua UI API and its lifetime rules |
 | [importing-models.md](importing-models.md) | Importing static models: material slots, textures, material instances, Extract Materials |
+| [building-games.md](building-games.md) | Build Game and `sri-build`: what is cooked, the `game.sripak` pack, the shipped folder |
 
 Asset formats, with their C++ APIs:
 
@@ -45,3 +46,4 @@ C++ hosts, in `sdk/` (engine SDK only):
 | Guide | Covers |
 |---|---|
 | [sdk/ui-implementation-contract.md](sdk/ui-implementation-contract.md) | Native UI integration for C++ hosts |
+| [sdk/content-and-packs.md](sdk/content-and-packs.md) | Running packed builds in a C++ host, reading game files through mounts |

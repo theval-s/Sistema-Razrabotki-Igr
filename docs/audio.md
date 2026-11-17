@@ -292,9 +292,10 @@ verify real-device hotplug behavior or perceived spatial balance.
 
 ## Packaging and listening checks
 
-Ship complete audio files plus `.meta` sidecars, including streamed content (streams
-need seekable files for the lifetime of playback). `sri-build` recursively copies
-project content into `game/`, so no audio extension allowlist is needed. ExampleGame's
+`sri-build` packs every file under `content/` into `game.sripak`, so no audio
+extension allowlist is needed. Clips are stored uncompressed in the pack and streamed
+clips read straight from it; their `.meta` settings go into the build's manifest
+([building-games.md](building-games.md)). ExampleGame's
 asset-copy and install rules include its complete `audio/` directory. The common
 deploy helper copies vcpkg notices, including miniaudio; docs directory installation
 includes this guide in editor and SDK packages.
