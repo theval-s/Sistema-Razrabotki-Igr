@@ -16,6 +16,8 @@
 #include <string>
 #include <string_view>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include <SimpleMath.h>
 #include <entt/entity/entity.hpp>
@@ -91,6 +93,20 @@ namespace engine {
             double maxMilliseconds = 0;
         };
         [[nodiscard]] BehaviorTiming GetBehaviorTiming() const noexcept;
+        /// What one entity's behavior tree is doing, for the editor to show.
+        struct BehaviorAgentState {
+            AssetUuid tree;
+            /// Running, Success or Failure after an update; Faulted once an error stopped it.
+            std::string status;
+            /// The leaf the agent ran last: the running action while there is one, or the one that faulted.
+            std::string node;
+            /// The error that stopped a Faulted agent.
+            std::string fault;
+            /// The agent's blackboard by key, values as text.
+            std::vector<std::pair<std::string, std::string>> blackboard;
+        };
+        /// Nothing until the entity's tree first updates in this session.
+        [[nodiscard]] std::optional<BehaviorAgentState> GetBehaviorAgentState(entt::entity entity) const;
         void DiscardSceneCommands() noexcept;
         [[nodiscard]] bool HasScript(const LuaEntityHandle& entity) const;
         [[nodiscard]] bool HasScriptMethod(const LuaEntityHandle& entity, const std::string& method) const;

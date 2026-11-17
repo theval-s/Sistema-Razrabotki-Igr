@@ -130,6 +130,27 @@ if(SRI_BUILD_EDITOR)
     )
     add_test(NAME autoload_dialog_tests COMMAND autoload_dialog_tests)
 
+    add_executable(behavior_tree_graph_tests
+        behavior_tree_graph_tests.cpp
+        ../editor/modules/ai/parameter_editor.cpp
+        ../editor/modules/ai/parameter_editor.hpp
+        ../editor/modules/ai/tree_graph.cpp
+        ../editor/modules/ai/tree_graph.hpp
+        ../editor/modules/ai/tree_panel.cpp
+        ../editor/modules/ai/tree_panel.hpp
+    )
+    target_include_directories(behavior_tree_graph_tests PRIVATE ../editor/modules/ai)
+    target_link_libraries(behavior_tree_graph_tests PRIVATE editor_core Engine::Engine GTest::gtest QtNodes::QtNodes
+        Qt6::Widgets)
+    set_project_warnings(behavior_tree_graph_tests)
+    set_target_properties(behavior_tree_graph_tests PROPERTIES FOLDER tests AUTOMOC ON)
+    add_custom_command(TARGET behavior_tree_graph_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:behavior_tree_graph_tests> $<TARGET_FILE_DIR:behavior_tree_graph_tests>
+        COMMAND_EXPAND_LISTS VERBATIM
+    )
+    add_test(NAME behavior_tree_graph_tests COMMAND behavior_tree_graph_tests)
+
     add_executable(transform_gizmo_tests transform_gizmo_tests.cpp)
     target_link_libraries(transform_gizmo_tests PRIVATE editor_core Engine::Engine GTest::gtest Qt6::Core)
     set_project_warnings(transform_gizmo_tests)
@@ -241,7 +262,7 @@ endif()
 
 add_executable(lua_runtime_tests lua_runtime_tests.cpp autoload_session_tests.cpp play_mode_tests.cpp
     runtime_api_tests.cpp gameplay_binding_tests.cpp component_binding_tests.cpp
-    persistence_document_tests.cpp persistence_integration_tests.cpp)
+    persistence_document_tests.cpp persistence_integration_tests.cpp behavior_tree_source_tests.cpp)
 target_link_libraries(lua_runtime_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(lua_runtime_tests)
 set_target_properties(lua_runtime_tests PROPERTIES FOLDER tests)

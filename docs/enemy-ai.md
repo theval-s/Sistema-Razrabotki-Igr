@@ -312,7 +312,8 @@ For many enemies that should avoid each other, use DetourCrowd agents instead of
 - **Sight is distance only.** Lua has no raycast API yet, so enemies notice the player through
   walls.
 - **A script error stops the tree.** The Log panel names the tree, the entity and the node, and
-  `BT.GetStatus(entity)` returns `Faulted`. The tree stays stopped until it is disabled and
+  `BT.GetStatus(entity)` returns `Faulted`. During Play, the Behavior Tree panel shows the error
+  and marks the node (see [behavior-trees.md](behavior-trees.md#watch-a-tree-during-play)). The tree stays stopped until it is disabled and
   enabled again, or for the rest of the Play session. Fix the script and press Play again.
 - **Keep leaf callbacks small.** Each `Check`, `OnEnter`, `Tick` and `OnExit` call may run at most
   20,000 Lua instructions. A call that runs longer faults the tree.

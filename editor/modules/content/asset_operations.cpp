@@ -18,6 +18,7 @@
 
 #include <editor/editor_log.hpp>
 
+#include <engine/ai/BehaviorTreeSource.hpp>
 #include <engine/assets/AssetAuthoring.hpp>
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
@@ -118,6 +119,15 @@ function OnUpdate(dt)
     end
     entity:SetWorldPosition(position)
 end)lua";
+
+constexpr std::string_view ActionTemplate = R"lua(-- A behavior tree action. Tick runs each frame while the action is active: return BT.Running
+-- to carry on next frame, or BT.Success or BT.Failure when it is done.
+-- ctx.entity is the agent, ctx.parameters the node's parameters, ctx.blackboard the agent's shared table.
+return {
+    Tick = function(ctx, dt)
+        return BT.Success
+    end,
+})lua";
 
 /// Ids of the assets in `paths`, including everything inside the folders among them.
 std::vector<engine::AssetUuid> idsIn(const QStringList& paths) {
@@ -471,15 +481,29 @@ bool AssetOperations::updateMaterialInstance(const QString& path,
 }
 
 bool AssetOperations::createBehaviorTree(const QString& path) {
-    constexpr auto source = R"(-- Point script to a cataloged Lua file that returns a table with Tick(ctx, dt).
-return {
-    root = "action",
-    nodes = {
-        { id = "action", kind = "Action", script = "game/MyAction.lua" },
-    },
-}
-)";
-    return createFile(tr("New Behavior Tree"), path, source, engine::CatalogAssetKind::BehaviorTree);
+    // Beside it, an action for it to run: "Name.action.lua", or "Name2.action.lua" if that's taken.
+    const QString suffix = QStringLiteral(".bt.lua");
+    const QString base = path.endsWith(suffix, Qt::CaseInsensitive) ? path.chopped(suffix.size()) : path;
+    QString action = base + QStringLiteral(".action.lua");
+    for (int i = 2; QFileInfo::exists(action) || QFileInfo::exists(action + QStringLiteral(".meta")); ++i) {
+        action = base + QString::number(i) + QStringLiteral(".action.lua");
+    }
+    if (!createFile(tr("New Behavior Tree"), action, std::string(ActionTemplate), engine::CatalogAssetKind::Script)) {
+        return false;
+    }
+    // In the graph editor's own layout, so its first save doesn't warn.
+    const engine::ai::TreeSource tree{
+        "action", {{"action", engine::ai::NodeKind::Action, {}, assetName(action).toStdString(), {}}}};
+    std::string text = engine::ai::WriteTreeSource(tree);
+    text.pop_back();  // createFile ends it with a line break
+    if (!createFile(tr("New Behavior Tree"), path, text, engine::CatalogAssetKind::BehaviorTree)) {
+        std::error_code ec;
+        std::filesystem::remove(editor::toPath(action), ec);
+        std::filesystem::remove(editor::toPath(action + QStringLiteral(".meta")), ec);
+        rescan();
+        return false;
+    }
+    return true;
 }
 
 bool AssetOperations::createScript(const QString& path, bool followNavigation) {

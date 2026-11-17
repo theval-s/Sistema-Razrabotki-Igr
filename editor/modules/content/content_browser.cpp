@@ -492,7 +492,7 @@ void ContentBrowser::activate(const QModelIndex& index) {
     } else if (const auto kind = engine::CatalogKindForFile(editor::toPath(path));
                kind == engine::CatalogAssetKind::Material || kind == engine::CatalogAssetKind::MaterialInstance) {
         editMaterial(path, *kind);
-    } else {
+    } else if (!context_.openAsset(editor::toPath(path))) {
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
     }
 }

@@ -190,6 +190,77 @@ TEST(PlayMode, BehaviorTreesShareDefinitionsAndKeepIndependentState) {
     EXPECT_FALSE(empty->tree.id.IsValid());
 }
 
+TEST(PlayMode, ReportsWhatEachBehaviorTreeAgentIsDoing) {
+    PlayFixture f;
+    std::string error;
+    const auto asset = [&](const char* name, const char* source, engine::CatalogAssetKind kind) {
+        const auto file = f.root / name;
+        ASSERT_TRUE(engine::CreateNewFile(file, source, error)) << error;
+        ASSERT_TRUE(engine::WriteAssetMetadata(file, {engine::NewUuid(), kind}, error)) << error;
+    };
+    asset("watch.bt.lua", R"(
+        return { root = "choose", nodes = {
+            { id = "choose", kind = "Selector", children = {"look", "work"} },
+            { id = "look", kind = "Condition", script = "game/look.condition.lua" },
+            { id = "work", kind = "Action", script = "game/work.action.lua" },
+        }}
+    )", engine::CatalogAssetKind::BehaviorTree);
+    asset("look.condition.lua", R"(
+        return { Check = function(ctx)
+            ctx.blackboard.me = ctx.entity
+            ctx.blackboard.spot = Vector3.new(1, 2.5, -3)
+            ctx.blackboard.label = "seen"
+            ctx.blackboard.ready = true
+            return false
+        end }
+    )", engine::CatalogAssetKind::Script);
+    asset("work.action.lua", R"(
+        return { Tick = function(ctx)
+            ctx.blackboard.ticks = (ctx.blackboard.ticks or 0) + 1
+            if ctx.parameters.fail then error("worn out") end
+            return BT.Running
+        end }
+    )", engine::CatalogAssetKind::Script);
+    ASSERT_FALSE(::testing::Test::HasFatalFailure());
+    ASSERT_TRUE(f.host.Initialize());
+    auto& scene = f.host.GetScene();
+    const auto* tree = f.host.GetAssets().GetCatalog().FindPath("game/watch.bt.lua");
+    ASSERT_NE(tree, nullptr);
+    const engine::AssetReference reference{tree->metadata.id, tree->path};
+    scene.AddComponent<engine::ai::BehaviorTreeComponent>(scene.CreateEntity("worker"),
+                                                          engine::ai::BehaviorTreeComponent{reference, true, {}});
+    scene.AddComponent<engine::ai::BehaviorTreeComponent>(
+        scene.CreateEntity("faulty"), engine::ai::BehaviorTreeComponent{reference, true, {{"fail", true}}});
+    scene.CreateEntity("idle");
+    ASSERT_TRUE(f.host.PlayCurrentScene(f.root, {}, error)) << error;
+    engine::FrameContext frame{};
+    frame.deltaSeconds = 0.016;
+    f.scripting->Update(frame);
+    const auto& runtime = f.scripting->GetRuntime();
+
+    const auto worker = runtime.GetBehaviorAgentState(scene.FindFirstByName("worker"));
+    ASSERT_TRUE(worker.has_value());
+    EXPECT_EQ(worker->tree, tree->metadata.id);
+    EXPECT_EQ(worker->status, "Running");
+    EXPECT_EQ(worker->node, "work");
+    EXPECT_EQ(worker->fault, "");
+    using Entries = std::vector<std::pair<std::string, std::string>>;
+    EXPECT_EQ(worker->blackboard, (Entries{{"label", "\"seen\""}, {"me", "Entity 'worker'"}, {"ready", "true"},
+                                           {"spot", "(1, 2.5, -3)"}, {"ticks", "1"}}));
+
+    // A fault drops the tree, but what it was doing stays readable.
+    const auto faulty = runtime.GetBehaviorAgentState(scene.FindFirstByName("faulty"));
+    ASSERT_TRUE(faulty.has_value());
+    EXPECT_EQ(faulty->status, "Faulted");
+    EXPECT_EQ(faulty->node, "work");
+    EXPECT_NE(faulty->fault.find("worn out"), std::string::npos) << faulty->fault;
+    ASSERT_FALSE(faulty->blackboard.empty());
+    EXPECT_EQ(faulty->blackboard.back(), (std::pair<std::string, std::string>{"ticks", "1"}));
+
+    EXPECT_FALSE(runtime.GetBehaviorAgentState(scene.FindFirstByName("idle")).has_value());
+    f.host.StopPlay();
+}
+
 TEST(PlayMode, StopRestoresUnsavedEntitiesAndRemovesRuntimeChanges) {
     PlayFixture f;
     ASSERT_TRUE(f.host.Initialize());

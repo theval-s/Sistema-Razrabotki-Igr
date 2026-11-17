@@ -109,6 +109,10 @@ private:
     }
 
     void play() {
+        // The game reads trees and the like from disk, not from their editors.
+        if (!context_->maybeSaveFiles(context_->mainWindow())) {
+            return;
+        }
         if (std::string error; !context_->playSession().play(error)) {
             QMessageBox::warning(context_->mainWindow(), QObject::tr("Play"), toQString(error));
         }

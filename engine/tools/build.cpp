@@ -3,6 +3,7 @@
 #endif
 #include <Windows.h>
 
+#include <engine/ai/BehaviorTreeSource.hpp>
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
@@ -258,6 +259,16 @@ namespace {
         validateSkeletal(engine::CatalogAssetKind::AnimationClip, engine::AssetKind::AnimationClip, clips);
         validateSkeletal(engine::CatalogAssetKind::SkinnedMesh, engine::AssetKind::SkinnedMesh, meshes);
 
+        for (const auto* tree : catalog.List(engine::CatalogAssetKind::BehaviorTree)) {
+            std::string text;
+            engine::ai::TreeSource source;
+            error.clear();
+            if (!engine::ReadTextFile(tree->source, text, error) || !engine::ai::ReadTreeSource(text, source, error) ||
+                !engine::ai::ValidateTreeSource(source, catalog, error)) {
+                errors.push_back(tree->path + ": " + error);
+            }
+        }
+
         for (const auto* scene :
             catalog.List(engine::CatalogAssetKind::Scene)) {
 
@@ -291,6 +302,9 @@ namespace {
                                    "SkinnedMeshRenderer.mesh");
                     checkReference(entity.skinnedRenderer->materialInstance, engine::CatalogAssetKind::MaterialInstance,
                                    "SkinnedMeshRenderer.materialInstance");
+                }
+                if (entity.behaviorTree) {
+                    checkReference(entity.behaviorTree->tree, engine::CatalogAssetKind::BehaviorTree, "BehaviorTree.tree");
                 }
                 if (entity.navigationRegion) {
                     const auto& bake = entity.navigationRegion->navMesh;

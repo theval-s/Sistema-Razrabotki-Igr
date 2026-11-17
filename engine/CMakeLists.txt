@@ -93,6 +93,7 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/scripting/AutoloadDefinition.hpp
     include/engine/ai/BehaviorTree.hpp
     include/engine/ai/BehaviorTreeComponent.hpp
+    include/engine/ai/BehaviorTreeSource.hpp
     include/engine/scripting/ScriptSubsystem.hpp
     include/engine/scripting/LuaBindings.hpp
     include/engine/scripting/LuaAnimationBindings.hpp
@@ -143,6 +144,7 @@ set(ENGINE_SOURCES
     src/scripting/LuaRuntime.cpp
     src/scripting/AutoloadDefinition.cpp
     src/ai/BehaviorTree.cpp
+    src/ai/BehaviorTreeSource.cpp
     src/scripting/LuaBehaviorTree.cpp
     src/scripting/ScriptSubsystem.cpp
     src/scripting/LuaBindings.cpp

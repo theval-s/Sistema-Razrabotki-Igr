@@ -787,6 +787,11 @@ namespace engine {
         return impl_->behaviorTiming;
     }
 
+    std::optional<LuaRuntime::BehaviorAgentState> LuaRuntime::GetBehaviorAgentState(entt::entity entity) const {
+        if (!impl_->behaviorTrees) return std::nullopt;
+        return impl_->behaviorTrees->State(entity);
+    }
+
     void LuaRuntime::RemoveBehaviorTree(Scene& scene, entt::entity entity) noexcept {
         if (!impl_->behaviorTrees) return;
         try {

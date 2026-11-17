@@ -65,6 +65,28 @@ if(SRI_BUILD_EDITOR)
     endif()
 endif()
 
+# --- QtNodes (editor only) --------------------------------------------------
+# Node graph widgets for the behavior tree editor; no vcpkg port. BSD-3, so it
+# links statically into the editor module that uses it.
+if(SRI_BUILD_EDITOR)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/nodeeditor/CMakeLists.txt")
+        block()
+            # It declares 3.11 policies; NEW lets these variables win over its option() defaults.
+            set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+            set(BUILD_SHARED_LIBS OFF)
+            set(BUILD_TESTING OFF)
+            set(BUILD_EXAMPLES OFF)
+            set(BUILD_DOCS OFF)
+            set(USE_QT6 ON)
+            # SYSTEM: its headers must not trip our /W4 in the modules that include them.
+            add_subdirectory(nodeeditor EXCLUDE_FROM_ALL SYSTEM)
+        endblock()
+        set_target_properties(QtNodes PROPERTIES FOLDER "external")
+    else()
+        message(FATAL_ERROR "external/nodeeditor is missing -- run: git submodule update --init")
+    endif()
+endif()
+
 # --- ozz-animation ----------------------------------------------------------
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ozz-animation/CMakeLists.txt")
     block()

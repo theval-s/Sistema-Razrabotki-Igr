@@ -111,6 +111,7 @@ add_subdirectory(modules/scene)
 add_subdirectory(modules/content)
 add_subdirectory(modules/scripting)
 add_subdirectory(modules/build)
+add_subdirectory(modules/ai)
 
 # --- Install / deploy ------------------------------------------------------
 
@@ -119,6 +120,8 @@ add_subdirectory(modules/build)
 sri_add_deploy(editor LIBRARIES engine editor_core qtadvanceddocking-qt6 sri-build)
 install(FILES "${PROJECT_SOURCE_DIR}/external/Qt-Advanced-Docking-System/LICENSE"
     DESTINATION licenses/qt-advanced-docking-system COMPONENT editor)
+install(FILES "${PROJECT_SOURCE_DIR}/external/nodeeditor/LICENSE.rst"
+    DESTINATION licenses/qtnodes COMPONENT editor)
 sri_install_docs(editor docs)
 
 install(DIRECTORY
