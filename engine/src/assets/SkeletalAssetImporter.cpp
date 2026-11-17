@@ -2,6 +2,7 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/core/FileSystem.hpp>
 #include "../animation/AnimationData.hpp"
+#include "ModelSlots.hpp"
 
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
@@ -526,6 +527,8 @@ SkinnedMeshCpu BuildMesh(const aiScene& scene, const SceneSkeleton& skeleton, co
             binding->joints.push_back(static_cast<std::uint16_t>(nodeIndex));
             binding->inverseBind.push_back(Matrix::Identity);
             std::vector<bool> used(binding->joints.size(), false);
+            const aiMaterial* material = mesh->mMaterialIndex < scene.mNumMaterials ? scene.mMaterials[mesh->mMaterialIndex] : nullptr;
+            const int uvChannel = detail::UvChannelFor(*mesh, material ? detail::FindBaseColorTexture(*material).uvChannel : 0);
             section.vertices.resize(mesh->mNumVertices);
             for (unsigned v = 0; v < mesh->mNumVertices; ++v) {
                 auto& weights = influences[v];
@@ -539,7 +542,7 @@ SkinnedMeshCpu BuildMesh(const aiScene& scene, const SceneSkeleton& skeleton, co
                 auto& vertex = section.vertices[v];
                 const auto& p = mesh->mVertices[v];
                 const auto& n = mesh->mNormals[v];
-                const auto uv = mesh->HasTextureCoords(0) ? mesh->mTextureCoords[0][v] : aiVector3D{};
+                const auto uv = uvChannel >= 0 ? mesh->mTextureCoords[uvChannel][v] : aiVector3D{};
                 Require(Finite(p) && Finite(n) && Finite(uv), "nonfinite skinned vertex");
                 vertex.position = Vector4(p.x, p.y, p.z, 1.f);
                 vertex.normal = Vector3(n.x, n.y, n.z);

@@ -108,6 +108,11 @@ Json Encode(const AssetReference& reference) {
     return Json::parse(json);
 }
 
+// Drops trailing slots without a material, so equal renderers compare equal.
+void TrimSlotMaterials(std::vector<AssetReference>& slots) {
+    while (!slots.empty() && !slots.back().id.IsValid()) slots.pop_back();
+}
+
 std::optional<EntityUuid> OptionalId(const Json& j) {
     if (j.is_null()) return std::nullopt;
     auto id = j.get<std::string>();
@@ -319,9 +324,18 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
 
     if (components.contains("MeshRenderer")) {
         const auto& renderer = components.at("MeshRenderer");
-        Fields(renderer, {"mesh", "materialInstance"});
+        Fields(renderer, {"mesh", "materialInstance", "slotMaterials"});
+        // null: every slot uses the mesh's default material.
+        const auto& material = renderer.at("materialInstance");
         entity.renderer = SceneEntityDefinition::Mesh{Reference(renderer.at("mesh")),
-                                                       Reference(renderer.at("materialInstance"))};
+                                                       material.is_null() ? AssetReference{} : Reference(material)};
+        if (renderer.contains("slotMaterials")) {
+            const auto& slots = renderer.at("slotMaterials");
+            if (!slots.is_array()) throw std::invalid_argument("slotMaterials must be an array");
+            for (const auto& slot : slots)
+                entity.renderer->slotMaterials.push_back(slot.is_null() ? AssetReference{} : Reference(slot));
+            TrimSlotMaterials(entity.renderer->slotMaterials);
+        }
     }
     if (components.contains("SkinnedMeshRenderer")) {
         const auto& renderer = components.at("SkinnedMeshRenderer");
@@ -480,9 +494,20 @@ Json Encode(const SceneDocument& document) {
         Json components = {{"Transform", {{"position", Encode(entity.transform.position)},
                                             {"rotation", Encode(entity.transform.rotation)},
                                             {"scale", Encode(entity.transform.scale)}}}};
-        if (entity.renderer)
+        if (entity.renderer) {
             components["MeshRenderer"] = {{"mesh", Encode(entity.renderer->mesh)},
-                                          {"materialInstance", Encode(entity.renderer->materialInstance)}};
+                {"materialInstance", entity.renderer->materialInstance.id.IsValid()
+                    ? Encode(entity.renderer->materialInstance) : Json(nullptr)}};
+            // Only when used, so renderers without them keep their exact format.
+            if (!entity.renderer->slotMaterials.empty()) {
+                Json slots = Json::array();
+                for (const auto& slot : entity.renderer->slotMaterials)
+                    slots.push_back(slot.id.IsValid() ? Encode(slot) : Json(nullptr));
+                components["MeshRenderer"]["slotMaterials"] = std::move(slots);
+            }
+        }
+        if (entity.skinnedRenderer && !entity.skinnedRenderer->slotMaterials.empty())
+            throw std::invalid_argument("SkinnedMeshRenderer has no slot materials");
         if (entity.skinnedRenderer)
             components["SkinnedMeshRenderer"] = {{"mesh", Encode(entity.skinnedRenderer->mesh)},
                 {"materialInstance", Encode(entity.skinnedRenderer->materialInstance)}};
@@ -622,13 +647,29 @@ std::optional<SceneEntityDefinition::Mesh> RendererReferences(const Renderer& re
     if (!mesh) mesh = assets.ReferenceFor(renderer.mesh);
     auto material = authored(renderer.materialReference, CatalogAssetKind::MaterialInstance);
     if (!material) material = assets.ReferenceFor(renderer.materialInstance);
+    std::vector<AssetReference> slots;
+    if constexpr (std::is_same_v<Renderer, MeshRenderer>) {
+        if (!HasOwnMaterial(renderer)) material = AssetReference{}; // the mesh's own materials
+        for (const auto& slot : renderer.slotMaterials) {
+            auto reference = authored(slot.materialReference, CatalogAssetKind::MaterialInstance);
+            if (!reference && slot.materialInstance) reference = assets.ReferenceFor(slot.materialInstance);
+            if (!reference && HasOwnMaterial(slot)) return std::nullopt;
+            slots.push_back(reference.value_or(AssetReference{}));
+        }
+        TrimSlotMaterials(slots);
+    }
     if (!mesh || !material) return std::nullopt;
-    return SceneEntityDefinition::Mesh{*mesh, *material};
+    return SceneEntityDefinition::Mesh{*mesh, *material, std::move(slots)};
 }
 
 MeshRenderer RequestRenderer(const SceneEntityDefinition::Mesh& references, AssetSystem& assets) {
-    return {assets.RequestMesh(references.mesh), assets.RequestMaterialInstance(references.materialInstance),
-            references.mesh, references.materialInstance};
+    const auto request = [&assets](const AssetReference& material) {
+        return material.id.IsValid() ? assets.RequestMaterialInstance(material) : AssetHandle<MaterialInstanceAsset>{};
+    };
+    MeshRenderer renderer{assets.RequestMesh(references.mesh), request(references.materialInstance),
+                          references.mesh, references.materialInstance};
+    for (const auto& slot : references.slotMaterials) renderer.slotMaterials.push_back({request(slot), slot});
+    return renderer;
 }
 
 SkinnedMeshRenderer RequestSkinnedRenderer(const SceneEntityDefinition::Mesh& references, AssetSystem& assets) {

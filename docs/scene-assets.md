@@ -13,7 +13,21 @@ For `game/models/table/model.obj`, create `model.obj.meta` next to it:
 ~~~
 
 Valid kinds: `mesh`, `texture`, `shader`, `material`, `materialInstance`,
-`scene`, `audioClip` (WAV/FLAC/MP3), `navMesh` (`.navmesh`, see below). `centerOnLoad` is only valid for meshes. The generator preserves
+`scene`, `audioClip` (WAV/FLAC/MP3), `navMesh` (`.navmesh`, see below). `centerOnLoad` is only valid for meshes.
+
+A mesh can also name a default material instance for each of its material slots:
+
+~~~json
+{ "version": 1, "id": "…", "kind": "mesh", "centerOnLoad": false,
+  "materials": [ { "id": "…", "path": "game/models/token/materials/Gold.material-instance.json" }, null ] }
+~~~
+
+A mesh has one material slot per source material that its triangles use, in the model's
+material order. `null`, or a slot past the end of the list, uses the engine default material
+instance. The editor's model import writes this list, see [importing-models.md](importing-models.md).
+`sri-build` reports slots that name a missing material instance.
+
+The generator preserves
 existing sidecars and creates new UUIDs for recognized files lacking them:
 
 ~~~text
@@ -60,6 +74,21 @@ Store a scene under the game root as `<name>.scene.json` and give it its own
       }
     }
   ]
+}
+~~~
+
+`"materialInstance": null` draws each material slot with the mesh's own default (see Metadata);
+a material instance draws every slot with that one material. `SkinnedMeshRenderer` always needs one.
+
+A `MeshRenderer` can also give single slots a material of their own with `"slotMaterials"`, a list
+in slot order where `null` leaves a slot alone. A slot's own material comes first, then
+`materialInstance`, then the mesh's default. The field is left out when no slot has one:
+
+~~~json
+"MeshRenderer": {
+  "mesh": { "id": "...", "path": "game/models/lamp.glb" },
+  "materialInstance": null,
+  "slotMaterials": [null, { "id": "...", "path": "game/materials/glass-red.material-instance.json" }]
 }
 ~~~
 

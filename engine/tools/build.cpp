@@ -259,6 +259,17 @@ namespace {
         validateSkeletal(engine::CatalogAssetKind::AnimationClip, engine::AssetKind::AnimationClip, clips);
         validateSkeletal(engine::CatalogAssetKind::SkinnedMesh, engine::AssetKind::SkinnedMesh, meshes);
 
+        for (const auto* mesh : catalog.List(engine::CatalogAssetKind::Mesh)) {
+            for (std::size_t slot = 0; slot < mesh->metadata.materials.size(); ++slot) {
+                const auto& material = mesh->metadata.materials[slot];
+                if (material && !catalog.Find(material->id, engine::CatalogAssetKind::MaterialInstance)) {
+                    errors.push_back(mesh->path + ": material slot " + std::to_string(slot) +
+                        " references missing or wrong-kind asset " + material->id.ToString() +
+                        (material->path.empty() ? "" : " (" + material->path + ")"));
+                }
+            }
+        }
+
         for (const auto* tree : catalog.List(engine::CatalogAssetKind::BehaviorTree)) {
             std::string text;
             engine::ai::TreeSource source;

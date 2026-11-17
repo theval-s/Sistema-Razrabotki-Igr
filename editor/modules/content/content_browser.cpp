@@ -415,6 +415,10 @@ void ContentBrowser::buildActions() {
     import_button_->setDefaultAction(import_);
     instance_from_texture_ = add(QStringLiteral("create-material-instance"), tr("Create Material Instance..."), {},
                                  [this] { newMaterialInstance(selectedPaths().value(0)); });
+    extract_materials_ = add(QStringLiteral("extract-materials"), tr("Extract Materials..."), {},
+                             [this] { extractMaterials(selectedPaths().value(0)); });
+    extract_materials_->setToolTip(tr("Writes the model's textures and a material instance per slot, which its "
+                                      "mesh renderers draw with"));
 
     new_menu_ = std::make_unique<QMenu>(tr("New"));
     new_menu_->addAction(style()->standardIcon(QStyle::SP_DirIcon), tr("Folder"), this,
@@ -691,6 +695,9 @@ void ContentBrowser::updateActions() {
     instance_from_texture_->setEnabled(
         writable && selected.size() == 1 &&
         engine::CatalogKindForFile(editor::toPath(selected.front())) == engine::CatalogAssetKind::Texture);
+    extract_materials_->setEnabled(writable && selected.size() == 1 &&
+                                   engine::AssetPathResolver::IsModelFile(editor::toPath(selected.front())) &&
+                                   QFileInfo::exists(selected.front() + QLatin1String(".meta")));
 }
 
 void ContentBrowser::showItemMenu(const QPoint& pos) {
@@ -710,6 +717,9 @@ void ContentBrowser::showItemMenu(const QPoint& pos) {
         }
         if (instance_from_texture_->isEnabled()) {
             menu.addAction(instance_from_texture_);
+        }
+        if (extract_materials_->isEnabled()) {
+            menu.addAction(extract_materials_);
         }
         menu.addSeparator();
         menu.addActions({cut_, copy_, paste_, duplicate_});
@@ -894,6 +904,13 @@ QString ContentBrowser::importModel(const QString& source, const QString& folder
         return {};
     }
     return operations_.importModel(dialog.result(), folder);
+}
+
+void ContentBrowser::extractMaterials(const QString& model) {
+    ExtractMaterialsDialog dialog(catalog(), model, window());
+    if (dialog.exec() == QDialog::Accepted) {
+        operations_.extractMaterials(model, dialog.result());
+    }
 }
 
 void ContentBrowser::importAssets() {

@@ -84,6 +84,33 @@ TEST_F(ComponentBindingFixture, CopiedValuesAndTransactionalValidation) {
     )");
 }
 
+TEST_F(ComponentBindingFixture, MeshRendererSlotMaterialsAreAnArrayOfMaterials) {
+    // Catalog entries are enough: the renderer's assets fail to load in the background.
+    for (const auto& [file, kind] : {std::pair{"model.obj", engine::CatalogAssetKind::Mesh},
+                                     std::pair{"red.material-instance.json", engine::CatalogAssetKind::MaterialInstance}}) {
+        ASSERT_TRUE(engine::CreateNewFile(root / file, "", error)) << error;
+        ASSERT_TRUE(engine::WriteAssetMetadata(root / file, {engine::NewUuid(), kind}, error)) << error;
+    }
+    (void)host.GetAssets().RescanCatalog(error);
+    ASSERT_NE(host.GetAssets().GetCatalog().FindPath("game/red.material-instance.json"), nullptr) << error;
+    Lua(R"(
+        local red = 'game/red.material-instance.json'
+        local e = Scene.Spawn('model', {components = {MeshRenderer = {mesh='game/model.obj', slotMaterials={'', red}}}})
+        local r = e:GetComponent('MeshRenderer')
+        assert(r.materialInstance == '' and #r.slotMaterials == 2 and r.slotMaterials[1] == '')
+        local id = r.slotMaterials[2]
+        assert(#id == 36)
+        e:SetComponent('MeshRenderer', {mesh='game/model.obj', materialInstance=red})
+        assert(e:GetComponent('MeshRenderer').slotMaterials[2] == id)
+        e:SetComponent('MeshRenderer', {mesh='game/model.obj', slotMaterials={}})
+        assert(#e:GetComponent('MeshRenderer').slotMaterials == 0)
+        assert(not pcall(function() e:SetComponent('MeshRenderer', {mesh='game/model.obj', slotMaterials={'game/model.obj'}}) end))
+        assert(not pcall(function() e:SetComponent('MeshRenderer', {mesh='game/model.obj', slotMaterials={[2]=red}}) end))
+        assert(not pcall(function() e:SetComponent('MeshRenderer', {mesh='game/model.obj', slotMaterials=red}) end))
+        assert(#e:GetComponent('MeshRenderer').slotMaterials == 0)
+    )");
+}
+
 TEST_F(ComponentBindingFixture, RemovalAndDestructionLeaveSnapshotsSafe) {
     Lua(R"(
         local e = Scene.Spawn('removal', {components={Camera={farPlane=200}}})
