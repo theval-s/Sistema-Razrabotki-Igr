@@ -1047,6 +1047,17 @@ void buildBehaviorTree(PropertyForm& form, editor::EditorContext& context, entt:
     form.addBool(QObject::tr("Enabled"), field(scene, entity, &Component::enabled));
     addLuaAssetPicker(form, context, entity, &Component::tree, engine::CatalogAssetKind::BehaviorTree,
                       QObject::tr("Tree"), QObject::tr("Change Behavior Tree"), QObject::tr("Open Lua source"));
+    const auto treeEntry = [&context, entity]() -> const engine::CatalogEntry* {
+        const auto* component = context.scene().TryGetComponent<Component>(entity);
+        return component ? context.engine().GetAssets().GetCatalog().Find(component->tree.id,
+                                                                           engine::CatalogAssetKind::BehaviorTree)
+                         : nullptr;
+    };
+    auto* graph = new QPushButton(QObject::tr("Show Tree Graph"));
+    QObject::connect(graph, &QPushButton::clicked, graph, [&context, treeEntry] {
+        if (const auto* entry = treeEntry()) context.openAsset(entry->source);
+    });
+    form.addRow({}, graph, [graph, treeEntry] { graph->setEnabled(treeEntry() != nullptr); });
 
     auto* panel = new QWidget;
     auto* layout = new QVBoxLayout(panel);

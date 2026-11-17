@@ -13,6 +13,7 @@
 #include <DockWidget.h>
 
 #include <engine/engine.hpp>
+#include <engine/assets/AssetCatalog.hpp>
 #include <engine/audio/AudioSubsystem.hpp>
 #include <engine/project/Project.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
@@ -171,6 +172,35 @@ void EditorContext::addPanel(const QString& id, const QString& title, QWidget* w
     dock_manager_.addDockWidgetTab(toAdsArea(area), dock);
     menu(QObject::tr("&View"))->addAction(dock->toggleViewAction());
     panels_.push_back({dock, area});
+}
+
+void EditorContext::showPanel(QWidget* widget) {
+    const auto panel = std::ranges::find_if(
+        panels_, [widget](const Panel& other) { return other.dock != nullptr && other.dock->widget() == widget; });
+    if (panel == panels_.end()) {
+        return;
+    }
+    panel->dock->toggleView(true);
+    panel->dock->setAsCurrentTab();
+    panel->dock->raise();
+}
+
+void EditorContext::setAssetEditor(const engine::CatalogAssetKind kind, AssetEditor open) {
+    if (open) {
+        asset_editors_[kind] = std::move(open);
+    } else {
+        asset_editors_.erase(kind);
+    }
+}
+
+bool EditorContext::openAsset(const std::filesystem::path& source) {
+    const auto kind = engine::CatalogKindForFile(source);
+    const auto editor = kind ? asset_editors_.find(*kind) : asset_editors_.end();
+    if (editor == asset_editors_.end()) {
+        return false;
+    }
+    editor->second(source);
+    return true;
 }
 
 void EditorContext::placeNewPanels() {

@@ -111,6 +111,7 @@ add_subdirectory(modules/scene)
 add_subdirectory(modules/content)
 add_subdirectory(modules/scripting)
 add_subdirectory(modules/build)
+add_subdirectory(modules/ai)
 
 # --- Install / deploy ------------------------------------------------------
 

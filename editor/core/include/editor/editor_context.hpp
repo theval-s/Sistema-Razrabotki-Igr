@@ -4,6 +4,9 @@
 #include <QString>
 #include <Qt>
 
+#include <filesystem>
+#include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -27,6 +30,7 @@ namespace engine {
 class Engine;
 class Scene;
 struct Project;
+enum class CatalogAssetKind;
 }  // namespace engine
 
 namespace editor {
@@ -99,6 +103,15 @@ public:
     /// The user can then move, tab, float or close it. `id` must be unique and stable:
     /// it is the panel's objectName, which the saved layout refers to.
     void addPanel(const QString& id, const QString& title, QWidget* widget, Qt::DockWidgetArea area);
+    /// Opens the panel holding `widget` (one passed to addPanel()) and brings it to the front.
+    void showPanel(QWidget* widget);
+
+    /// Makes openAsset() hand `kind` assets to `open`; an empty function removes it.
+    /// A module removes its editors in shutdown().
+    using AssetEditor = std::function<void(const std::filesystem::path& source)>;
+    void setAssetEditor(engine::CatalogAssetKind kind, AssetEditor open);
+    /// Opens `source` in the editor set for its kind. False when there is none.
+    bool openAsset(const std::filesystem::path& source);
 
     /// Call after restoring a saved layout: docks the panels it didn't know about (e.g. from
     /// a newly added module) at their default area. ADS leaves those hidden and unplaced.
@@ -117,6 +130,7 @@ private:
     QWidget& viewport_;
     ViewportToolBar& tool_bar_;
     std::vector<Panel> panels_;
+    std::map<engine::CatalogAssetKind, AssetEditor> asset_editors_;
     std::unique_ptr<ShortcutRegistry> shortcuts_;
     std::unique_ptr<SceneEvents> scene_events_;  // before everything that follows the scene
     Selection selection_;
