@@ -2,8 +2,10 @@
 
 #include "Miniaudio.hpp"
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/core/Content.hpp>
 #include <engine/core/FrameContext.hpp>
 #include <engine/core/Log.hpp>
+#include <engine/core/PathUtils.hpp>
 #include <engine/core/Utf.hpp>
 #include <engine/engine.hpp>
 #include <engine/rendering/RenderComponents.hpp>
@@ -103,6 +105,49 @@ AudioVoiceHandle::AudioVoiceHandle(AudioVoiceHandle&&) noexcept = default;
 AudioVoiceHandle& AudioVoiceHandle::operator=(AudioVoiceHandle&&) noexcept = default;
 AudioVoiceHandle::operator bool() const noexcept { return state_ && !state_->lifetime.expired(); }
 
+namespace {
+ma_result OpenContent(const std::filesystem::path& path, ma_uint32 mode, ma_vfs_file* file) {
+    if (!file) return MA_INVALID_ARGS;
+    *file = nullptr;
+    if (mode & MA_OPEN_MODE_WRITE) return MA_ACCESS_DENIED;
+    std::string error;
+    auto stream = content::Open(path, error);
+    if (!stream) return MA_DOES_NOT_EXIST;
+    *file = stream.release();
+    return MA_SUCCESS;
+}
+content::Stream& Stream(ma_vfs_file file) { return *static_cast<content::Stream*>(file); }
+ma_vfs_callbacks ContentVfs() {
+    ma_vfs_callbacks vfs{};
+    vfs.onOpen = [](ma_vfs*, const char* path, ma_uint32 mode, ma_vfs_file* file) {
+        return path ? OpenContent(FromUtf8(path), mode, file) : MA_INVALID_ARGS;
+    };
+    vfs.onOpenW = [](ma_vfs*, const wchar_t* path, ma_uint32 mode, ma_vfs_file* file) {
+        return path ? OpenContent(path, mode, file) : MA_INVALID_ARGS;
+    };
+    vfs.onClose = [](ma_vfs*, ma_vfs_file file) { delete &Stream(file); return MA_SUCCESS; };
+    vfs.onRead = [](ma_vfs*, ma_vfs_file file, void* data, size_t size, size_t* read) {
+        const auto count = Stream(file).Read(data, size);
+        if (read) *read = count;
+        return count == 0 && size != 0 ? MA_AT_END : MA_SUCCESS;
+    };
+    vfs.onWrite = [](ma_vfs*, ma_vfs_file, const void*, size_t, size_t*) { return MA_ACCESS_DENIED; };
+    vfs.onSeek = [](ma_vfs*, ma_vfs_file file, ma_int64 offset, ma_seek_origin origin) {
+        const int from = origin == ma_seek_origin_current ? SEEK_CUR : origin == ma_seek_origin_end ? SEEK_END : SEEK_SET;
+        return Stream(file).Seek(offset, from) ? MA_SUCCESS : MA_BAD_SEEK;
+    };
+    vfs.onTell = [](ma_vfs*, ma_vfs_file file, ma_int64* cursor) {
+        *cursor = static_cast<ma_int64>(Stream(file).Tell());
+        return MA_SUCCESS;
+    };
+    vfs.onInfo = [](ma_vfs*, ma_vfs_file file, ma_file_info* info) {
+        info->sizeInBytes = Stream(file).Size();
+        return MA_SUCCESS;
+    };
+    return vfs;
+}
+} // namespace
+
 struct AudioSubsystem::Impl {
     // Never move initialized backend objects: Impl, Voice and their members have stable addresses.
     struct Voice {
@@ -135,6 +180,7 @@ struct AudioSubsystem::Impl {
         AudioVoiceHandle primary;
         bool activated = false;
     };
+    ma_vfs_callbacks vfs = ContentVfs(); // outlives `resources`, which reads through it
     ma_resource_manager resources{};
     ma_engine backend{};
     ma_sound_group gameMaster{};
@@ -346,6 +392,7 @@ bool AudioSubsystem::Initialize() {
     resourceConfig.decodedFormat = ma_format_f32;
     resourceConfig.decodedChannels = 0; // Preserve mono/stereo; required for point-emitter validation.
     resourceConfig.decodedSampleRate = 0;
+    resourceConfig.pVFS = &p.vfs;
     if (config_.output == AudioOutputMode::Offline) {
         resourceConfig.flags = MA_RESOURCE_MANAGER_FLAG_NO_THREADING;
         resourceConfig.jobThreadCount = 0;
@@ -445,7 +492,7 @@ AudioVoiceHandle AudioSubsystem::Play(const AssetReference& clip, const AudioPla
     config.flags = MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_ASYNC |
         (options.loading == AudioLoadingMode::Buffered ? MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_DECODE : MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_STREAM);
 #ifdef _WIN32
-    config.pFilePathW = voice->clip.source.c_str(); // Native wide, seekable filesystem access, including streaming.
+    config.pFilePathW = voice->clip.source.c_str(); // Seekable content access, including streaming.
 #else
     config.pFilePath = voice->clip.source.c_str();
 #endif

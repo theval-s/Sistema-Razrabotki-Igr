@@ -8,6 +8,7 @@
 #include <GameWindow.hpp>
 #include <engine/engine.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
+#include <engine/core/Content.hpp>
 #include <engine/core/DefaultSubsystems.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/Log.hpp>
@@ -133,7 +134,7 @@ int WINAPI wWinMain(
         }
 
         // sri-build output is cooked; a folder without the manifest still runs from sources.
-        if (const fs::path manifest = exeDir / L"manifest.json"; fs::is_regular_file(manifest)) {
+        if (const fs::path manifest = exeDir / L"manifest.json"; engine::content::IsFile(manifest)) {
             engine::AssetPathResolver::SetManifest(manifest);
         }
 

@@ -393,6 +393,17 @@ add_custom_command(TARGET lua_runtime_tests POST_BUILD
 )
 add_test(NAME lua_runtime_tests COMMAND lua_runtime_tests)
 
+add_executable(content_tests content_tests.cpp)
+target_link_libraries(content_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
+set_project_warnings(content_tests)
+set_target_properties(content_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET content_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:content_tests> $<TARGET_FILE_DIR:content_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME content_tests COMMAND content_tests)
+
 # RmlUi owns process-global interfaces: keep fixtures sequential in one process.
 add_executable(ui_tests ui_tests.cpp ui_lifecycle_review_tests.cpp ui_example_tests.cpp ui_text_asset_tests.cpp)
 target_link_libraries(ui_tests PRIVATE Engine::EngineStatic GTest::gtest_main)

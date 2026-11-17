@@ -10,6 +10,7 @@
 #include <utility>
 
 #include <engine/assets/AssetCooking.hpp>
+#include <engine/core/Content.hpp>
 #include <engine/core/ResourceID.hpp>
 #include <engine/core/PathUtils.hpp>
 
@@ -83,7 +84,7 @@ std::filesystem::path AssetPathResolver::ResolveMesh(const AssetDesc& desc) {
     for (const wchar_t* extension : ModelExtensions) {
         std::filesystem::path candidate = path / (std::wstring(L"model") + extension);
         // A cooked build has no model sources, only their cooked files.
-        if (std::filesystem::exists(IsCooked() ? CookedPath(candidate) : candidate)) {
+        if (content::IsFile(IsCooked() ? CookedPath(candidate) : candidate)) {
             return candidate;
         }
     }

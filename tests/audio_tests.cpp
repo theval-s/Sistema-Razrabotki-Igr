@@ -9,6 +9,7 @@
 #include <engine/scene/SceneDocument.hpp>
 #include <engine/scripting/ScriptSubsystem.hpp>
 
+#include "content_fixture.hpp"
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -172,6 +173,24 @@ struct AudioTests : testing::Test {
         EXPECT_LT(middle, full * 0.6);
     }
 };
+
+TEST_F(AudioTests, ClipsPlayFromAMountedPackBufferedAndStreamed) {
+    std::vector<std::uint8_t> bytes;
+    ASSERT_TRUE(ReadBinaryFile(root / "tone.wav", bytes, error)) << error;
+    auto pack = std::make_shared<MemorySource>();
+    pack->Add("tone.wav", std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+    MountScope mount(root, pack);
+    std::filesystem::remove(root / "tone.wav");
+    for (const auto loading : {AudioLoadingMode::Buffered, AudioLoadingMode::Streamed}) {
+        SCOPED_TRACE(static_cast<int>(loading));
+        const auto voice = audio->Play2D(tone, {.loading = loading}, error);
+        ASSERT_TRUE(static_cast<bool>(voice)) << error;
+        EXPECT_GT(Energy(Mix(4800)), 1e-5);
+        EXPECT_TRUE(audio->Stop(voice));
+        (void)Mix();
+        Reconcile();
+    }
+}
 
 TEST_F(AudioTests, SharedClipOverlapsWithIndependentCursorsAndNaturalCompletion) {
     const auto first = audio->Play2D(cursor, {}, error);

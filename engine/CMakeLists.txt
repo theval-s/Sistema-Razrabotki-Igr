@@ -390,6 +390,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/assets/MaterialDefinition.hpp
     include/engine/core/CoreEvents.hpp
     include/engine/core/DefaultSubsystems.hpp
+    include/engine/core/Content.hpp
     include/engine/core/FileSystem.hpp
     include/engine/core/FrameContext.hpp
     include/engine/core/PathUtils.hpp
@@ -431,6 +432,8 @@ set(ENGINE_CORE_SOURCES
     src/assets/MaterialDefinition.cpp
     src/assets/MaterialImporter.cpp
     src/core/DefaultSubsystems.cpp
+    src/core/Content.cpp
+    src/core/ContentMounts.hpp
     src/core/FileSystem.cpp
     src/core/Subsystem.cpp
     src/physics/PhysicsComponents.cpp
