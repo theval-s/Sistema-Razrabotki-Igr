@@ -25,9 +25,20 @@ namespace engine {
 
 /// Output of the CPU phase (worker thread): file bytes, parsed geometry, compiled
 /// bytecode. Contains no shared registry state.
+/// Contiguous ranges of MeshCpu::vertices and ::indices drawn with one material slot.
+struct MeshSectionCpu {
+    uint32_t firstVertex = 0;
+    uint32_t vertexCount = 0;
+    uint32_t firstIndex = 0;
+    uint32_t indexCount = 0;
+    uint32_t materialSlot = 0;
+};
+
 struct MeshCpu {
     std::vector<ugly_utils::VertData> vertices;
-    std::vector<uint32_t> indices;
+    std::vector<uint32_t> indices; // into the whole vertex list
+    std::vector<MeshSectionCpu> sections;
+    std::vector<std::string> materialSlots;
     Aabb bounds;
     std::shared_ptr<const MeshGeometry> geometry;
 };
@@ -89,7 +100,7 @@ struct CpuPayload {
 /// Output of the GPU phase (main thread): handles of the resources that were created.
 /// Invalid members mean "this step produced nothing".
 struct GpuPayload {
-    MeshHandle mesh;
+    std::vector<MeshSection> meshSections;
     TextureHandle texture;
     ShaderHandle shader;
     MaterialHandle material;

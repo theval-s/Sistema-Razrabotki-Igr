@@ -41,8 +41,9 @@ void RenderExtractionSubsystem::LateUpdate(const FrameContext&) {
         const auto instance = assets.Peek(renderer.materialInstance);
         if (mesh && instance) {
             const auto override = GetEngine().GetEntityMaterialOverride(entity);
-            world.sceneItems.push_back({scene.GetWorldMatrix(entity), mesh->mesh,
-                override ? override : instance->instance});
+            for (const auto& section : mesh->sections)
+                world.sceneItems.push_back({scene.GetWorldMatrix(entity), section.mesh,
+                    override ? override : instance->instance});
         }
     });
 

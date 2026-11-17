@@ -111,8 +111,9 @@ void ViewportOverlaySubsystem::LateUpdate(const engine::FrameContext&) {
             const auto material = assets.Peek(renderer->materialInstance);
             if (mesh && material) {
                 const auto override = GetEngine().GetEntityMaterialOverride(entity);
-                world.selectedSceneItems.push_back({scene.GetWorldMatrix(entity), mesh->mesh,
-                                                    override ? override : material->instance});
+                for (const auto& section : mesh->sections)
+                    world.selectedSceneItems.push_back({scene.GetWorldMatrix(entity), section.mesh,
+                                                        override ? override : material->instance});
             }
         }
         if (const auto* renderer = scene.TryGetComponent<engine::SkinnedMeshRenderer>(entity)) {

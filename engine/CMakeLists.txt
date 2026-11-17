@@ -414,6 +414,7 @@ set(ENGINE_CORE_SOURCES
     src/assets/AssetCatalog.cpp
     src/assets/AssetSystem.cpp
     src/assets/AssimpMeshImporter.cpp
+    src/assets/ModelSlots.cpp
     src/assets/SkeletalAssetImporter.cpp
     src/assets/ShaderImporter.cpp
     src/assets/TextureImporter.cpp

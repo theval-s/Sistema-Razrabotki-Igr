@@ -23,7 +23,7 @@ namespace {
 template <typename T>
 T MakeValue(const AssetDesc& desc, const CpuPayload& cpu, const GpuPayload& gpu) {
     if constexpr (std::is_same_v<T, MeshAsset>) {
-        return MeshAsset{gpu.mesh, cpu.mesh.bounds, cpu.mesh.geometry};
+        return MeshAsset{gpu.meshSections, cpu.mesh.materialSlots, cpu.mesh.bounds, cpu.mesh.geometry};
     } else if constexpr (std::is_same_v<T, TextureAsset>) {
         return TextureAsset{gpu.texture};
     } else if constexpr (std::is_same_v<T, ShaderAsset>) {
@@ -416,7 +416,9 @@ void AssetSystem::UnloadAll() {
         materials_.ForEachReady([&](const MaterialAsset& value) { gpu.DestroyMaterial(value.material); });
         shaders_.ForEachReady([&](const ShaderAsset& value) { gpu.DestroyShader(value.shader); });
         textures_.ForEachReady([&](const TextureAsset& value) { gpu.DestroyTexture(value.texture); });
-        meshes_.ForEachReady([&](const MeshAsset& value) { gpu.DestroyMesh(value.mesh); });
+        meshes_.ForEachReady([&](const MeshAsset& value) {
+            for (const auto& section : value.sections) gpu.DestroyMesh(section.mesh);
+        });
         skinnedMeshes_.ForEachReady([&](const SkinnedMeshAsset& value) {
             for (const auto& section : value.sections) gpu.DestroyMesh(section.mesh);
         });

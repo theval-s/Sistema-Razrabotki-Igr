@@ -2,6 +2,7 @@
 
 #include <SimpleMath.h>
 #include <memory>
+#include <string>
 #include <vector>
 #include <cstdint>
 #include <engine/assets/AssetCatalog.hpp>
@@ -31,8 +32,15 @@ struct MeshGeometry {
     std::vector<uint32_t> indices;
 };
 
-struct MeshAsset {
+/// One draw of a mesh asset: the triangles of one material slot.
+struct MeshSection {
     MeshHandle mesh;
+    std::uint32_t materialSlot = 0;
+};
+
+struct MeshAsset {
+    std::vector<MeshSection> sections;
+    std::vector<std::string> materialSlots; // names, indexed by MeshSection::materialSlot
     Aabb bounds;
     std::shared_ptr<const MeshGeometry> geometry;
 };
