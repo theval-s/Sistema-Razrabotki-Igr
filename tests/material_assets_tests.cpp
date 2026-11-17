@@ -2,6 +2,7 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/assets/MaterialDefinition.hpp>
+#include <engine/core/FileSystem.hpp>
 #include <engine/core/FrameContext.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/engine.hpp>
@@ -741,6 +742,15 @@ TEST(MeshMaterialSlots, SectionsUseTheirSlotDefaultUnlessTheRendererHasAMaterial
     ASSERT_EQ(items.size(), 2u);
     EXPECT_EQ(items[0].materialInstance, items[1].materialInstance);
     EXPECT_EQ(items[0].materialInstance, assets.Peek(loaded->materials[1])->instance);
+
+    // A rescan gives the loaded mesh the materials its edited meta names.
+    std::string text;
+    ASSERT_TRUE(SerializeAssetMetadata({meshReference.id, CatalogAssetKind::Mesh, false, {std::nullopt, redReference}},
+                                       text, error)) << error;
+    ASSERT_TRUE(WriteFileAtomic(AssetMetadataPath(fixture.root / "slots.gltf"), text, error)) << error;
+    (void)assets.RescanCatalog(error);
+    EXPECT_EQ(loaded->materials[0], assets.RequestMaterialInstance(BuiltinAssets::DefaultMaterialInstance));
+    EXPECT_EQ(loaded->materials[1], assets.RequestMaterialInstance(redReference));
     engine.Shutdown();
 }
 

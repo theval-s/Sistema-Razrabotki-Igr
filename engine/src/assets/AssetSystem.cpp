@@ -140,8 +140,7 @@ void AssetSystem::Update(const FrameContext& frame) {
     }
     // Jobs that are complete but wait for dependencies are only touched here, on this thread.
     if (pendingCatalog_ && std::ranges::all_of(inFlight_, [](const auto& job) { return job->GetIsComplete(); })) {
-        catalog_ = std::move(*pendingCatalog_);
-        pendingCatalog_.reset();
+        ApplyCatalog(std::move(*pendingCatalog_));
     }
 }
 
@@ -150,8 +149,7 @@ bool AssetSystem::RescanCatalog(std::string& error) {
     const bool clean = next.Scan(AssetPathResolver::GetGameRoot(), AssetPathResolver::GetRoot() / "engine", error);
     catalogError_ = error;
     if (std::ranges::all_of(inFlight_, [](const auto& job) { return job->GetIsComplete(); })) {
-        catalog_ = std::move(next);
-        pendingCatalog_.reset();
+        ApplyCatalog(std::move(next));
     } else {
         pendingCatalog_ = std::move(next);
     }
@@ -422,6 +420,15 @@ std::vector<AssetHandle<MaterialInstanceAsset>> AssetSystem::RequestSlotMaterial
         materials.push_back(material ? material : RequestMaterialInstance(BuiltinAssets::DefaultMaterialInstance));
     }
     return materials;
+}
+
+void AssetSystem::ApplyCatalog(AssetCatalog&& catalog) {
+    catalog_ = std::move(catalog);
+    pendingCatalog_.reset();
+    // Unchanged slots get the handles they have, so only edited ones reload.
+    meshes_.ForEachReadyRecord([this](const auto& record) {
+        record.value->materials = RequestSlotMaterials(record.desc, record.value->materialSlots.size());
+    });
 }
 
 void AssetSystem::UnloadAll() {

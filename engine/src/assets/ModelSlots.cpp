@@ -12,17 +12,20 @@ bool IsTriangleMesh(const aiMesh* mesh) {
            (mesh->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) != 0;
 }
 
-unsigned BaseColorUvChannel(const aiMaterial& material) {
+BaseColorTexture FindBaseColorTexture(const aiMaterial& material) {
+    BaseColorTexture result;
     for (const aiTextureType type : {aiTextureType_BASE_COLOR, aiTextureType_DIFFUSE}) {
-        if (material.GetTextureCount(type) == 0) continue;
+        aiString path;
+        if (material.GetTexture(type, 0, &path) != AI_SUCCESS || path.length == 0) continue;
+        result.path = path.C_Str();
         int channel = 0;
         if (aiGetMaterialInteger(&material, AI_MATKEY_UVWSRC(type, 0), &channel) == AI_SUCCESS && channel > 0 &&
             channel < AI_MAX_NUMBER_OF_TEXTURECOORDS) {
-            return static_cast<unsigned>(channel);
+            result.uvChannel = static_cast<unsigned>(channel);
         }
-        return 0;
+        break;
     }
-    return 0;
+    return result;
 }
 
 ModelSlots CollectModelSlots(const aiScene& scene) {
@@ -40,7 +43,7 @@ ModelSlots CollectModelSlots(const aiScene& scene) {
         if (const aiMaterial* source = scene.mMaterials[material]) {
             aiString name;
             if (source->Get(AI_MATKEY_NAME, name) == AI_SUCCESS) slot.name = name.C_Str();
-            slot.uvChannel = BaseColorUvChannel(*source);
+            slot.texture = FindBaseColorTexture(*source);
         }
         if (slot.name.empty()) slot.name = std::format("Slot {}", result.slots.size());
         result.slotOfMaterial[material] = static_cast<int>(result.slots.size());

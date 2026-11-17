@@ -98,6 +98,7 @@ public:
     [[nodiscard]] const AssetCatalog& GetCatalog() const noexcept { return catalog_; }
     /// Rebuilds the catalog from disk.
     /// Importer jobs read the catalog, so they are swapped in update once none read.
+    /// Loaded meshes then take the slot materials their metas name.
     /// A failed scan keeps the previous entries, false and `error` then say why
     bool RescanCatalog(std::string& error);
     /// Why the last scan was not clean; empty when it was.
@@ -181,6 +182,7 @@ private:
     DependencyState ResolveDependencies(LoadJob& job, bool wait);
     /// A mesh's default material per slot, from its metadata; the engine default where it has none.
     std::vector<AssetHandle<MaterialInstanceAsset>> RequestSlotMaterials(const AssetDesc& desc, std::size_t slots);
+    void ApplyCatalog(AssetCatalog&& catalog);
     bool ReloadReady(LoadJob& job, std::string& error);
     template <typename T>
     entt::resource<T> FinishTyped(const LoadJob& job, AssetTable<T>& table, AssetHandle<T> handle, uint64_t frameIndex);

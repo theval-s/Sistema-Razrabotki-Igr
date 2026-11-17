@@ -378,6 +378,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/assets/AssetPathResolver.hpp
     include/engine/assets/AssetSystem.hpp
     include/engine/assets/AssetTable.hpp
+    include/engine/assets/ModelImport.hpp
     include/engine/assets/AssetTypes.hpp
     include/engine/assets/AssetPipeline.hpp
     include/engine/assets/MaterialDefinition.hpp
@@ -415,6 +416,7 @@ set(ENGINE_CORE_SOURCES
     src/assets/AssetSystem.cpp
     src/assets/AssimpMeshImporter.cpp
     src/assets/ModelSlots.cpp
+    src/assets/ModelImport.cpp
     src/assets/SkeletalAssetImporter.cpp
     src/assets/ShaderImporter.cpp
     src/assets/TextureImporter.cpp

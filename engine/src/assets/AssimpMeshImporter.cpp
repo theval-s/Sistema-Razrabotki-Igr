@@ -30,8 +30,7 @@ using DirectX::SimpleMath::Vector4;
 // the first row as V=0, and the parser emitted every fan triangle as (i, 0, i+1), i.e. with
 // the opposite winding to the file. Assimp hands the file's own conventions over unless
 // asked, which rendered every texture upside-down and every surface back-to-front.
-constexpr unsigned int ImportFlags = aiProcess_Triangulate | aiProcess_PreTransformVertices |
-                                     aiProcess_GenSmoothNormals | aiProcess_SortByPType |
+constexpr unsigned int ImportFlags = detail::StaticMeshStructureFlags | aiProcess_GenSmoothNormals |
                                      aiProcess_FlipUVs | aiProcess_FlipWindingOrder |
                                      static_cast<unsigned int>(aiProcess_GenBoundingBoxes);
 
@@ -92,7 +91,7 @@ bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/
                 mesh.bounds.min = Vector3::Min(mesh.bounds.min, bounds.min);
                 mesh.bounds.max = Vector3::Max(mesh.bounds.max, bounds.max);
             }
-            const int channel = detail::UvChannelFor(*source, model.slots[slot].uvChannel);
+            const int channel = detail::UvChannelFor(*source, model.slots[slot].texture.uvChannel);
             missingUvs = missingUvs || channel < 0;
             for (uint32_t index = 0; index < source->mNumVertices; ++index) {
                 const aiVector3D& position = source->mVertices[index];

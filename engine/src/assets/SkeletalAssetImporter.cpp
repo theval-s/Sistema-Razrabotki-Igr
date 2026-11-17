@@ -528,7 +528,7 @@ SkinnedMeshCpu BuildMesh(const aiScene& scene, const SceneSkeleton& skeleton, co
             binding->inverseBind.push_back(Matrix::Identity);
             std::vector<bool> used(binding->joints.size(), false);
             const aiMaterial* material = mesh->mMaterialIndex < scene.mNumMaterials ? scene.mMaterials[mesh->mMaterialIndex] : nullptr;
-            const int uvChannel = detail::UvChannelFor(*mesh, material ? detail::BaseColorUvChannel(*material) : 0);
+            const int uvChannel = detail::UvChannelFor(*mesh, material ? detail::FindBaseColorTexture(*material).uvChannel : 0);
             section.vertices.resize(mesh->mNumVertices);
             for (unsigned v = 0; v < mesh->mNumVertices; ++v) {
                 auto& weights = influences[v];
