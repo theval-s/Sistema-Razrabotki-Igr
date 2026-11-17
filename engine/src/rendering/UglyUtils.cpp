@@ -8,14 +8,21 @@ namespace ugly_utils {
 
 MeshHandle FromRawMesh(RenderingResourceManager& resourceManager, const RawMesh& rawMesh) {
     auto vertexBuffer = resourceManager.CreateVertexBuffer<VertData>(rawMesh.vertexes);
-    auto indexBuffer = resourceManager.CreateIndexBuffer<uint32_t>(rawMesh.indicies);
-    VertexLayout layout;
-    layout.Add("POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0);
-    layout.Add("NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 16);
-    layout.Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 16 + 12);
+    BufferHandle indexBuffer;
+    try {
+        indexBuffer = resourceManager.CreateIndexBuffer<uint32_t>(rawMesh.indicies);
+        VertexLayout layout;
+        layout.Add("POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0);
+        layout.Add("NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 16);
+        layout.Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 16 + 12);
 
-    return resourceManager.CreateMesh(vertexBuffer, indexBuffer, std::move(layout),
-                                      static_cast<uint32_t>(rawMesh.indicies.size()));
+        return resourceManager.CreateMesh(vertexBuffer, indexBuffer, std::move(layout),
+                                          static_cast<uint32_t>(rawMesh.indicies.size()));
+    } catch (...) {
+        resourceManager.DestroyBuffer(indexBuffer);
+        resourceManager.DestroyBuffer(vertexBuffer);
+        throw;
+    }
 }
 
 RawMesh CreateSphere(const float size) {

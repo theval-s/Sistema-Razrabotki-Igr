@@ -2,7 +2,6 @@
 
 #include <engine/engine.hpp>
 
-#include <engine/core/Log.hpp>
 #include <stdexcept>
 
 namespace engine {
@@ -13,13 +12,8 @@ std::string_view RenderingSubsystem::GetName() const {
 
 bool RenderingSubsystem::Initialize() {
     surface_ = GetEngine().GetSurface();
-    if (!surface_.IsValid()) {
-        log::Render().error("The host gave the engine no window to render into");
-        return false;
-    }
+    resizePending_ = false;
     if (!renderer_.Initialize(surface_, GetEngine().GetConfig().graphicsDebugLayer)) {
-        log::Render().error("The renderer could not be created for {}x{}",
-                      surface_.width, surface_.height);
         return false;
     }
     GetEngine().GetEvents().sink<SurfaceChangedEvent>().connect<&RenderingSubsystem::OnSurfaceChanged>(*this);
@@ -30,6 +24,8 @@ void RenderingSubsystem::Shutdown() {
     ClearHostOverlayCallbacks();
     ClearOverlayCallbacks();
     GetEngine().GetEvents().sink<SurfaceChangedEvent>().disconnect<&RenderingSubsystem::OnSurfaceChanged>(*this);
+    resizePending_ = false;
+    renderer_.Shutdown();
 }
 
 void RenderingSubsystem::OnSurfaceChanged(const SurfaceChangedEvent& event) {
@@ -38,21 +34,27 @@ void RenderingSubsystem::OnSurfaceChanged(const SurfaceChangedEvent& event) {
 }
 
 void RenderingSubsystem::Render(const FrameContext& frame) {
-    // A minimized window has no drawable area. Keep the pending resize for restoration.
-    if (surface_.IsValid() && resizePending_) {
-        if (beforeHostOverlayResize_) beforeHostOverlayResize_();
-        if (beforeOverlayResize_) beforeOverlayResize_();
-        if (renderer_.Reinitialize(surface_)) resizePending_ = false;
+    struct ClearDebugDraw {
+        DebugDraw& draw;
+        ~ClearDebugDraw() { draw.Clear(); }
+    } clear{GetWorld().debugDraw};
+    if (resizePending_ && renderer_.GetDiagnostics().lifecycle != RenderingLifecycle::Failed) {
+        if (renderer_.Reinitialize(surface_, [this] {
+            if (beforeHostOverlayResize_) beforeHostOverlayResize_();
+            if (beforeOverlayResize_) beforeOverlayResize_();
+        })) resizePending_ = false;
     }
-    // A failed resize is retried next frame; never draw with missing or mismatched resources.
     if (surface_.IsValid() && !resizePending_) {
         renderer_.RenderFrame(frame, [this](RenderingContext& context, const FrameContext& current) {
             if (hostOverlay_) hostOverlay_(context, current);
             if (overlay_) overlay_(context, current);
         });
     }
-    GetWorld().debugDraw.Clear();
 }
+
+RenderingDiagnostics RenderingSubsystem::GetDiagnostics() const { return renderer_.GetDiagnostics(); }
+RenderDebugView RenderingSubsystem::GetDebugView() const noexcept { return renderer_.GetDebugView(); }
+bool RenderingSubsystem::SetDebugView(RenderDebugView view) noexcept { return renderer_.SetDebugView(view); }
 
 RenderingSystem& RenderingSubsystem::GetRendering() noexcept {
     return renderer_;

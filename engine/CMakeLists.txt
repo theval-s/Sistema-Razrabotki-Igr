@@ -65,6 +65,8 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/rendering/FPSCamera.hpp
     include/engine/rendering/GraphicalState.hpp
     include/engine/rendering/MaterialDrawList.hpp
+    include/engine/rendering/RenderDebugView.hpp
+    include/engine/rendering/RenderingDiagnostics.hpp
     include/engine/rendering/passes/GBufferPass.hpp
     include/engine/rendering/passes/LightPass.hpp
     include/engine/rendering/passes/PresentPass.hpp

@@ -23,6 +23,11 @@ public:
     [[nodiscard]] RenderingContext& GetContext();
     [[nodiscard]] RenderingResourceManager& GetResourceManager();
     [[nodiscard]] RenderWorld& GetWorld();
+    /// Owned copy of renderer status, queryable after Engine::Initialize() fails.
+    /// Same engine-thread and lifecycle contract as RenderingSystem.
+    [[nodiscard]] RenderingDiagnostics GetDiagnostics() const;
+    [[nodiscard]] RenderDebugView GetDebugView() const noexcept;
+    [[nodiscard]] bool SetDebugView(RenderDebugView view) noexcept;
     /// The surface this subsystem renders into, as handed by the host.
     [[nodiscard]] const NativeSurface& GetSurface() const noexcept;
 

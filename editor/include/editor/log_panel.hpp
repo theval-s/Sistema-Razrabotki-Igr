@@ -7,6 +7,7 @@
 
 class QAction;
 class QMenu;
+class QLineEdit;
 class QPlainTextEdit;
 class QTableView;
 
@@ -32,6 +33,10 @@ public:
     /// Add to engine::log::Sinks() to show every channel's messages here. Keeps working after the panel is gone.
     [[nodiscard]] const std::shared_ptr<LogSink>& sink() const noexcept { return sink_; }
 
+    /// Reveal the diagnostic without remembered text/source/severity filters hiding it.
+    /// If its log entry was dropped/cleared, keep the owned structured detail visible.
+    void revealDiagnostic(const QString& search, const QString& detail);
+
 private:
     QWidget* buildToolBar();
     void setupHeader();
@@ -53,6 +58,7 @@ private:
     QAction* clear_ = nullptr;
     QAction* follow_ = nullptr;
     QMenu* sources_menu_ = nullptr;
+    QLineEdit* search_ = nullptr;
     /// One per level group, in the toolbar's order.
     std::vector<QAction*> level_actions_;
 };

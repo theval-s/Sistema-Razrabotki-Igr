@@ -39,10 +39,12 @@ struct ENGINE_API RenderingContext {
     RenderingContext();
     ~RenderingContext();
     
-    /// Device and swap chain onto a host-owned window; false when there is nothing to render into.
+    /// False only for an unavailable surface; native/state failures throw RenderingException.
     bool Initialize(const NativeSurface& surface, bool debugLayer);
-    /// Reinit everything for new differently sized surface
+    /// False only for an unavailable surface; resize failure throws RenderingException.
     bool Reinitialize(const NativeSurface& surface) const;
+    /// Idempotent, safe after partial initialization; clears bindings before releasing owners.
+    void Shutdown() noexcept;
 
     [[nodiscard]] RenderingResourceManager& GetResourceManager();
     [[nodiscard]] ID3D11Device* GetDevice() const;
@@ -82,10 +84,11 @@ struct ENGINE_API RenderingContext {
         UpdateBuffer(buffer, reinterpret_cast<const void*>(&data), sizeof(T));
     }
 
+    /// Throws RenderingException on FAILED HRESULT, with device removal reason if available.
+    /// Successful DXGI status codes are not fatal errors.
     void Present() const;
 
 private:
-    static void checkResult(HRESULT result, const char* message);
     bool CreateDeviceAndSwapChain(HWND outputWindow, uint32_t width, uint32_t height, bool debugLayer);
 
     ComPtr<IDXGISwapChain> swapChain_;

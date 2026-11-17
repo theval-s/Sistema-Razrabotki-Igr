@@ -11,6 +11,7 @@
 #include <engine/assets/AssetPipeline.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
+#include "../rendering/RenderingFailureUtils.hpp"
 
 namespace engine {
 namespace {
@@ -59,7 +60,7 @@ private:
 } // namespace
 
 bool TextureImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPayload& payload,
-                              std::string& error) const {
+                              std::string& error) const try {
     if (device == nullptr) {
         error = "no device yet: a texture cannot be decoded before the rendering subsystem is up";
         return false;
@@ -108,16 +109,32 @@ bool TextureImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPa
     }
 
     if (FAILED(res) || !view) {
-        error = std::format("decoding '{}' failed with {:08x}", ToUtf8(path), static_cast<unsigned>(res));
-        return false;
+        RenderingFailure failure{
+            .operation = _wcsicmp(path.extension().c_str(), L".dds") == 0 ? "CreateDDSTextureFromMemory" : "CreateWICTextureFromMemoryEx",
+            .summary = "Cannot decode/upload texture",
+            .detail = "Texture loader did not produce a usable shader resource view.",
+            .path = path, .nativeError = static_cast<std::int64_t>(FAILED(res) ? res : E_FAIL)};
+        const auto reason = device->GetDeviceRemovedReason();
+        if (FAILED(reason)) failure.deviceRemovalReason = static_cast<std::int64_t>(reason);
+        throw RenderingException(std::move(failure));
     }
 
     payload.texture.view = std::move(view);
     return true;
+} catch (const RenderingException& e) {
+    error = rendering_failure::Format(e.GetFailure());
+    return false;
+} catch (const std::exception& e) {
+    error = e.what();
+    return false;
+} catch (...) {
+    error = "TextureImporter: unknown read failure";
+    return false;
 }
 
 bool TextureImporter::UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
-                                GpuPayload& result, std::string& error) const {
+                                GpuPayload& result, std::string& error) const try {
+    if (!transfer.resources) { error = "TextureImporter: missing resource manager"; return false; }
     if (payload.kind != CpuPayload::Kind::Texture) {
         error = "TextureImporter: payload is not a decoded texture";
         return false;
@@ -128,6 +145,15 @@ bool TextureImporter::UploadGpu(const UploadTransfer& transfer, const CpuPayload
     ComPtr<ID3D11ShaderResourceView> view = payload.texture.view;
     result.texture = transfer.resources->RegisterTexture(Texture(std::move(view)));
     return true;
+} catch (const RenderingException& e) {
+    error = rendering_failure::Format(e.GetFailure());
+    return false;
+} catch (const std::exception& e) {
+    error = e.what();
+    return false;
+} catch (...) {
+    error = "TextureImporter: unknown upload failure";
+    return false;
 }
 
 } // namespace engine

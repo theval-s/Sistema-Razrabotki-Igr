@@ -17,7 +17,13 @@ namespace engine {
 struct RenderingContext;
 
 struct ENGINE_API RenderingResourceManager {
+    /// GPU creation/compilation returns usable handles or throws RenderingException.
+    /// Invalid material/reference validation retains its existing empty/false contract.
+    /// Destroy operations are safe for empty/stale handles and do not throw.
     void Initialize(ID3D11Device* device);
+    /// Releases all owned GPU objects/layouts and the device; invalidates all handles.
+    /// Call only after consumers and bindings have been detached.
+    void Shutdown() noexcept;
     TextureHandle CreateTexture(const TextureDesc& desc,
                                 std::span<const D3D11_SUBRESOURCE_DATA> data = {});
     TextureHandle RegisterTexture(Texture&& texture);
@@ -30,10 +36,11 @@ struct ENGINE_API RenderingResourceManager {
     ShaderHandle CompileShader(const std::wstring& fileName, ShaderType shaderType,
                                const ShaderCompileOptions& options = {});
     /// Uploads a CPU-compiled shader to the device and registers it; main thread only.
-    /// Empty handle when the device refused the bytecode.
+    /// Throws RenderingException with the compiled shader's source/variant on failure.
     ShaderHandle RegisterCompiledShader(const CompiledShader& compiled);
     bool DestroyShader(ShaderHandle shaderHandle);
-    /// Compiles declared hooks. Empty handle on failure.
+    /// Compiles declared hooks. Empty for invalid descriptors; compilation/device failures
+    /// throw RenderingException after releasing every partially acquired shader.
     MaterialHandle CreateMaterial(const MaterialDesc& desc);
     /// Main-thread upload path for the asset importer: no file I/O or compilation.
     /// Takes ownership of the shader handles on success; they must not be shared.
@@ -100,8 +107,6 @@ struct ENGINE_API RenderingResourceManager {
     friend ShaderContext;
 
 private:
-    static void checkResult(HRESULT result, const char* message);
-
     HandleMap<Texture> textures_{};
     HandleMap<GpuBuffer> buffers_{};
     HandleMap<ShaderContext> shaders_{};

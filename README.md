@@ -28,6 +28,8 @@ For CMake to find Qt properly you might need to also add an environment variable
 Material and material-instance JSON formats, editor serialization API, and streaming
 examples: [material asset contract](docs/material-assets.md).
 
+Viewport status, render debug views, logs and developer APIs: [rendering diagnostics](docs/rendering-diagnostics.md).
+
 Code-only scene saving/loading, UUID sidecars, asset scope, render extraction and
 metadata generation: [scene and asset guide](docs/scene-assets.md).
 

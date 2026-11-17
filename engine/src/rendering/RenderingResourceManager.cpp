@@ -1,19 +1,35 @@
 #include <engine/rendering/RenderingResourceManager.hpp>
 
-#include <cstdlib>
+#include "RenderingFailureUtils.hpp"
+#include <climits>
 #include <utility>
-#include <engine/core/Log.hpp>
 
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/core/PathUtils.hpp>
 
 namespace engine {
 void RenderingResourceManager::Initialize(ID3D11Device* device) {
+    rendering_failure::RequireDevice(device, "InitializeResourceManager");
     device_ = device;
+}
+
+void RenderingResourceManager::Shutdown() noexcept {
+    materialInstances_.Clear();
+    materials_.Clear();
+    meshes_.Clear();
+    shaders_.Clear();
+    buffers_.Clear();
+    textures_.Clear();
+    inputLayoutCache_.Clear();
+    device_.Reset();
 }
 
 TextureHandle RenderingResourceManager::CreateTexture(
     const TextureDesc& desc, const std::span<const D3D11_SUBRESOURCE_DATA> data) {
+    rendering_failure::RequireDevice(device_.Get(), "CreateTexture2D");
+    if (!data.empty() && (desc.mipLevels == 0 ||
+        data.size() != static_cast<std::size_t>(desc.mipLevels) * desc.arraySize))
+        rendering_failure::Check(E_INVALIDARG, "CreateTexture2D", device_.Get(), "Initial subresource count does not match mip levels and array size.");
     const D3D11_TEXTURE2D_DESC dxDesc{
         .Width = desc.width,
         .Height = desc.height,
@@ -37,25 +53,34 @@ TextureHandle RenderingResourceManager::CreateTexture(
         &dxDesc,
         data.empty() ? nullptr : data.data(),
         &texture.resource_);
-    checkResult(res, "CreateTexture2D");
+    const auto checkTexture = [&](HRESULT hr, const char* operation) {
+        rendering_failure::Check(hr, operation, device_.Get(), std::format(
+            "Texture {}x{}, mips={}, array={}, format={}, samples={}, bindFlags=0x{:X}; view formats SRV={}, RTV={}, DSV={}, UAV={}",
+            desc.width, desc.height, desc.mipLevels, desc.arraySize, static_cast<unsigned>(desc.format),
+            desc.sampleCount, desc.GetBindFlags(), static_cast<unsigned>(desc.srvFormat),
+            static_cast<unsigned>(desc.rtvFormat), static_cast<unsigned>(desc.dsvFormat), static_cast<unsigned>(desc.uavFormat)));
+    };
+    checkTexture(res, "CreateTexture2D");
 
     if (HasFlag(desc.usage, TextureUsage::ShaderResource)) {
-        checkResult(texture.CreateDefaultSRV(device_.Get()), "texture.CreateDefaultSRV");
+        checkTexture(texture.CreateDefaultSRV(device_.Get()), "CreateShaderResourceView");
     }
     if (HasFlag(desc.usage, TextureUsage::RenderTarget)) {
-        checkResult(texture.CreateDefaultRTV(device_.Get()), "texture.CreateDefaultRTV");
+        checkTexture(texture.CreateDefaultRTV(device_.Get()), "CreateRenderTargetView");
     }
     if (HasFlag(desc.usage, TextureUsage::DepthStencil)) {
-        checkResult(texture.CreateDefaultDSV(device_.Get()), "texture.CreateDefaultDSV");
+        checkTexture(texture.CreateDefaultDSV(device_.Get()), "CreateDepthStencilViews");
     }
     if (HasFlag(desc.usage, TextureUsage::UnorderedAccess)) {
-        checkResult(texture.CreateDefaultUAV(device_.Get()), "texture.CreateDefaultUAV");
+        checkTexture(texture.CreateDefaultUAV(device_.Get()), "CreateUnorderedAccessView");
     }
 
     return textures_.Add(std::move(texture));
 }
 
 TextureHandle RenderingResourceManager::RegisterTexture(Texture&& texture) {
+    if (!texture.resource_ && !texture.srv_ && !texture.rtv_ && !texture.dsv_ && !texture.uav_)
+        rendering_failure::Check(E_INVALIDARG, "RegisterTexture", device_.Get(), "Texture has no resource or usable view.");
     return textures_.Add(std::move(texture));
 }
 
@@ -93,19 +118,12 @@ ShaderHandle RenderingResourceManager::CompileShader(const std::wstring& fileNam
     desc.path = AssetPathResolver::DefaultPath(ToUtf8(fileName), AssetKind::Shader);
     auto shader = ShaderContext::CompileShader(device_.Get(), inputLayoutCache_,
                                                 AssetPathResolver::ResolveShader(desc), shaderType, options);
-    if (!shader) {
-        log::Render().critical("Failed to compile shader");
-        std::exit(1);
-    }
-    return shaders_.Add(std::move(*shader));
+    return shaders_.Add(std::move(shader));
 }
 
 ShaderHandle RenderingResourceManager::RegisterCompiledShader(const CompiledShader& compiled) {
     auto shader = ShaderContext::FinalizeOnDevice(compiled, device_.Get(), inputLayoutCache_);
-    if (!shader) {
-        return ShaderHandle{};
-    }
-    return shaders_.Add(std::move(*shader));
+    return shaders_.Add(std::move(shader));
 }
 
 bool RenderingResourceManager::DestroyShader(const ShaderHandle shaderHandle) {
@@ -131,37 +149,34 @@ MaterialHandle RenderingResourceManager::CreateMaterial(const MaterialDesc& desc
 
     ShaderSet shaders{};
     auto compile = [&](MaterialHook hook, ShaderType type, const char* define, ShaderHandle& target, bool skinned = false) {
-        if (!HasHook(desc.hooks, hook)) return true;
+        if (!HasHook(desc.hooks, hook)) return;
         const auto path = AssetPathResolver::ResolveShader({
             .path = AssetPathResolver::DefaultPath(ToUtf8(desc.shaderFile), AssetKind::Shader)});
         ShaderCompileOptions options{.defines = {{define, "1"}, {"MATERIAL_HAS_HOOK", "1"}}};
         if (skinned) options.defines.push_back({"ENGINE_SKINNED", "1"});
         auto compiled = ShaderContext::CompileCpu(path, type, options);
-        if (!compiled) return false;
-        target = RegisterCompiledShader(*compiled);
-        return static_cast<bool>(target);
+        target = RegisterCompiledShader(compiled);
     };
-    if (!compile(MaterialHook::ShadowVS, ShaderType::Vertex, "MATERIAL_SHADOW_VS", shaders.shadowPassVS) ||
-        !compile(MaterialHook::GBufferVS, ShaderType::Vertex, "MATERIAL_GBUFFER_VS", shaders.gBufferPassVS) ||
-        !compile(MaterialHook::GBufferPS, ShaderType::Pixel, "MATERIAL_GBUFFER_PS", shaders.gBufferPassPS) ||
-        !compile(MaterialHook::GBufferVS, ShaderType::Vertex, "MATERIAL_GBUFFER_VS", shaders.skinnedGBufferPassVS, true) ||
-        !compile(MaterialHook::ShadowVS, ShaderType::Vertex, "MATERIAL_SHADOW_VS", shaders.skinnedShadowPassVS, true)) {
+    const auto rollback = [&] {
         shaders_.Remove(shaders.shadowPassVS);
         shaders_.Remove(shaders.gBufferPassVS);
         shaders_.Remove(shaders.gBufferPassPS);
         shaders_.Remove(shaders.skinnedGBufferPassVS);
         shaders_.Remove(shaders.skinnedShadowPassVS);
-        return {};
+    };
+    try {
+        compile(MaterialHook::ShadowVS, ShaderType::Vertex, "MATERIAL_SHADOW_VS", shaders.shadowPassVS);
+        compile(MaterialHook::GBufferVS, ShaderType::Vertex, "MATERIAL_GBUFFER_VS", shaders.gBufferPassVS);
+        compile(MaterialHook::GBufferPS, ShaderType::Pixel, "MATERIAL_GBUFFER_PS", shaders.gBufferPassPS);
+        compile(MaterialHook::GBufferVS, ShaderType::Vertex, "MATERIAL_GBUFFER_VS", shaders.skinnedGBufferPassVS, true);
+        compile(MaterialHook::ShadowVS, ShaderType::Vertex, "MATERIAL_SHADOW_VS", shaders.skinnedShadowPassVS, true);
+        const auto result = RegisterMaterial(shaders, desc.defaults);
+        if (!result) rollback();
+        return result;
+    } catch (...) {
+        rollback();
+        throw;
     }
-    const auto result = RegisterMaterial(shaders, desc.defaults);
-    if (!result) {
-        shaders_.Remove(shaders.shadowPassVS);
-        shaders_.Remove(shaders.gBufferPassVS);
-        shaders_.Remove(shaders.gBufferPassPS);
-        shaders_.Remove(shaders.skinnedGBufferPassVS);
-        shaders_.Remove(shaders.skinnedShadowPassVS);
-    }
-    return result;
 }
 
 MaterialHandle RenderingResourceManager::RegisterMaterial(const ShaderSet& shaders, const MaterialParameters& defaults) {
@@ -207,8 +222,9 @@ bool RenderingResourceManager::DestroyMaterial(const MaterialHandle handle) {
 MaterialInstanceHandle RenderingResourceManager::CreateMaterialInstance(const MaterialHandle handle) {
     auto* material = materials_.TryGet(handle);
     if (!material) return {};
+    const auto instance = materialInstances_.Add(MaterialInstance{.material = handle});
     ++material->instanceCount;
-    return materialInstances_.Add(MaterialInstance{.material = handle});
+    return instance;
 }
 
 bool RenderingResourceManager::SetMaterialInstanceOverrides(const MaterialInstanceHandle handle,
@@ -287,6 +303,9 @@ const MaterialInstance* RenderingResourceManager::TryGetMaterialInstance(const M
 }
 
 BufferHandle RenderingResourceManager::CreateBuffer(const BufferDesc& desc, const void* initialData) {
+    rendering_failure::RequireDevice(device_.Get(), "CreateBuffer");
+    if (desc.size == 0 || (desc.type == BufferType::Constant && desc.size > UINT_MAX - 15u))
+        rendering_failure::Check(E_INVALIDARG, "CreateBuffer", device_.Get(), "Invalid buffer byte size: " + std::to_string(desc.size));
     D3D11_BUFFER_DESC dxDesc{};
     dxDesc.ByteWidth = desc.size;
 
@@ -335,20 +354,15 @@ BufferHandle RenderingResourceManager::CreateBuffer(const BufferDesc& desc, cons
         initialData ? &data : nullptr,
         &result.buffer);
 
-    checkResult(res, "CreateBuffer");
+    rendering_failure::Check(res, "CreateBuffer", device_.Get(), std::format(
+        "Buffer size={}, allocated size={}, stride={}, type={}, usage={}, bindFlags=0x{:X}",
+        desc.size, dxDesc.ByteWidth, desc.stride, static_cast<unsigned>(desc.type),
+        static_cast<unsigned>(desc.usage), dxDesc.BindFlags));
     return buffers_.Add(std::move(result));
 }
 
 bool RenderingResourceManager::DestroyBuffer(const BufferHandle bufferHandle) {
     return buffers_.Remove(bufferHandle);
-}
-
-void RenderingResourceManager::checkResult(const HRESULT result, const char* message) {
-    if (FAILED(result)) {
-        // ass error handling, needs a solution
-        log::Render().critical("{} {}", message, result);
-        std::exit(1);
-    }
 }
 
 }

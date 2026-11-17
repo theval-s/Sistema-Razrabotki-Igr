@@ -33,19 +33,18 @@ void PatchShadowVertex(inout MaterialVertex v) { v.position.xyz += v.normal; }
                 const auto compiled = hook
                     ? ShaderContext::CompileSource(hookSource, ShaderPath(), ShaderType::Vertex, options)
                     : ShaderContext::CompileCpu(ShaderPath(), ShaderType::Vertex, options);
-                ASSERT_TRUE(compiled);
                 D3D11_SHADER_INPUT_BIND_DESC binding{};
-                const auto bound = compiled->reflection->GetResourceBindingDescByName("EngineSkinning", &binding);
+                const auto bound = compiled.reflection->GetResourceBindingDescByName("EngineSkinning", &binding);
                 EXPECT_EQ(SUCCEEDED(bound), skinned);
                 if (!skinned) continue;
                 EXPECT_EQ(binding.BindPoint, 9u);
                 D3D11_SHADER_BUFFER_DESC buffer{};
-                ASSERT_TRUE(SUCCEEDED(compiled->reflection->GetConstantBufferByName("EngineSkinning")->GetDesc(&buffer)));
+                ASSERT_TRUE(SUCCEEDED(compiled.reflection->GetConstantBufferByName("EngineSkinning")->GetDesc(&buffer)));
                 EXPECT_EQ(buffer.Size, sizeof(SkinningBufferData));
                 bool indices = false, weights = false;
-                for (UINT i = 0; i < compiled->desc.InputParameters; ++i) {
+                for (UINT i = 0; i < compiled.desc.InputParameters; ++i) {
                     D3D11_SIGNATURE_PARAMETER_DESC input{};
-                    ASSERT_TRUE(SUCCEEDED(compiled->reflection->GetInputParameterDesc(i, &input)));
+                    ASSERT_TRUE(SUCCEEDED(compiled.reflection->GetInputParameterDesc(i, &input)));
                     if (std::strcmp(input.SemanticName, "BLENDINDICES") == 0) {
                         indices = true;
                         EXPECT_EQ(input.ComponentType, D3D_REGISTER_COMPONENT_UINT32);
@@ -83,7 +82,7 @@ TEST_F(SkinningWarpTest, DrawRoutingAndReplacementOwnBothVertexVariants) {
         ShaderCompileOptions options{.defines = {{stage, "1"}}};
         if (skinned) options.defines.push_back({"ENGINE_SKINNED", "1"});
         const auto cpu = ShaderContext::CompileCpu(ShaderPath(), ShaderType::Vertex, options);
-        return cpu ? manager.RegisterCompiledShader(*cpu) : ShaderHandle{};
+        return manager.RegisterCompiledShader(cpu);
     };
     const auto rigidVS = compile("MATERIAL_GBUFFER_VS", false);
     const auto skinVS = compile("MATERIAL_GBUFFER_VS", true);
@@ -135,12 +134,11 @@ float4 PSMain() : SV_TARGET {
     SkinVertex(v, uint4(0, 1, 0, 0), float4(0.25, 0.75, 0, 0));
     return float4(v.normal, 1);
 })", ShaderPath(), ShaderType::Pixel, {.defines = {{"ENGINE_SKINNED", "1"}}});
-    ASSERT_TRUE(vs && ps);
     ComPtr<ID3D11VertexShader> vertexShader;
     ComPtr<ID3D11PixelShader> pixelShader;
-    ASSERT_TRUE(SUCCEEDED(device->CreateVertexShader(vs->blob->GetBufferPointer(), vs->blob->GetBufferSize(),
+    ASSERT_TRUE(SUCCEEDED(device->CreateVertexShader(vs.blob->GetBufferPointer(), vs.blob->GetBufferSize(),
                                                     nullptr, &vertexShader)));
-    ASSERT_TRUE(SUCCEEDED(device->CreatePixelShader(ps->blob->GetBufferPointer(), ps->blob->GetBufferSize(),
+    ASSERT_TRUE(SUCCEEDED(device->CreatePixelShader(ps.blob->GetBufferPointer(), ps.blob->GetBufferSize(),
                                                    nullptr, &pixelShader)));
     D3D11_TEXTURE2D_DESC desc{};
     desc.Width = desc.Height = desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;

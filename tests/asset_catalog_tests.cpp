@@ -1,5 +1,6 @@
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/AssetTable.hpp>
+#include <engine/core/PathUtils.hpp>
 
 #include <gtest/gtest.h>
 
@@ -99,6 +100,25 @@ TEST(AssetCatalog, RenamePreservesIdentityAndDuplicatesAreRejected) {
     EXPECT_FALSE(catalog.Scan(fixture.root / "game", {}, error));
     EXPECT_NE(error.find("duplicate asset UUID"), std::string::npos);
     EXPECT_EQ(catalog.Find(uuid)->path, "game/models/renamed.obj"); // failed scan is transactional
+}
+
+TEST(AssetCatalog, DuplicateUuidReportsBothCrossRootSourcePaths) {
+    Fixture fixture;
+    std::filesystem::create_directories(fixture.root / "engine/models");
+    const auto gameSource = fixture.root / "game/models" / std::filesystem::path(u8"gámé.obj");
+    const auto engineSource = fixture.root / "engine/models" / std::filesystem::path(u8"éngine.obj");
+    std::ofstream(gameSource) << "model";
+    std::ofstream(engineSource) << "model";
+    const engine::AssetMetadata metadata{engine::NewUuid(), engine::CatalogAssetKind::Mesh};
+    std::string error;
+    ASSERT_TRUE(engine::WriteAssetMetadata(gameSource, metadata, error)) << error;
+    ASSERT_TRUE(engine::WriteAssetMetadata(engineSource, metadata, error)) << error;
+
+    engine::AssetCatalog catalog;
+    EXPECT_FALSE(catalog.Scan(fixture.root / "game", fixture.root / "engine", error));
+    EXPECT_NE(error.find("duplicate asset UUID: " + metadata.id.ToString()), std::string::npos) << error;
+    EXPECT_NE(error.find(engine::ToGenericUtf8(gameSource)), std::string::npos) << error;
+    EXPECT_NE(error.find(engine::ToGenericUtf8(engineSource)), std::string::npos) << error;
 }
 
 TEST(AssetCatalog, AudioClipsGenerateMetadataResolveByUuidAndPreserveIdentityOnRename) {

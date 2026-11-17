@@ -163,6 +163,9 @@ void AssetSystem::Shutdown() {
         engine_.GetTaskScheduler().WaitforTask(job.get());
     }
     inFlight_.clear();
+    // A deferred rescan belongs to this session. Do not let Update replace the
+    // freshly scanned catalog after a subsequent Initialize.
+    pendingCatalog_.reset();
 }
 
 entt::resource<MeshAsset> AssetSystem::LoadMesh(const std::string_view name, const bool centerOnLoad) {
@@ -249,16 +252,29 @@ bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& err
             return false;
         }
     }
-    const AssetDesc* desc = kind == AssetKind::Material
-        ? &materials_.Get(materials_.Find(normalized))->desc
-        : &materialInstances_.Get(materialInstances_.Find(normalized))->desc;
     LoadJob job;
     job.kind = kind;
     job.name = normalized;
     job.id = ToResourceID(normalized);
-    job.desc = desc;
+    AssetDesc desc;
+    const auto capture = [&](const auto& table) {
+        const auto handle = table.Find(normalized);
+        const auto* record = table.Get(handle);
+        if (!record || record->state != AssetState::Ready) return false;
+        job.slot = handle.slot;
+        job.generation = handle.generation;
+        desc = record->desc;
+        return true;
+    };
+    if (!(kind == AssetKind::Material ? capture(materials_) : capture(materialInstances_))) {
+        error = "asset is no longer Ready for reload";
+        return false;
+    }
+    // Dependency completion can dispatch reentrant listeners. Keep the descriptor
+    // owned locally rather than borrowing a record that a listener can evict.
+    job.desc = &desc;
     if (auto* rendering = engine_.GetSubsystem<RenderingSubsystem>()) job.device = rendering->GetContext().GetDevice();
-    job.cpuOk = ImporterFor(kind).ReadCpu(*desc, job.device, job.payload, job.error);
+    job.cpuOk = ImporterFor(kind).ReadCpu(desc, job.device, job.payload, job.error);
     if (job.cpuOk && ResolveDependencies(job, true) == DependencyState::Failed) job.cpuOk = false;
     if (!job.cpuOk) {
         error = job.error;
@@ -269,11 +285,22 @@ bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& err
         log::Assets().error("Live reload failed for '{}': {}", normalized, error);
         return false;
     }
-    engine_.GetEvents().trigger(AssetLoadedEvent{job.id, job.name, job.kind});
+    const AssetLoadedEvent event{job.id, job.name, job.kind, this, job.slot, job.generation};
+    engine_.GetEvents().trigger(event);
     return true;
 }
 
 bool AssetSystem::ReloadReady(LoadJob& job, std::string& error) {
+    const auto current = [&](const auto& table, const auto handle) {
+        const auto* record = table.Get(handle);
+        return record && record->state == AssetState::Ready;
+    };
+    if (!(job.kind == AssetKind::Material
+        ? current(materials_, AssetHandle<MaterialAsset>{job.slot, job.generation})
+        : current(materialInstances_, AssetHandle<MaterialInstanceAsset>{job.slot, job.generation}))) {
+        error = "asset was retired while resolving reload dependencies";
+        return false;
+    }
     auto* rendering = engine_.GetSubsystem<RenderingSubsystem>();
     if (!rendering) { error = "no RenderingSubsystem to upload the result to"; return false; }
     auto& resources = rendering->GetResourceManager();
@@ -284,7 +311,7 @@ bool AssetSystem::ReloadReady(LoadJob& job, std::string& error) {
     if (!ImporterFor(job.kind).UploadGpu(transfer, job.payload, staged, error)) return false;
 
     if (job.kind == AssetKind::MaterialInstance) {
-        auto* record = materialInstances_.Get(materialInstances_.Find(job.name));
+        auto* record = materialInstances_.Get({job.slot, job.generation});
         const auto* old = resources.TryGetMaterialInstance(record->value->instance);
         if (!old) {
             resources.DestroyMaterialInstance(staged.materialInstance);
@@ -300,7 +327,7 @@ bool AssetSystem::ReloadReady(LoadJob& job, std::string& error) {
         return true;
     }
 
-    auto* record = materials_.Get(materials_.Find(job.name));
+    auto* record = materials_.Get({job.slot, job.generation});
     const MaterialHandle live = record->value->material;
     if (!resources.ReplaceMaterial(live, staged.material)) {
         resources.DestroyMaterial(staged.material);
@@ -540,7 +567,11 @@ entt::resource<T> AssetSystem::LoadSync(const AssetHandle<T> handle) {
 
     std::unique_ptr<LoadJob> job = TakeJob(kind, handle.slot);
     if (job == nullptr) {
-        return FailLoad(table, handle, "load job disappeared from the scheduler");
+        const AssetFailedEvent event{record->id, record->desc.name, kind,
+            "load job disappeared from the scheduler", this, handle.slot, handle.generation};
+        auto failed = FailLoad(table, handle, event.error);
+        engine_.GetEvents().trigger(event);
+        return failed;
     }
     engine_.GetTaskScheduler().WaitforTask(job.get());
     if (job->cpuOk && ResolveDependencies(*job, true) == DependencyState::Failed) job->cpuOk = false;
@@ -678,8 +709,9 @@ entt::resource<T> AssetSystem::FinishTyped(const LoadJob& job, AssetTable<T>& ta
         return {};  // the record was recycled while the job ran; the result is stale
     }
     if (!job.cpuOk) {
-        entt::resource<T> failed = FailLoad(table, handle, job.error);
-        engine_.GetEvents().trigger(AssetFailedEvent{job.id, job.name, job.kind, job.error});
+        const AssetFailedEvent event{job.id, job.name, job.kind, job.error, this, handle.slot, handle.generation};
+        entt::resource<T> failed = FailLoad(table, handle, event.error);
+        engine_.GetEvents().trigger(event);
         return failed;
     }
 
@@ -697,8 +729,9 @@ entt::resource<T> AssetSystem::FinishTyped(const LoadJob& job, AssetTable<T>& ta
             error = "no RenderingSubsystem to upload the result to";
         }
         if (!uploaded) {
-            auto failed = FailLoad(table, handle, error);
-            engine_.GetEvents().trigger(AssetFailedEvent{job.id, job.name, job.kind, error});
+            const AssetFailedEvent event{job.id, job.name, job.kind, error, this, handle.slot, handle.generation};
+            auto failed = FailLoad(table, handle, event.error);
+            engine_.GetEvents().trigger(event);
             return failed;
         }
     }
@@ -708,8 +741,9 @@ entt::resource<T> AssetSystem::FinishTyped(const LoadJob& job, AssetTable<T>& ta
     log::Assets().info("'{}' ({}) published on frame {} ({} s after queueing)",
                  job.name, ToString(job.kind), frameIndex, totalSeconds);
 
+    const AssetLoadedEvent event{job.id, job.name, job.kind, this, handle.slot, handle.generation};
     entt::resource<T> value = table.Publish(handle, MakeValue<T>(record->desc, job.payload, gpu));
-    engine_.GetEvents().trigger(AssetLoadedEvent{job.id, job.name, job.kind});
+    engine_.GetEvents().trigger(event);
     return value;
 }
 

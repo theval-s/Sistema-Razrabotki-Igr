@@ -1,17 +1,17 @@
-﻿#include <bit>
-#include <engine/rendering/GraphicalState.hpp>
+﻿#include <engine/rendering/GraphicalState.hpp>
 
-#include <cassert>
-#include <stdexcept>
-#include <fmt/base.h>
+#include "LifecycleFailure.hpp"
 
 namespace engine {
 
 void RenderStates::Initialize(ID3D11Device* device) {
-    InitializeBlendStates(device);
-    InitializeDepthStates(device);
-    InitializeRasterizerStates(device);
-    InitializeSamplerStates(device);
+    if (!device) rendering_detail::Check(E_POINTER, "InitializeRenderStates", nullptr, "A D3D device is required.");
+    RenderStates staged;
+    staged.InitializeBlendStates(device);
+    staged.InitializeDepthStates(device);
+    staged.InitializeRasterizerStates(device);
+    staged.InitializeSamplerStates(device);
+    *this = std::move(staged);
 }
 
 ID3D11BlendState* RenderStates::GetBlendState(const BlendState blendState) const {
@@ -35,7 +35,7 @@ void RenderStates::InitializeBlendStates(ID3D11Device* device) {
         const HRESULT hr = device->CreateBlendState(
             &desc, blendStates_[static_cast<size_t>(type)].GetAddressOf()
         );
-        assert(SUCCEEDED(hr));
+        rendering_detail::Check(hr, "CreateBlendState", device, fmt::format("Blend state {}", static_cast<size_t>(type)));
     };
     // Opaque
     {
@@ -101,7 +101,7 @@ void RenderStates::InitializeDepthStates(ID3D11Device* device) {
         const HRESULT hr = device->CreateDepthStencilState(
             &desc, depthStates_[static_cast<size_t>(type)].GetAddressOf()
         );
-        assert(SUCCEEDED(hr));
+        rendering_detail::Check(hr, "CreateDepthStencilState", device, fmt::format("Depth state {}", static_cast<size_t>(type)));
     };
 
     // Disabled
@@ -156,7 +156,7 @@ void RenderStates::InitializeRasterizerStates(ID3D11Device* device) {
         const HRESULT hr = device->CreateRasterizerState(
             &desc, rasterizerStates_[static_cast<size_t>(type)].GetAddressOf()
         );
-        assert(SUCCEEDED(hr));
+        rendering_detail::Check(hr, "CreateRasterizerState", device, fmt::format("Rasterizer state {}", static_cast<size_t>(type)));
     };
 
     // CullBack
@@ -244,7 +244,7 @@ void RenderStates::InitializeSamplerStates(ID3D11Device* device) {
         const HRESULT hr = device->CreateSamplerState(
             &desc, samplerStates_[static_cast<size_t>(type)].GetAddressOf()
         );
-        assert(SUCCEEDED(hr));
+        rendering_detail::Check(hr, "CreateSamplerState", device, fmt::format("Sampler state {}", static_cast<size_t>(type)));
     };
 
     // PointClamp

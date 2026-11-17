@@ -2,6 +2,7 @@
 #include <engine/assets/AssetPipeline.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
+#include "../rendering/RenderingFailureUtils.hpp"
 
 #include <array>
 #include <utility>
@@ -24,7 +25,7 @@ constexpr std::array Stages{
 
 } // namespace
 
-bool MaterialImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, CpuPayload& payload, std::string& error) const {
+bool MaterialImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, CpuPayload& payload, std::string& error) const try {
     std::string text;
     MaterialCpu parsed;
     if (!ReadDefinition(desc, false, text, error) || !ParseMaterialDefinition(text, parsed.definition, error))
@@ -44,50 +45,63 @@ bool MaterialImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, CpuPayload&
             ShaderCompileOptions options{.defines = {{stage.define, "1"}, {"MATERIAL_HAS_HOOK", "1"}}};
             if (stage.skinned) options.defines.push_back({"ENGINE_SKINNED", "1"});
             auto compiled = ShaderContext::CompileCpu(path, stage.stage, options);
-            if (!compiled) {
-                error = "HLSL compilation failed for material '" + desc.name + "' (" + stage.define + ")";
-                return false;
-            }
-            parsed.shaders[i] = std::move(*compiled);
+            parsed.shaders[i] = std::move(compiled);
         }
     }
     payload.kind = CpuPayload::Kind::Material;
     payload.material = std::move(parsed);
     return true;
+} catch (const RenderingException& e) {
+    error = rendering_failure::Format(e.GetFailure());
+    return false;
+} catch (const std::exception& e) {
+    error = e.what();
+    return false;
+} catch (...) {
+    error = "MaterialImporter: unknown read failure";
+    return false;
 }
 
 bool MaterialImporter::UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
                                   GpuPayload& result, std::string& error) const {
+    if (!transfer.resources) { error = "MaterialImporter: missing resource manager"; return false; }
     if (payload.kind != CpuPayload::Kind::Material) {
         error = "MaterialImporter: wrong payload kind";
         return false;
     }
-    ShaderSet shaders;
+    ShaderSet shaders{};
     const std::array targets{&shaders.shadowPassVS, &shaders.gBufferPassVS, &shaders.gBufferPassPS,
         &shaders.skinnedGBufferPassVS, &shaders.skinnedShadowPassVS};
     const auto rollback = [&] {
         for (const auto target : targets) if (*target) transfer.resources->DestroyShader(*target);
     };
-    for (size_t i = 0; i < targets.size(); ++i) {
-        if (!HasHook(payload.material.definition.hooks, Stages[i].hook)) continue;
-        *targets[i] = transfer.resources->RegisterCompiledShader(payload.material.shaders[i]);
-        if (!*targets[i]) {
+    try {
+        for (size_t i = 0; i < targets.size(); ++i) {
+            if (!HasHook(payload.material.definition.hooks, Stages[i].hook)) continue;
+            *targets[i] = transfer.resources->RegisterCompiledShader(payload.material.shaders[i]);
+        }
+        result.material = transfer.resources->RegisterMaterial(shaders, transfer.materialParameters);
+        if (!result.material) {
             rollback();
-            error = "material shader registration on device failed";
+            error = "material registration failed";
             return false;
         }
-    }
-    result.material = transfer.resources->RegisterMaterial(shaders, transfer.materialParameters);
-    if (!result.material) {
+        return true;
+    } catch (const RenderingException& e) {
         rollback();
-        error = "material registration failed";
-        return false;
+        error = rendering_failure::Format(e.GetFailure());
+    } catch (const std::exception& e) {
+        rollback();
+        error = e.what();
+    } catch (...) {
+        rollback();
+        error = "MaterialImporter: unknown upload failure";
     }
-    return true;
+    return false;
 }
 
 bool MaterialInstanceImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, CpuPayload& payload,
-                                       std::string& error) const {
+                                       std::string& error) const try {
     std::string text;
     MaterialInstanceDefinition parsed;
     if (!ReadDefinition(desc, true, text, error) || !ParseMaterialInstanceDefinition(text, parsed, error))
@@ -95,6 +109,15 @@ bool MaterialInstanceImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, Cpu
     payload.kind = CpuPayload::Kind::MaterialInstance;
     payload.materialInstance = std::move(parsed);
     return true;
+} catch (const RenderingException& e) {
+    error = rendering_failure::Format(e.GetFailure());
+    return false;
+} catch (const std::exception& e) {
+    error = e.what();
+    return false;
+} catch (...) {
+    error = "MaterialInstanceImporter: unknown read failure";
+    return false;
 }
 
 MaterialInstance::Overrides MaterialInstanceImporter::MakeOverrides(const MaterialParameterOverrides& authored,
@@ -108,19 +131,31 @@ MaterialInstance::Overrides MaterialInstanceImporter::MakeOverrides(const Materi
 
 bool MaterialInstanceImporter::UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
                                          GpuPayload& result, std::string& error) const {
+    if (!transfer.resources) { error = "MaterialInstanceImporter: missing resource manager"; return false; }
     if (payload.kind != CpuPayload::Kind::MaterialInstance) {
         error = "MaterialInstanceImporter: wrong payload kind";
         return false;
     }
-    const auto instance = transfer.resources->CreateMaterialInstance(transfer.material);
-    if (!instance || !transfer.resources->SetMaterialInstanceOverrides(instance,
-        MakeOverrides(payload.materialInstance.parameters, transfer.materialParameters.albedoTexture))) {
-        if (instance) transfer.resources->DestroyMaterialInstance(instance);
-        error = "material instance registration failed";
-        return false;
+    MaterialInstanceHandle instance;
+    try {
+        instance = transfer.resources->CreateMaterialInstance(transfer.material);
+        if (!instance || !transfer.resources->SetMaterialInstanceOverrides(instance,
+            MakeOverrides(payload.materialInstance.parameters, transfer.materialParameters.albedoTexture))) {
+            if (instance) transfer.resources->DestroyMaterialInstance(instance);
+            error = "material instance registration failed";
+            return false;
+        }
+        result.materialInstance = instance;
+        return true;
+    } catch (const RenderingException& e) {
+        error = rendering_failure::Format(e.GetFailure());
+    } catch (const std::exception& e) {
+        error = e.what();
+    } catch (...) {
+        error = "MaterialInstanceImporter: unknown upload failure";
     }
-    result.materialInstance = instance;
-    return true;
+    transfer.resources->DestroyMaterialInstance(instance);
+    return false;
 }
 
 } // namespace engine

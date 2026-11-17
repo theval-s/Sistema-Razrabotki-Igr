@@ -11,6 +11,7 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
 #include <engine/core/PathUtils.hpp>
+#include "../rendering/RenderingFailureUtils.hpp"
 
 namespace engine {
 namespace {
@@ -54,7 +55,7 @@ void CenterAndNormalize(MeshCpu& mesh) {
 }  // namespace
 
 bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/, CpuPayload& payload,
-                                 std::string& error) const {
+                                 std::string& error) const try {
     const std::filesystem::path path = AssetPathResolver::ResolveMesh(desc);
 
     // A per-call Importer: Assimp is only safe for concurrent loads when instances are not
@@ -129,28 +130,49 @@ bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/
     payload.kind = CpuPayload::Kind::Mesh;
     payload.mesh = std::move(mesh);
     return true;
+} catch (const RenderingException& e) {
+    error = rendering_failure::Format(e.GetFailure());
+    return false;
+} catch (const std::exception& e) {
+    error = e.what();
+    return false;
+} catch (...) {
+    error = "AssimpMeshImporter: unknown read failure";
+    return false;
 }
 
 bool AssimpMeshImporter::UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
                                    GpuPayload& result, std::string& error) const {
+    if (!transfer.resources) { error = "AssimpMeshImporter: missing resource manager"; return false; }
     if (payload.kind != CpuPayload::Kind::Mesh) {
         error = "AssimpMeshImporter: payload is not a parsed mesh";
         return false;
     }
 
-    const auto vertexBuffer = transfer.resources->CreateVertexBuffer<ugly_utils::VertData>(
-        payload.mesh.vertices);
-    const auto indexBuffer = transfer.resources->CreateIndexBuffer<uint32_t>(payload.mesh.indices);
+    BufferHandle vertexBuffer, indexBuffer;
+    try {
+        vertexBuffer = transfer.resources->CreateVertexBuffer<ugly_utils::VertData>(payload.mesh.vertices);
+        indexBuffer = transfer.resources->CreateIndexBuffer<uint32_t>(payload.mesh.indices);
 
-    VertexLayout layout;
-    layout.Add("POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0);
-    layout.Add("NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 16);
-    layout.Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 16 + 12);
+        VertexLayout layout;
+        layout.Add("POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0);
+        layout.Add("NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 16);
+        layout.Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 16 + 12);
 
-    result.mesh = transfer.resources->CreateMesh(
-        vertexBuffer, indexBuffer, std::move(layout),
-        static_cast<uint32_t>(payload.mesh.indices.size()));
-    return true;
+        result.mesh = transfer.resources->CreateMesh(
+            vertexBuffer, indexBuffer, std::move(layout),
+            static_cast<uint32_t>(payload.mesh.indices.size()));
+        return true;
+    } catch (const RenderingException& e) {
+        error = rendering_failure::Format(e.GetFailure());
+    } catch (const std::exception& e) {
+        error = e.what();
+    } catch (...) {
+        error = "AssimpMeshImporter: unknown upload failure";
+    }
+    transfer.resources->DestroyBuffer(indexBuffer);
+    transfer.resources->DestroyBuffer(vertexBuffer);
+    return false;
 }
 
 }  // namespace engine

@@ -236,7 +236,9 @@ bool AssetCatalog::Scan(const std::filesystem::path& gameRoot, const std::filesy
                 if (!paths.emplace(key, meta.id).second)
                     throw std::runtime_error("duplicate asset path: " + logical);
                 const auto [it, inserted] = entries.emplace(meta.id, CatalogEntry{meta, logical, source});
-                if (!inserted) throw std::runtime_error("duplicate asset UUID: " + meta.id.ToString() + " at " + ToGenericUtf8(source));
+                if (!inserted) throw std::runtime_error("duplicate asset UUID: " + meta.id.ToString() + " at " +
+                    ToGenericUtf8(std::filesystem::absolute(it->second.source)) + " and " +
+                    ToGenericUtf8(std::filesystem::absolute(source)));
             }
         }
     } catch (const std::exception& e) { error = e.what(); return false; }

@@ -57,6 +57,11 @@ struct HandleMap {
         }
 
         const uint32_t id = static_cast<uint32_t>(storage_.size());
+        // Reserve free-list space while Add may still throw. Remove/Clear then
+        // never allocate, including when releasing a fully populated GPU map.
+        if (freeSlots_.capacity() < storage_.size() + 1) {
+            freeSlots_.reserve((std::max)(storage_.size() + 1, freeSlots_.capacity() * 2));
+        }
         storage_.emplace_back(std::move(t));
         return Handle{id, 0};
     }
@@ -131,6 +136,17 @@ struct HandleMap {
         }
         
         return true;
+    }
+
+    /// Destroys all live values and invalidates their handles, retaining slot and
+    /// generation history for subsequent Add calls. Repeated clears are harmless.
+    /// Add reserves the free list so teardown does not allocate.
+    void Clear() noexcept {
+        for (std::size_t id = 0; id < storage_.size(); ++id) {
+            if (storage_[id].Used()) {
+                Remove(Handle{static_cast<uint32_t>(id), storage_[id].generation});
+            }
+        }
     }
 
     std::optional<Handle> Find(const T& t) {

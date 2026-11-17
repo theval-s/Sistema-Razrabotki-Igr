@@ -3,6 +3,7 @@
 #include <engine/core/FileSystem.hpp>
 #include "../animation/AnimationData.hpp"
 #include "RigProbe.hpp"
+#include "../rendering/RenderingFailureUtils.hpp"
 #include <sstream>
 #include <iomanip>
 #include <wincodec.h>
@@ -850,6 +851,8 @@ bool SkeletalAssetImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, CpuPay
         payload = std::move(parsed);
         error.clear();
         return true;
+    } catch (const RenderingException& exception) {
+        error = rendering_failure::Format(exception.GetFailure());
     } catch (const std::exception& exception) {
         error = "SkeletalAssetImporter: " + std::string(exception.what());
     } catch (...) {
@@ -906,6 +909,9 @@ bool SkeletalAssetImporter::UploadGpu(const UploadTransfer& transfer, const CpuP
         result.skinnedSections = std::move(sections);
         error.clear();
         return true;
+    } catch (const RenderingException& exception) {
+        rollback();
+        error = rendering_failure::Format(exception.GetFailure());
     } catch (const std::exception& exception) {
         rollback();
         error = "SkeletalAssetImporter upload: " + std::string(exception.what());

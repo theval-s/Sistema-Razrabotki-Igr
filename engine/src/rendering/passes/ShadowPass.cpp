@@ -148,8 +148,8 @@ CascadeInfo GetCascadeData(Vector3 lightDirection, const FPSCamera& camera) {
 
 }
 
-void ShadowCSMPass::Initialize(RenderingResourceManager& resourceManager, RenderingContext&,
-                               RenderingResources& resources) {
+void ShadowCSMPass::Initialize(RenderingResourceManager& resourceManager, RenderingContext& context,
+                                RenderingResources& resources) try {
     vertexShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
         {.defines = {{"MATERIAL_SHADOW_VS"}}});
     skinnedVertexShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
@@ -163,6 +163,9 @@ void ShadowCSMPass::Initialize(RenderingResourceManager& resourceManager, Render
         .dsvFormat = DXGI_FORMAT_D32_FLOAT,
     };
     resources.shadowTexture = resourceManager.CreateTexture(shadowTextureDesc);
+} catch (...) {
+    Destroy(resourceManager, context, resources);
+    throw;
 }
 
 void ShadowCSMPass::Destroy(RenderingResourceManager& resourceManager, RenderingContext& context,
@@ -171,6 +174,10 @@ void ShadowCSMPass::Destroy(RenderingResourceManager& resourceManager, Rendering
     resourceManager.DestroyShader(skinnedVertexShader_);
     resourceManager.DestroyShader(geometryShader_);
     resourceManager.DestroyTexture(resources.shadowTexture);
+    vertexShader_ = {};
+    skinnedVertexShader_ = {};
+    geometryShader_ = {};
+    resources.shadowTexture = {};
 }
 
 void ShadowCSMPass::Render(RenderWorld& world, RenderingContext& context, RenderingResources& resources) {

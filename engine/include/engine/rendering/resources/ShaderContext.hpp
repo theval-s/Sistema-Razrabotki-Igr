@@ -4,13 +4,13 @@
 #endif
 #include <cstdint>
 #include <filesystem>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <engine/engine_export.hpp>
+#include <engine/rendering/RenderingDiagnostics.hpp>
 #include <wrl/client.h>
 
 #include <engine/rendering/resources/VertexLayoutCache.hpp>
@@ -59,6 +59,9 @@ struct ENGINE_API CompiledShader {
     D3D11_SHADER_DESC desc{};
     std::vector<ShaderBinding> bindings;
     ShaderType type = ShaderType::Vertex;
+    // Retained across worker compilation -> device upload for creation diagnostics.
+    std::filesystem::path sourcePath;
+    ShaderDiagnosticContext diagnosticContext;
 };
 
 struct ENGINE_API ShaderContext {
@@ -71,19 +74,21 @@ struct ENGINE_API ShaderContext {
     // debug only, later we'll add correctness checks based on names and slots
     std::vector<ShaderBinding> bindings{};
 
-    static std::optional<ShaderContext> CompileShader(ID3D11Device* device, InputLayoutCache& layoutCache,
+    /// All compile/finalize methods return usable values or throw RenderingException,
+    /// preserving read/include/compiler/reflection/device details and shader context.
+    static ShaderContext CompileShader(ID3D11Device* device, InputLayoutCache& layoutCache,
                                                         const std::filesystem::path& fileName, ShaderType shaderType,
                                                         const ShaderCompileOptions& options = {});
 
     /// D3DCompile + reflection only; runs on any thread.
-    static std::optional<CompiledShader> CompileCpu(const std::filesystem::path& fileName, ShaderType shaderType,
+    static CompiledShader CompileCpu(const std::filesystem::path& fileName, ShaderType shaderType,
                                                     const ShaderCompileOptions& options = {});
     /// Compiles generated HLSL; virtualPath supplies its include location and diagnostic name.
-    static std::optional<CompiledShader> CompileSource(std::string_view source,
+    static CompiledShader CompileSource(std::string_view source,
                                                        const std::filesystem::path& virtualPath, ShaderType shaderType,
                                                        const ShaderCompileOptions& options = {});
     /// Create*Shader and input-layout registration; main thread.
-    static std::optional<ShaderContext> FinalizeOnDevice(const CompiledShader& compiled, ID3D11Device* device,
+    static ShaderContext FinalizeOnDevice(const CompiledShader& compiled, ID3D11Device* device,
                                                           InputLayoutCache& layoutCache);
 
 private:

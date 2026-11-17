@@ -39,8 +39,8 @@ void DestroyGBuffer(RenderingResourceManager& resourceManager, RenderingResource
 }
 }
 
-void GBufferPass::Initialize(RenderingResourceManager& resourceManager, RenderingContext&,
-                             RenderingResources& resources) {
+void GBufferPass::Initialize(RenderingResourceManager& resourceManager, RenderingContext& context,
+                              RenderingResources& resources) try {
     vertexShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
         {.defines = {{"MATERIAL_GBUFFER_VS"}}});
     skinnedVertexShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
@@ -51,6 +51,9 @@ void GBufferPass::Initialize(RenderingResourceManager& resourceManager, Renderin
     CreateGBuffer(resourceManager, resources);
 
     lightSphere_ = ugly_utils::FromRawMesh(resourceManager, ugly_utils::CreateSphere(1.0f));
+} catch (...) {
+    Destroy(resourceManager, context, resources);
+    throw;
 }
 
 void GBufferPass::Destroy(RenderingResourceManager& resourceManager, RenderingContext& context,
@@ -60,6 +63,10 @@ void GBufferPass::Destroy(RenderingResourceManager& resourceManager, RenderingCo
     resourceManager.DestroyShader(pixelShader_);
     DestroyGBuffer(resourceManager, resources);
     resourceManager.DestroyMesh(lightSphere_);
+    vertexShader_ = {};
+    skinnedVertexShader_ = {};
+    pixelShader_ = {};
+    lightSphere_ = {};
 }
 
 void GBufferPass::Render(RenderWorld& world, RenderingContext& context, RenderingResources& resources) {
@@ -112,7 +119,8 @@ void GBufferPass::Render(RenderWorld& world, RenderingContext& context, Renderin
 
 bool GBufferPass::Reinitialize(RenderingResourceManager& resourceManager, RenderingContext&, RenderingResources& resources) {
     DestroyGBuffer(resourceManager, resources);
-    CreateGBuffer(resourceManager, resources);
+    try { CreateGBuffer(resourceManager, resources); }
+    catch (...) { DestroyGBuffer(resourceManager, resources); throw; }
     return true;
 }
 

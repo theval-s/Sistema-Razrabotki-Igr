@@ -6,6 +6,15 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QCoreApplication>
+#include <QComboBox>
+#include <QDesktopServices>
+#include <QDialog>
+#include <QFileInfo>
+#include <QHBoxLayout>
+#include <QPlainTextEdit>
+#include <QPushButton>
+#include <QSignalBlocker>
+#include <QUrl>
 #include <QDir>
 #include <QCloseEvent>
 #include <QCheckBox>
@@ -59,6 +68,8 @@
 #include <editor/startup_scene.hpp>
 #include <editor/tool_icon.hpp>
 #include <editor/editor_log.hpp>
+#include <editor/rendering_status.hpp>
+#include <editor/session_log.hpp>
 
 namespace editor {
 
@@ -102,6 +113,29 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     connect(viewport_, &ViewportWidget::mouseMoved, this, &MainWindow::viewportMoved);
     connect(viewport_, &ViewportWidget::mouseReleased, this, &MainWindow::viewportReleased);
     auto* tool_bar = new ViewportToolBar;
+    debug_view_ = new QComboBox;
+    debug_view_->setObjectName(QStringLiteral("renderDebugView"));
+    debug_view_->setFocusPolicy(Qt::NoFocus);
+    debug_view_->setEnabled(false);
+    const struct { const char* name; const char* tooltip; engine::RenderDebugView view; } views[] = {
+        {"Final", "Lit scene with tone mapping. Selection outlines are shown only in Final.", engine::RenderDebugView::Final},
+        {"Albedo", "Stored surface color without lighting or tone mapping. Selection outlines are Final-only.", engine::RenderDebugView::Albedo},
+        {"Normals", "Encoded world-space normals (normal * 0.5 + 0.5). Selection outlines are Final-only.", engine::RenderDebugView::Normals},
+        {"Depth", "Linear camera-space depth: near bright, far dark; background black (reverse-Z source). Selection outlines are Final-only.", engine::RenderDebugView::Depth},
+    };
+    for (const auto& view : views) {
+        debug_view_->addItem(tr(view.name), static_cast<int>(view.view));
+        debug_view_->setItemData(debug_view_->count() - 1, tr(view.tooltip), Qt::ToolTipRole);
+    }
+    debug_view_->setToolTip(debug_view_->itemData(0, Qt::ToolTipRole).toString());
+    connect(debug_view_, &QComboBox::currentIndexChanged, this, [this](int index) {
+        debug_view_->setToolTip(debug_view_->itemData(index, Qt::ToolTipRole).toString());
+        if (auto* rendering = engine_.GetSubsystem<engine::RenderingSubsystem>(); rendering &&
+            rendering->GetDiagnostics().lifecycle == engine::RenderingLifecycle::Ready) {
+            (void)rendering->SetDebugView(static_cast<engine::RenderDebugView>(debug_view_->itemData(index).toInt()));
+        }
+    });
+    tool_bar->section(ViewportToolBar::Section::Right)->addWidget(debug_view_);
     // Qt controls belong outside the native flip-model swap-chain surface.
     for (const auto& entry : {std::pair{"showSkeletonOverlay", tr("Skeleton")},
                              std::pair{"showAudioOverlay", tr("Audio")}}) {
@@ -120,6 +154,52 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     viewport_layout->setContentsMargins(0, 0, 0, 0);
     viewport_layout->setSpacing(0);
     viewport_layout->addWidget(tool_bar);
+    auto* rendering_status_bar = new QWidget;
+    rendering_status_bar->setObjectName(QStringLiteral("renderingStatusBar"));
+    auto* rendering_status_layout = new QHBoxLayout(rendering_status_bar);
+    rendering_status_layout->setContentsMargins(6, 2, 6, 2);
+    rendering_status_label_ = new QLabel;
+    rendering_status_label_->setObjectName(QStringLiteral("renderingStatusSummary"));
+    rendering_status_label_->setTextFormat(Qt::PlainText);
+    rendering_status_label_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    rendering_status_layout->addWidget(rendering_status_label_, 1);
+    const auto statusAction = [&](const QString& title, auto slot) {
+        auto* button = new QPushButton(title);
+        connect(button, &QPushButton::clicked, this, slot);
+        rendering_status_layout->addWidget(button);
+        return button;
+    };
+    rendering_details_dialog_ = new QDialog(this);
+    rendering_details_dialog_->setWindowTitle(tr("Rendering diagnostics"));
+    rendering_details_dialog_->resize(760, 440);
+    auto* detail_layout = new QVBoxLayout(rendering_details_dialog_);
+    rendering_details_ = new QPlainTextEdit;
+    rendering_details_->setReadOnly(true);
+    detail_layout->addWidget(rendering_details_);
+    auto* detail_buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+    auto* detail_log = detail_buttons->addButton(tr("Show Log"), QDialogButtonBox::ActionRole);
+    connect(detail_log, &QPushButton::clicked, this, &MainWindow::showRenderingLog);
+    connect(detail_buttons, &QDialogButtonBox::rejected, rendering_details_dialog_, &QDialog::hide);
+    detail_layout->addWidget(detail_buttons);
+    statusAction(tr("Details"), [this] {
+        rendering_details_dialog_->show();
+        rendering_details_dialog_->raise();
+    });
+    statusAction(tr("Show Log"), &MainWindow::showRenderingLog)->setObjectName(QStringLiteral("showRenderingLog"));
+    const auto openLog = [this](bool folder) {
+        const auto file = activeLogFile();
+        if (file.isEmpty()) {
+            QMessageBox::information(this, tr("Session Log"), fileLogError().isEmpty()
+                ? tr("No active session log file is available.") : fileLogError());
+            return;
+        }
+        const auto target = folder ? QFileInfo(file).absolutePath() : file;
+        if (!QDesktopServices::openUrl(QUrl::fromLocalFile(target)))
+            QMessageBox::warning(this, tr("Session Log"), tr("Could not open %1").arg(target));
+    };
+    statusAction(tr("Open Log File"), [openLog] { openLog(false); });
+    statusAction(tr("Open Log Folder"), [openLog] { openLog(true); });
+    viewport_layout->addWidget(rendering_status_bar);
     viewport_layout->addWidget(viewport_, 1);
     auto* viewport_dock = new ads::CDockWidget(dock_manager_, tr("Viewport"));
     viewport_dock->setObjectName(QStringLiteral("Viewport"));
@@ -127,6 +207,7 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     dock_manager_->setCentralWidget(viewport_dock);
 
     context_ = std::make_unique<EditorContext>(engine_, project_, *this, *dock_manager_, *viewport_, *tool_bar);
+    rendering_status_ = std::make_unique<RenderingStatus>(engine_);
     context_->editActions().attach(viewport_);
     viewport_->setShortcuts(context_->shortcuts());
     connect(viewport_, &ViewportWidget::inputCaptureChanged, this, &MainWindow::refreshPlayHint);
@@ -162,6 +243,7 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     restoreLayout();
 
     tick_timer_ = new QTimer(this);
+    tick_timer_->setObjectName(QStringLiteral("engineTickTimer"));
     tick_timer_->setTimerType(Qt::PreciseTimer);
     connect(tick_timer_, &QTimer::timeout, this, &MainWindow::tickEngine);
 
@@ -175,6 +257,7 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
 MainWindow::~MainWindow() {
     tick_timer_->stop();
     context_->playSession().stop();
+    rendering_status_.reset();
     // The viewport outlives the engine (Qt deletes children after our members).
     viewport_->setInput(nullptr);
     viewport_->setCamera(nullptr);
@@ -227,23 +310,54 @@ void MainWindow::restoreLayout() {
 }
 
 void MainWindow::startEngine() {
+    if (engine_wired_) return;
+    wireEngine();
+    initializeEngine();
+}
+
+void MainWindow::wireEngine() {
+    if (engine_wired_) return;
+    engine_wired_ = true;
     engine_.SetEditorMode();
     // The editor owns the loop: the engine only advances when we Tick() it.
     engine_.SetSurface(viewport_->surface());
     // Resize rendering and UI in physical surface pixels.
-    connect(viewport_, &ViewportWidget::surfaceResized, this,
-            [this](quint32 width, quint32 height) { engine_.ResizeSurface(width, height); });
+    connect(viewport_, &ViewportWidget::surfaceResized, this, &MainWindow::surfaceResized);
     // Input first, so it's latched before anything reads it; the editor camera last, so it
     // replaces the scene camera that RenderExtractionSubsystem copied into the RenderWorld.
     viewport_->setInput(engine::RegisterDefaultSubsystems(engine_, viewport_->uiHost()));
     camera_ = engine_.AddSubsystem<EditorCameraSubsystem>();
     engine_.AddSubsystem<ViewportOverlaySubsystem>(context_->selection(), *gizmo_, *viewport_);
+}
+
+void MainWindow::surfaceResized(quint32 width, quint32 height) {
+    engine_.ResizeSurface(width, height);
+    if (!startup_pending_surface_ || initializing_engine_ || !width || !height) return;
+    const auto* rendering = engine_.GetSubsystem<engine::RenderingSubsystem>();
+    // Failed is latched: a normal resize must never become a device-recovery loop.
+    if (rendering && rendering->GetDiagnostics().lifecycle == engine::RenderingLifecycle::SurfaceUnavailable)
+        initializeEngine();
+}
+
+void MainWindow::initializeEngine() {
+    if (initializing_engine_ || engine_start_completed_) return;
+    initializing_engine_ = true;
+    startup_pending_surface_ = false;
+    const bool initialized = engine_.Initialize();
+    initializing_engine_ = false;
 
     // On failure keep the window up so the Log dock shows why, but don't tick.
-    if (!engine_.Initialize()) {
-        editorLog().critical("Engine failed to initialize, see log above");
+    if (!initialized) {
+        const auto* rendering = engine_.GetSubsystem<engine::RenderingSubsystem>();
+        startup_pending_surface_ = rendering &&
+            rendering->GetDiagnostics().lifecycle == engine::RenderingLifecycle::SurfaceUnavailable;
+        startup_failed_ = !startup_pending_surface_;
+        if (startup_failed_) editorLog().critical("Engine failed to initialize, see log above");
+        refreshStatus(); // Initialization failure never starts the tick timer.
         return;
     }
+    engine_start_completed_ = true;
+    startup_failed_ = false;
     viewport_->setCamera(camera_);
     context_->startupScene().open();
 
@@ -266,7 +380,9 @@ void MainWindow::tickEngine() {
         engine_.ResizeSurface(metrics.pixelWidth, metrics.pixelHeight);
     engine_.Tick();
     viewport_->applyCursorMode();
-    if (engine_.GetFrame().frameIndex % 15 == 0) refreshStatus();
+    const auto* rendering = engine_.GetSubsystem<engine::RenderingSubsystem>();
+    const bool ready = rendering && rendering->GetDiagnostics().lifecycle == engine::RenderingLifecycle::Ready;
+    if (engine_.GetFrame().frameIndex % 15 == 0 || debug_view_->isEnabled() != ready) refreshStatus();
 }
 
 void MainWindow::refreshPlayHint() {
@@ -411,6 +527,7 @@ void MainWindow::buildGizmoActions(QMenu& menu) {
 
 void MainWindow::buildLogDock() {
     auto* panel = new LogPanel(context_->shortcuts());
+    log_panel_ = panel;
     context_->addPanel(QStringLiteral("LogDock"), tr("Log"), panel, Qt::BottomDockWidgetArea);
 
     // Every log channel writes to these sinks, the engine's and the editor's. The panel's
@@ -419,7 +536,36 @@ void MainWindow::buildLogDock() {
     engine::log::Sinks()->add_sink(log_sink_);
 }
 
+void MainWindow::showRenderingLog() {
+    if (!log_panel_) return;
+    context_->showPanel(log_panel_);
+    log_panel_->revealDiagnostic(rendering_log_search_, rendering_detail_text_);
+}
+
 void MainWindow::refreshStatus() {
+    auto* rendering = engine_.GetSubsystem<engine::RenderingSubsystem>();
+    const auto diagnostics = rendering ? rendering->GetDiagnostics() : engine::RenderingDiagnostics{};
+    debug_view_->setEnabled(diagnostics.lifecycle == engine::RenderingLifecycle::Ready);
+    if (rendering) {
+        const QSignalBlocker blocker(debug_view_);
+        debug_view_->setCurrentIndex(debug_view_->findData(static_cast<int>(rendering->GetDebugView())));
+        debug_view_->setToolTip(debug_view_->currentData(Qt::ToolTipRole).toString());
+    }
+    auto status = rendering_status_->describe(diagnostics, startup_failed_, context_->playSession().isPlaying(),
+        rendering ? rendering->GetWorld().sceneItems.size() : 0);
+    if (!fileLogError().isEmpty()) {
+        if (status.summary.isEmpty()) status.summary = tr("Session file log unavailable — see Details");
+        status.detail += tr("\nSession file log: %1").arg(fileLogError());
+        status.warning = true;
+    }
+    rendering_status_label_->setText(status.summary);
+    rendering_status_label_->setToolTip(status.summary);
+    rendering_status_label_->setStyleSheet(status.warning ? QStringLiteral("color: #e6a15a;") : QString());
+    rendering_log_search_ = status.logSearch;
+    if (rendering_detail_text_ != status.detail) {
+        rendering_detail_text_ = status.detail;
+        rendering_details_->setPlainText(status.detail);
+    }
     const auto& frame = engine_.GetFrame();
     status_label_->setText(tr("engine %1 | frame %2 | t=%3s%4")
                                .arg(toQString(engine::version()))
