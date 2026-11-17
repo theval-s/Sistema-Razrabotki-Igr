@@ -120,6 +120,12 @@ TEST_F(AssetCooking, CookedSkeletalAssetsLoadLikeTheSources) {
     const auto cookedSkeleton = CookAndLoad(AssetKind::Skeleton, bot / "model.skeleton.json").skeleton;
     EXPECT_EQ(cookedSkeleton.signature, skeleton.signature);
     EXPECT_EQ(cookedSkeleton.jointCount, skeleton.jointCount);
+    EXPECT_FALSE(cookedSkeleton.jointNames.empty());
+    EXPECT_EQ(cookedSkeleton.jointNames, skeleton.jointNames);
+    EXPECT_EQ(cookedSkeleton.jointParents, skeleton.jointParents);
+    ASSERT_EQ(cookedSkeleton.restModels.size(), skeleton.restModels.size());
+    for (std::size_t i = 0; i < skeleton.restModels.size(); ++i)
+        EXPECT_EQ(cookedSkeleton.restModels[i], skeleton.restModels[i]) << i;
     ASSERT_TRUE(cookedSkeleton.data && skeleton.data);
     EXPECT_EQ(cookedSkeleton.data->nodePaths, skeleton.data->nodePaths);
     ASSERT_EQ(cookedSkeleton.data->skeleton.num_joints(), skeleton.data->skeleton.num_joints());

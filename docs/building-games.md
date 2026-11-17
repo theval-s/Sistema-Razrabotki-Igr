@@ -37,7 +37,7 @@ has errors it reports them and leaves the previous build as it was.
 
 Because shaders are precompiled, a built game cannot compile HLSL. A material shader that no
 material asset in the project uses, for example one only C++ code creates, is missing from the
-library: loading it fails, and the log says `Shader ... is not in the cooked shader library`.
+library: loading it fails with `Shader is not in the cooked shader library`.
 Give such a shader a material asset in `content/` so the build compiles its hooks.
 
 Cooked files record the engine version that wrote them. A game whose files were cooked by another

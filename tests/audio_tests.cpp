@@ -181,6 +181,10 @@ TEST_F(AudioTests, ClipsPlayFromAMountedPackBufferedAndStreamed) {
     pack->Add("tone.wav", std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
     MountScope mount(root, pack);
     std::filesystem::remove(root / "tone.wav");
+    AudioClipInfo info;
+    ASSERT_TRUE(InspectAudioClip(root / "tone.wav", info, error)) << error;
+    EXPECT_EQ(info.frameCount, ClipFrames);
+    EXPECT_EQ(info.fileBytes, bytes.size());
     for (const auto loading : {AudioLoadingMode::Buffered, AudioLoadingMode::Streamed}) {
         SCOPED_TRACE(static_cast<int>(loading));
         const auto voice = audio->Play2D(tone, {.loading = loading}, error);

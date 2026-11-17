@@ -192,6 +192,10 @@ void WriteSkeleton(Writer& out, const SkeletonAsset& skeleton) {
     out.Value(skeleton.jointCount);
     out.Count(skeleton.data->nodePaths.size());
     for (const auto& path : skeleton.data->nodePaths) out.Text(path);
+    out.Count(skeleton.jointNames.size());
+    for (const auto& name : skeleton.jointNames) out.Text(name);
+    out.Array(std::span<const std::int32_t>(skeleton.jointParents));
+    out.Array(std::span<const DirectX::SimpleMath::Matrix>(skeleton.restModels));
     const auto archive = SaveOzz(skeleton.data->skeleton);
     out.Array(std::span<const std::uint8_t>(archive));
 }
@@ -203,6 +207,15 @@ SkeletonAsset ReadSkeleton(Reader& in) {
     auto data = std::make_shared<detail::SkeletonData>();
     data->nodePaths.resize(in.Count(sizeof(std::uint32_t)));
     for (auto& path : data->nodePaths) path = in.Text();
+    skeleton.jointNames.resize(in.Count(sizeof(std::uint32_t)));
+    for (auto& name : skeleton.jointNames) name = in.Text();
+    skeleton.jointParents = in.Array<std::int32_t>();
+    skeleton.restModels = in.Array<DirectX::SimpleMath::Matrix>();
+    // The inspection hierarchy is all or nothing, one entry per joint.
+    for (const auto size : {skeleton.jointNames.size(), skeleton.jointParents.size(), skeleton.restModels.size()})
+        Require(size == 0 || size == skeleton.jointCount, "cooked skeleton hierarchy does not match its joints");
+    for (const auto parent : skeleton.jointParents)
+        Require(parent >= -1 && parent < static_cast<std::int64_t>(skeleton.jointCount), "cooked skeleton has an invalid parent joint");
     LoadOzz(in.Array<std::uint8_t>(), data->skeleton);
     Require(data->skeleton.num_joints() > 0, "cooked skeleton has no joints");
     skeleton.data = std::move(data);

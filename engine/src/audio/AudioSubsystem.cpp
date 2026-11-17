@@ -47,18 +47,21 @@ ma_attenuation_model Attenuation(AudioAttenuation model) {
     default: return ma_attenuation_model_inverse;
     }
 }
+
+ma_vfs_callbacks ContentVfs();
 } // namespace
 
 bool InspectAudioClip(const std::filesystem::path& source, AudioClipInfo& info, std::string& error) {
-    std::error_code ec;
-    const auto bytes = std::filesystem::file_size(source, ec);
-    if (ec) { error = "Cannot inspect audio file (filesystem error " + std::to_string(ec.value()) + ")"; return false; }
+    const auto stream = content::Open(source, error);
+    if (!stream) return false;
+    const auto bytes = stream->Size();
+    static ma_vfs_callbacks vfs = ContentVfs(); // stateless, so shared by concurrent probes
     ma_decoder decoder{};
     const auto config = ma_decoder_config_init(ma_format_unknown, 0, 0);
 #ifdef _WIN32
-    auto result = ma_decoder_init_file_w(source.c_str(), &config, &decoder);
+    auto result = ma_decoder_init_vfs_w(&vfs, source.c_str(), &config, &decoder);
 #else
-    auto result = ma_decoder_init_file(source.c_str(), &config, &decoder);
+    auto result = ma_decoder_init_vfs(&vfs, source.c_str(), &config, &decoder);
 #endif
     if (result != MA_SUCCESS) { error = ma_result_description(result); return false; }
     ma_uint64 frames = 0;
