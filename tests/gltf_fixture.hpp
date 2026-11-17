@@ -20,6 +20,8 @@ public:
         int material = -1;
     };
 
+    std::vector<std::string> extensionsUsed;
+
     /// `extra` is spliced into the material object, e.g. `"pbrMetallicRoughness":{...}`.
     void AddMaterial(const std::string& name, const std::string& extra = {}) {
         materials_.push_back(std::format(R"({{"name":"{}"{}{}}})", name, extra.empty() ? "" : ",", extra));
@@ -109,6 +111,9 @@ private:
             Join(primitives_), Join(accessors_), Join(views_), bufferUri, bin_.size());
         if (!materials_.empty()) json += std::format(R"(,"materials":[{}])", Join(materials_));
         if (!textures_.empty()) json += std::format(R"(,"textures":[{}],"images":[{}])", Join(textures_), Join(images_));
+        std::vector<std::string> used;
+        for (const auto& name : extensionsUsed) used.push_back('"' + name + '"');
+        if (!used.empty()) json += std::format(R"(,"extensionsUsed":[{}])", Join(used));
         return json + "}";
     }
     static void WriteBytes(const std::filesystem::path& file, const std::string& bytes) {

@@ -19,6 +19,7 @@ constexpr unsigned StaticMeshStructureFlags = aiProcess_Triangulate | aiProcess_
 struct BaseColorTexture {
     std::string path;       // as the model names it: a file, or "*N" for an embedded image; empty for none
     unsigned uvChannel = 0;
+    bool transformed = false;  // has a UV transform (KHR_texture_transform), which we don't apply
 };
 
 /// A source material that triangles use. Mesh importers and model inspection number slots the same way.

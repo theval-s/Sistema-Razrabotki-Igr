@@ -110,6 +110,21 @@ TEST_F(ModelImportTest, InspectionListsSlotsTheirTexturesAndUvSets) {
     EXPECT_EQ(info.vertices, 6u);
     EXPECT_EQ(info.triangles, 2u);
     EXPECT_TRUE(info.companions.empty());
+    EXPECT_FALSE(info.materialSlots[0].uvTransform);
+}
+
+TEST_F(ModelImportTest, InspectionReportsTextureTransformsItCantApply) {
+    test::GltfFixture model;
+    model.extensionsUsed = {"KHR_texture_transform"};
+    const int gold = model.AddImageBytes("Gold", "image/png", Png);
+    model.AddMaterial("Gold", std::format(R"("pbrMetallicRoughness":{{"baseColorTexture":{{"index":{},)"
+                                          R"("extensions":{{"KHR_texture_transform":{{"scale":[4,4]}}}}}}}})", gold));
+    model.AddPrimitive({{0, 0, 0, 1, 0, 0, 0, 1, 0}, {{0, 0, 1, 0, 0, 1}}, 0});
+    model.WriteGlb(downloads / "tiles.glb");
+    ModelInfo info;
+    ASSERT_TRUE(InspectModel(downloads / "tiles.glb", info, error)) << error;
+    ASSERT_EQ(info.materialSlots.size(), 1u);
+    EXPECT_TRUE(info.materialSlots[0].uvTransform);
 }
 
 TEST_F(ModelImportTest, ImportWritesTexturesMaterialsAndTheirSlotsInTheMeta) {

@@ -28,6 +28,7 @@ struct ModelSlotInfo {
     std::string name;
     std::optional<std::size_t> texture;  // into ModelInfo::textures
     unsigned uvChannel = 0;
+    bool uvTransform = false;  // the texture has an offset, scale or rotation, which isn't applied
 };
 
 struct ModelInfo {

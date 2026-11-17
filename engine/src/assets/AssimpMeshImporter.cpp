@@ -116,6 +116,10 @@ bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/
             log::Assets().warn("'{}': material slot '{}' has no UVs, its textures will not map",
                                ToUtf8(path), model.slots[slot].name);
         }
+        if (model.slots[slot].texture.transformed) {
+            log::Assets().warn("'{}': material slot '{}' has a texture transform, which is ignored", ToUtf8(path),
+                               model.slots[slot].name);
+        }
         mesh.sections.push_back(section);
         mesh.materialSlots.push_back(model.slots[slot].name);
     }

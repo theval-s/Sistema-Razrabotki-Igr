@@ -257,6 +257,10 @@ ModelMaterialsForm::ModelMaterialsForm(const engine::AssetCatalog& catalog, cons
     for (const engine::ModelSlotInfo& slot : info.materialSlots) {
         auto* item = new QTreeWidgetItem(slot_list, {QString::fromStdString(slot.name), tr("None"),
                                                  QString::number(slot.uvChannel)});
+        if (slot.uvTransform) {
+            item->setIcon(2, style()->standardIcon(QStyle::SP_MessageBoxWarning));
+            item->setToolTip(2, tr("The texture's offset, scale or rotation isn't applied"));
+        }
         if (!slot.texture) {
             untextured = true;
             continue;

@@ -346,7 +346,7 @@ bool InspectModel(const fs::path& model, ModelInfo& info, std::string& error) {
     std::unordered_map<std::string, std::size_t> textures;  // by the model's name for them
     std::set<std::string> names;
     for (const detail::ModelSlot& slot : detail::CollectModelSlots(*scene).slots) {
-        ModelSlotInfo described{slot.name, std::nullopt, slot.texture.uvChannel};
+        ModelSlotInfo described{slot.name, std::nullopt, slot.texture.uvChannel, slot.texture.transformed};
         if (!slot.texture.path.empty()) {
             const auto [it, added] = textures.try_emplace(slot.texture.path, result.textures.size());
             if (added) result.textures.push_back(DescribeTexture(*scene, model, slot.texture.path, slot.name, names));

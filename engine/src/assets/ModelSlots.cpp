@@ -18,6 +18,11 @@ BaseColorTexture FindBaseColorTexture(const aiMaterial& material) {
         aiString path;
         if (material.GetTexture(type, 0, &path) != AI_SUCCESS || path.length == 0) continue;
         result.path = path.C_Str();
+        aiUVTransform transform;
+        result.transformed = aiGetMaterialUVTransform(&material, AI_MATKEY_UVTRANSFORM(type, 0), &transform) ==
+                                 AI_SUCCESS &&
+                             (transform.mTranslation != aiVector2D(0, 0) || transform.mScaling != aiVector2D(1, 1) ||
+                              transform.mRotation != 0);
         int channel = 0;
         if (aiGetMaterialInteger(&material, AI_MATKEY_UVWSRC(type, 0), &channel) == AI_SUCCESS && channel > 0 &&
             channel < AI_MAX_NUMBER_OF_TEXTURECOORDS) {

@@ -145,6 +145,26 @@ TEST_F(MeshImport, MissingTextureUvSetFallsBackToTheFirst) {
     ExpectSectionUvs(0, {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
 }
 
+TEST_F(MeshImport, TextureTransformIsLeftOutWhole) {
+    test::GltfFixture model;
+    model.extensionsUsed = {"KHR_texture_transform"};
+    const int texture = model.AddImageUri("gold.png");
+    const auto transformed = [texture](const std::string& transform) {
+        return std::format(R"("pbrMetallicRoughness":{{"baseColorTexture":{{"index":{},)"
+                           R"("extensions":{{"KHR_texture_transform":{{{}}}}}}}}})", texture, transform);
+    };
+    model.AddMaterial("Tiled", transformed(R"("offset":[0.25,0.5],"scale":[2,3])"));
+    model.AddMaterial("Turned", transformed(R"("rotation":1.5707963)"));
+    model.AddPrimitive({{0, 0, 0, 1, 0, 0, 0, 1, 0}, {{0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f}}, 0});
+    model.AddPrimitive({{0, 0, 1, 1, 0, 1, 0, 1, 1}, {{0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f}}, 1});
+    model.WriteGltf(directory / "model.gltf");
+    ASSERT_NO_FATAL_FAILURE(ImportFile(directory / "model.gltf"));
+
+    // Assimp's aiProcess_TransformUVCoords bakes these wrongly, so the UVs stay as authored.
+    ExpectSectionUvs(0, {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
+    ExpectSectionUvs(1, {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
+}
+
 TEST_F(MeshImport, ModelWithoutUvsLoadsWithZeroUvs) {
     ASSERT_NO_FATAL_FAILURE(WriteObj("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"));
     ASSERT_NO_FATAL_FAILURE(ImportFile(directory / "model.obj"));
