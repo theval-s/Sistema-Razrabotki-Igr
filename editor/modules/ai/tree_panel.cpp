@@ -36,6 +36,7 @@
 #include <QtNodes/GraphicsView>
 #include <QtNodes/internal/ConnectionGraphicsObject.hpp>
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
+#include <QtNodes/internal/UndoCommands.hpp>
 
 #include <engine/ai/BehaviorTreeSource.hpp>
 #include <engine/assets/AssetCatalog.hpp>
@@ -592,7 +593,12 @@ void TreePanel::showMenu(const QPoint& position) {
             menu.addAction(tr("Add %1").arg(kindName(kind)), this, [this, kind, at] { addNode(kind, at); });
         }
         menu.addSeparator();
-        QAction* paste = menu.addAction(tr("Paste"), view_, &QtNodes::GraphicsView::onPasteObjects);
+        // Where the menu opened: the view's own paste goes to the cursor, which is now on this item.
+        QAction* paste = menu.addAction(tr("Paste"), this, [this, at] {
+            if (graph_.pastable(clipboardGraph())) {
+                scene_->undoStack().push(new QtNodes::PasteCommand(scene_.get(), at));
+            }
+        });
         paste->setEnabled(graph_.pastable(clipboardGraph()));
     }
     menu.exec(view_->viewport()->mapToGlobal(position));
