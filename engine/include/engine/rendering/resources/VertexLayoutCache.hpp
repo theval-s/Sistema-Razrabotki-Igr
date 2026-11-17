@@ -17,13 +17,16 @@ namespace engine {
 struct ENGINE_API InputLayoutCache {
     MeshLayoutHandle RegisterMeshLayout(VertexLayout&& vertexLayout);
     ShaderLayoutHandle RegisterShaderLayout(ShaderVertexLayout&& vertexLayout);
+    /// Releases cached device objects and invalidates layout handles while retaining
+    /// generations, so handles from a previous device cannot alias new layouts.
+    void Clear() noexcept;
 
     /**
      * Find or creates Input layout for given layout handles
      * @param device DX11 device
      * @param meshLayout mesh layout, UB if invalid
      * @param shaderLayout shader layout, UB if invalid
-     * @return pointer to created input layout, can be null if layout creation failed
+     * @return usable input layout; throws RenderingException on creation/validation failure
      */
     ID3D11InputLayout* GetInputLayout(ID3D11Device* device, MeshLayoutHandle meshLayout,
                                       ShaderLayoutHandle shaderLayout);

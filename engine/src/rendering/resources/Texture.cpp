@@ -69,6 +69,7 @@ ID3D11UnorderedAccessView* Texture::GetUAV() const {
 }
 
 HRESULT Texture::CreateDefaultSRV(ID3D11Device* device) {
+    if (!device || !resource_) return E_POINTER;
     const DXGI_FORMAT format = desc_.srvFormat;
     if (format == DXGI_FORMAT_UNKNOWN) {
         return device->CreateShaderResourceView(
@@ -99,6 +100,7 @@ HRESULT Texture::CreateDefaultSRV(ID3D11Device* device) {
 }
 
 HRESULT Texture::CreateDefaultRTV(ID3D11Device* device) {
+    if (!device || !resource_) return E_POINTER;
     const DXGI_FORMAT format = desc_.rtvFormat;
     if (format == DXGI_FORMAT_UNKNOWN) {
         return device->CreateRenderTargetView(
@@ -127,13 +129,20 @@ HRESULT Texture::CreateDefaultRTV(ID3D11Device* device) {
 }
 
 HRESULT Texture::CreateDefaultDSV(ID3D11Device* device) {
+    if (!device || !resource_) return E_POINTER;
     const DXGI_FORMAT format = desc_.dsvFormat;
     if (format == DXGI_FORMAT_UNKNOWN) {
-        // read only depth is not constructed in default case
-        return device->CreateDepthStencilView(
+        const auto result = device->CreateDepthStencilView(
             resource_.Get(),
             nullptr,
-            dsv_.GetAddressOf());
+            dsv_.ReleaseAndGetAddressOf());
+        if (FAILED(result)) return result;
+        D3D11_DEPTH_STENCIL_VIEW_DESC readOnlyDesc{};
+        dsv_->GetDesc(&readOnlyDesc);
+        readOnlyDesc.Flags |= D3D11_DSV_READ_ONLY_DEPTH;
+        if (readOnlyDesc.Format == DXGI_FORMAT_D24_UNORM_S8_UINT || readOnlyDesc.Format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT)
+            readOnlyDesc.Flags |= D3D11_DSV_READ_ONLY_STENCIL;
+        return device->CreateDepthStencilView(resource_.Get(), &readOnlyDesc, readOnlyDsv_.ReleaseAndGetAddressOf());
     }
 
     D3D11_DEPTH_STENCIL_VIEW_DESC dxDesc{};
@@ -158,6 +167,8 @@ HRESULT Texture::CreateDefaultDSV(ID3D11Device* device) {
     }
 
     dxDesc.Flags = D3D11_DSV_READ_ONLY_DEPTH;
+    if (format == DXGI_FORMAT_D24_UNORM_S8_UINT || format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT)
+        dxDesc.Flags |= D3D11_DSV_READ_ONLY_STENCIL;
     return device->CreateDepthStencilView(
         resource_.Get(),
         &dxDesc,
@@ -165,6 +176,7 @@ HRESULT Texture::CreateDefaultDSV(ID3D11Device* device) {
 }
 
 HRESULT Texture::CreateDefaultUAV(ID3D11Device* device) {
+    if (!device || !resource_) return E_POINTER;
     const DXGI_FORMAT format = desc_.uavFormat;
     if (format == DXGI_FORMAT_UNKNOWN) {
         return device->CreateUnorderedAccessView(

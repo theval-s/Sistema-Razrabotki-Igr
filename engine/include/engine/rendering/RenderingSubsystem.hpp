@@ -23,6 +23,11 @@ public:
     [[nodiscard]] RenderingContext& GetContext();
     [[nodiscard]] RenderingResourceManager& GetResourceManager();
     [[nodiscard]] RenderWorld& GetWorld();
+    /// Owned copy of renderer status, queryable after Engine::Initialize() fails.
+    /// Same engine-thread and lifecycle contract as RenderingSystem.
+    [[nodiscard]] RenderingDiagnostics GetDiagnostics() const;
+    [[nodiscard]] RenderDebugView GetDebugView() const noexcept;
+    [[nodiscard]] bool SetDebugView(RenderDebugView view) noexcept;
     /// The surface this subsystem renders into, as handed by the host.
     [[nodiscard]] const NativeSurface& GetSurface() const noexcept;
 
@@ -30,6 +35,12 @@ public:
     // duplicate registration is rejected rather than replacing a live callback.
     void SetOverlayCallbacks(RenderingSystem::OverlayCallback render, std::function<void()> beforeResize);
     void ClearOverlayCallbacks() noexcept;
+
+    /// Optional native-host diagnostics, composited after the scene and before
+    /// the engine UI, into the same target before Present. Hosts must detach
+    /// before their resources die. This lease is independent of the UI lease.
+    void SetHostOverlayCallbacks(RenderingSystem::OverlayCallback render, std::function<void()> beforeResize = {});
+    void ClearHostOverlayCallbacks() noexcept;
 
 private:
     void OnSurfaceChanged(const SurfaceChangedEvent& event);
@@ -39,6 +50,8 @@ private:
     bool resizePending_ = false;
     RenderingSystem::OverlayCallback overlay_;
     std::function<void()> beforeOverlayResize_;
+    RenderingSystem::OverlayCallback hostOverlay_;
+    std::function<void()> beforeHostOverlayResize_;
 };
 
 }  // namespace engine

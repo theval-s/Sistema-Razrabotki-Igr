@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <format>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -11,6 +12,7 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
 #include <engine/core/PathUtils.hpp>
+#include "../rendering/RenderingFailureUtils.hpp"
 
 #include "ModelSlots.hpp"
 
@@ -55,7 +57,7 @@ void CenterAndNormalize(MeshCpu& mesh) {
 }  // namespace
 
 bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/, CpuPayload& payload,
-                                 std::string& error) const {
+                                 std::string& error) const try {
     const std::filesystem::path path = AssetPathResolver::ResolveMesh(desc);
 
     // A per-call Importer: Assimp is only safe for concurrent loads when instances are not
@@ -146,52 +148,72 @@ bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/
     payload.kind = CpuPayload::Kind::Mesh;
     payload.mesh = std::move(mesh);
     return true;
+} catch (const RenderingException& e) {
+    error = rendering_failure::Format(e.GetFailure());
+    return false;
+} catch (const std::exception& e) {
+    error = e.what();
+    return false;
+} catch (...) {
+    error = "AssimpMeshImporter: unknown read failure";
+    return false;
 }
 
 bool AssimpMeshImporter::UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
                                    GpuPayload& result, std::string& error) const {
+    if (!transfer.resources) { error = "AssimpMeshImporter: missing resource manager"; return false; }
     if (payload.kind != CpuPayload::Kind::Mesh) {
         error = "AssimpMeshImporter: payload is not a parsed mesh";
         return false;
     }
 
     std::vector<MeshSection> sections;
+    BufferHandle vertexBuffer, indexBuffer;
+    MeshHandle pendingMesh;
     const auto rollback = [&] {
+        if (pendingMesh) transfer.resources->DestroyMesh(pendingMesh);
+        if (indexBuffer) transfer.resources->DestroyBuffer(indexBuffer);
+        if (vertexBuffer) transfer.resources->DestroyBuffer(vertexBuffer);
         for (const MeshSection& section : sections) transfer.resources->DestroyMesh(section.mesh);
     };
-    for (const MeshSectionCpu& section : payload.mesh.sections) {
-        const std::span vertices(payload.mesh.vertices.data() + section.firstVertex, section.vertexCount);
-        std::vector<uint32_t> indices(payload.mesh.indices.begin() + section.firstIndex,
-                                      payload.mesh.indices.begin() + section.firstIndex + section.indexCount);
-        for (uint32_t& index : indices) index -= section.firstVertex;
+    try {
+        sections.reserve(payload.mesh.sections.size());
+        for (const MeshSectionCpu& section : payload.mesh.sections) {
+            const std::span vertices(payload.mesh.vertices.data() + section.firstVertex, section.vertexCount);
+            std::vector<uint32_t> indices(payload.mesh.indices.begin() + section.firstIndex,
+                                          payload.mesh.indices.begin() + section.firstIndex + section.indexCount);
+            for (uint32_t& index : indices) index -= section.firstVertex;
 
-        const auto vertexBuffer = transfer.resources->CreateVertexBuffer<ugly_utils::VertData>(vertices);
-        const auto indexBuffer = transfer.resources->CreateIndexBuffer<uint32_t>(indices);
-        if (!vertexBuffer || !indexBuffer) {
-            if (vertexBuffer) transfer.resources->DestroyBuffer(vertexBuffer);
-            if (indexBuffer) transfer.resources->DestroyBuffer(indexBuffer);
-            rollback();
-            error = "AssimpMeshImporter: buffer creation failed";
-            return false;
-        }
+            vertexBuffer = transfer.resources->CreateVertexBuffer<ugly_utils::VertData>(vertices);
+            indexBuffer = transfer.resources->CreateIndexBuffer<uint32_t>(indices);
+            if (!vertexBuffer || !indexBuffer)
+                throw std::runtime_error("AssimpMeshImporter: buffer creation failed");
 
-        VertexLayout layout;
-        layout.Add("POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0);
-        layout.Add("NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 16);
-        layout.Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 16 + 12);
-        const MeshHandle mesh = transfer.resources->CreateMesh(vertexBuffer, indexBuffer, std::move(layout),
-                                                               section.indexCount);
-        if (!mesh) {
-            transfer.resources->DestroyBuffer(vertexBuffer);
-            transfer.resources->DestroyBuffer(indexBuffer);
-            rollback();
-            error = "AssimpMeshImporter: mesh registration failed";
-            return false;
+            VertexLayout layout;
+            layout.Add("POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0);
+            layout.Add("NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 16);
+            layout.Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 16 + 12);
+            pendingMesh = transfer.resources->CreateMesh(vertexBuffer, indexBuffer, std::move(layout),
+                                                        section.indexCount);
+            if (!pendingMesh)
+                throw std::runtime_error("AssimpMeshImporter: mesh registration failed");
+            // The registered mesh now owns its buffers; rollback must destroy it only once.
+            vertexBuffer = {};
+            indexBuffer = {};
+            sections.push_back({pendingMesh, section.materialSlot});
+            pendingMesh = {};
         }
-        sections.push_back({mesh, section.materialSlot});
+        result.meshSections = std::move(sections);
+        return true;
+    } catch (const RenderingException& e) {
+        error = rendering_failure::Format(e.GetFailure());
+    } catch (const std::exception& e) {
+        error = e.what();
+    } catch (...) {
+        error = "AssimpMeshImporter: unknown upload failure";
     }
-    result.meshSections = std::move(sections);
-    return true;
+    rollback();
+    return false;
 }
 
 }  // namespace engine

@@ -108,6 +108,9 @@ private:
     QStringList copyIn(const QStringList& paths, const QString& folder);
     /// Shows the import dialog for one model file. Returns the new model folder, or empty.
     QString importModel(const QString& source, const QString& folder);
+    QString importAnimatedRig(const QString& source = {}, const QString& folder = {});
+    void reimportAnimatedRig(const QString& path);
+    void duplicateAnimatedRig(const QString& path);
     /// Shows the Extract Materials dialog for a model in the project.
     void extractMaterials(const QString& model);
     /// Picks files to import.
@@ -162,6 +165,9 @@ private:
     QAction* copy_uuid_ = nullptr;
     QAction* show_in_explorer_ = nullptr;
     QAction* import_ = nullptr;
+    QAction* import_rig_ = nullptr;
+    QAction* reimport_rig_ = nullptr;
+    QAction* duplicate_rig_ = nullptr;
     QAction* instance_from_texture_ = nullptr;
     QAction* extract_materials_ = nullptr;
 };

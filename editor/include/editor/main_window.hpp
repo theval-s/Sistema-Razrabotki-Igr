@@ -14,6 +14,9 @@ class CDockManager;
 }
 
 class QLabel;
+class QComboBox;
+class QPlainTextEdit;
+class QDialog;
 class QMenu;
 class QTimer;
 
@@ -26,6 +29,8 @@ namespace editor {
 class EditorCameraSubsystem;
 class EditorContext;
 class ModuleLoader;
+class LogPanel;
+class RenderingStatus;
 class TransformGizmo;
 class ViewportPicker;
 class ViewportWidget;
@@ -47,10 +52,15 @@ private slots:
     void tickEngine();
 
 private:
+    friend class MainWindowTestAccess;
+    void wireEngine();
+    void initializeEngine();
+    void surfaceResized(quint32 width, quint32 height);
     void buildMenus();
     /// Move/Rotate/Scale (W/E/R) and Local Axes (X), in `menu` and the viewport's toolbar.
     void buildGizmoActions(QMenu& menu);
     void buildLogDock();
+    void showRenderingLog();
     /// Scene name and unsaved-changes mark.
     void refreshTitle();
     void restoreLayout();
@@ -74,12 +84,25 @@ private:
     std::unique_ptr<ViewportPicker> picker_;
     std::unique_ptr<ModuleLoader> modules_;
     std::shared_ptr<spdlog::sinks::sink> log_sink_;
+    std::unique_ptr<RenderingStatus> rendering_status_;
 
     ads::CDockManager* dock_manager_ = nullptr;
     ViewportWidget* viewport_ = nullptr;
     EditorCameraSubsystem* camera_ = nullptr;
     QLabel* status_label_ = nullptr;
     QLabel* play_hint_ = nullptr;
+    QLabel* rendering_status_label_ = nullptr;
+    QComboBox* debug_view_ = nullptr;
+    LogPanel* log_panel_ = nullptr;
+    QDialog* rendering_details_dialog_ = nullptr;
+    QPlainTextEdit* rendering_details_ = nullptr;
+    QString rendering_detail_text_;
+    QString rendering_log_search_;
+    bool startup_failed_ = false;
+    bool engine_wired_ = false;
+    bool initializing_engine_ = false;
+    bool startup_pending_surface_ = false;
+    bool engine_start_completed_ = false;
     QTimer* tick_timer_ = nullptr;
     /// Set by switchProject(): started once the layout is saved.
     QString relaunch_project_;

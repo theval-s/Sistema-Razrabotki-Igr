@@ -6,6 +6,7 @@
 #include <engine/core/FrameContext.hpp>
 #include <engine/engine.hpp>
 #include <engine/scene/SceneDocument.hpp>
+#include <engine/scripting/ScriptSubsystem.hpp>
 #include "animation/AnimationData.hpp"
 
 #include <gtest/gtest.h>
@@ -648,6 +649,144 @@ TEST_F(AnimationRuntime, SceneReplacementAndSameFrameReattachmentOwnNewStateAndC
     Step(.125);
     EXPECT_DOUBLE_EQ(animation->GetPlaybackState(entity)->timeSeconds, .125);
     ExpectPoseNear(*retained, saved);
+}
+
+class AnimationPreview : public AnimationRuntime {
+protected:
+    void SetUp() override {
+        host.SetEditorMode();
+        host.AddSubsystem<ScriptSubsystem>();
+        AnimationRuntime::SetUp();
+    }
+    void PreviewStep(double real, double simulation = 0) {
+        animation->LateUpdate(FrameContext{.realDeltaSeconds = real, .deltaSeconds = simulation});
+    }
+};
+
+TEST_F(AnimationRuntime, PreviewRequiresEditorEditMode) {
+    const auto entity = AddBot("standalone");
+    EXPECT_FALSE(animation->Preview(entity, idleRef, 0, true, error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_TRUE(animation->GetPreviewEntity() == entt::null);
+}
+
+TEST_F(AnimationPreview, RealClockOnlyAdvancesExplicitEntityAndNeverChangesAuthoring) {
+    const auto a = AddBot("preview"), b = AddBot("frozen");
+    PreviewStep(0);
+    const auto authored = *host.GetScene().TryGetComponent<Animator>(a);
+    const auto initial = animation->GetPose(a);
+    const auto frozen = animation->GetPose(b);
+    ASSERT_TRUE(initial);
+    ASSERT_TRUE(frozen);
+    const double simulationTime = host.GetFrame().simulationTimeSeconds;
+    ASSERT_TRUE(animation->Preview(a, walkRef, 0, false, error)) << error;
+    ASSERT_TRUE(animation->SetSpeed(a, 2, error)) << error;
+    PreviewStep(.125, .75); // Even a supplied simulation delta cannot animate other Edit entities.
+    EXPECT_EQ(animation->GetPreviewEntity(), a);
+    ASSERT_TRUE(animation->GetPlaybackState(a));
+    EXPECT_DOUBLE_EQ(animation->GetPlaybackState(a)->timeSeconds, .25);
+    EXPECT_DOUBLE_EQ(animation->GetPlaybackState(b)->timeSeconds, 0);
+    ExpectPoseNear(*animation->GetPose(b), *frozen);
+    EXPECT_TRUE(PosesDiffer(*animation->GetPose(a), *initial));
+    EXPECT_EQ(*host.GetScene().TryGetComponent<Animator>(a), authored);
+    EXPECT_DOUBLE_EQ(host.GetFrame().simulationTimeSeconds, simulationTime);
+
+    ASSERT_TRUE(animation->SetPaused(a, true));
+    PreviewStep(.3);
+    EXPECT_DOUBLE_EQ(animation->GetPlaybackState(a)->timeSeconds, .25);
+    ASSERT_TRUE(animation->Seek(a, .6, error)) << error;
+    PreviewStep(.2);
+    EXPECT_DOUBLE_EQ(animation->GetPlaybackState(a)->timeSeconds, .6);
+    animation->EndPreview();
+    EXPECT_TRUE(animation->GetPreviewEntity() == entt::null);
+    ASSERT_TRUE(animation->GetPose(a)); // EndPreview restores synchronously when assets are ready.
+    EXPECT_DOUBLE_EQ(animation->GetPlaybackState(a)->timeSeconds, 0);
+    ExpectPoseNear(*animation->GetPose(a), *initial);
+    EXPECT_EQ(*host.GetScene().TryGetComponent<Animator>(a), authored);
+}
+
+TEST_F(AnimationPreview, ReplacingPreviewRestoresPreviousEntityAndCrossfadeUsesRealClock) {
+    const auto a = AddBot("first"), b = AddBot("second");
+    PreviewStep(0);
+    const auto initial = animation->GetPose(a);
+    ASSERT_TRUE(animation->Preview(a, idleRef, 0, true, error)) << error;
+    PreviewStep(.25);
+    ASSERT_TRUE(animation->Preview(a, walkRef, .5f, true, error)) << error;
+    PreviewStep(.25);
+    EXPECT_TRUE(animation->GetPlaybackState(a)->transitioning);
+    ASSERT_TRUE(animation->SetPaused(a, true));
+    const auto paused = animation->GetPose(a);
+    PreviewStep(.5);
+    ExpectPoseNear(*animation->GetPose(a), *paused);
+    ASSERT_TRUE(animation->SetPaused(a, false));
+    PreviewStep(.25);
+    EXPECT_FALSE(animation->GetPlaybackState(a)->transitioning);
+    ASSERT_TRUE(animation->Preview(b, walkRef, 0, true, error)) << error;
+    EXPECT_EQ(animation->GetPreviewEntity(), b);
+    ExpectPoseNear(*animation->GetPose(a), *initial);
+    PreviewStep(.125);
+    EXPECT_DOUBLE_EQ(animation->GetPlaybackState(a)->timeSeconds, 0);
+    EXPECT_DOUBLE_EQ(animation->GetPlaybackState(b)->timeSeconds, .125);
+}
+
+TEST_F(AnimationPreview, EndRestoresRestPoseWhenPlayOnStartIsDisabled) {
+    const auto entity = AddBot("rest");
+    host.GetScene().Modify<Animator>(entity, [](auto& animator) { animator.playOnStart = false; });
+    PreviewStep(0);
+    const auto rest = animation->GetPose(entity);
+    ASSERT_TRUE(rest);
+    ASSERT_TRUE(animation->Preview(entity, walkRef, 0, true, error)) << error;
+    PreviewStep(.375);
+    EXPECT_TRUE(PosesDiffer(*animation->GetPose(entity), *rest));
+    animation->EndPreview();
+    ASSERT_TRUE(animation->GetPlaybackState(entity));
+    EXPECT_FALSE(animation->GetPlaybackState(entity)->playing);
+    EXPECT_FLOAT_EQ(animation->GetPlaybackState(entity)->duration, 0);
+    ExpectPoseNear(*animation->GetPose(entity), *rest);
+}
+
+TEST_F(AnimationPreview, LifecycleResetSceneReplacementAndEnteringPlayClearPreview) {
+    auto entity = AddBot("lifecycle");
+    const auto begin = [&] { return animation->Preview(entity, walkRef, 0, true, error); };
+    ASSERT_TRUE(begin()) << error;
+    host.GetScene().Modify<Animator>(entity, [](auto& animator) { animator.speed = 3; });
+    EXPECT_TRUE(animation->GetPreviewEntity() == entt::null);
+    ASSERT_TRUE(begin()) << error;
+    const auto authored = *host.GetScene().TryGetComponent<Animator>(entity);
+    host.GetScene().RemoveComponent<Animator>(entity);
+    EXPECT_TRUE(animation->GetPreviewEntity() == entt::null);
+    host.GetScene().AddComponent<Animator>(entity, authored);
+    ASSERT_TRUE(begin()) << error;
+    animation->ResetSimulation();
+    EXPECT_TRUE(animation->GetPreviewEntity() == entt::null);
+    EXPECT_FALSE(animation->GetPlaybackState(entity));
+    ASSERT_TRUE(begin()) << error;
+    ASSERT_TRUE(host.PlayCurrentScene(root, {}, error)) << error;
+    EXPECT_TRUE(animation->GetPreviewEntity() == entt::null);
+    entity = host.GetScene().FindFirstByName("lifecycle");
+    EXPECT_FALSE(begin()); // Preview API rejects Play, including paused Play.
+    ASSERT_TRUE(host.GetSceneAssets().LoadSkeleton(SkeletonPath));
+    ASSERT_TRUE(host.GetSceneAssets().LoadAnimationClip(IdlePath));
+    host.SetPaused(true);
+    PreviewStep(.5, .5);
+    ASSERT_TRUE(animation->GetPlaybackState(entity));
+    EXPECT_DOUBLE_EQ(animation->GetPlaybackState(entity)->timeSeconds, 0);
+    host.SetPaused(false);
+    PreviewStep(.125, .125);
+    EXPECT_DOUBLE_EQ(animation->GetPlaybackState(entity)->timeSeconds, .375); // Authored speed 3.
+    host.StopPlay();
+    entity = host.GetScene().FindFirstByName("lifecycle");
+    ASSERT_TRUE(begin()) << error;
+    host.GetScene().DestroyEntity(entity);
+    EXPECT_TRUE(animation->GetPreviewEntity() == entt::null);
+    entity = AddBot("scene replacement");
+    ASSERT_TRUE(begin()) << error;
+    host.GetScene().Clear();
+    EXPECT_TRUE(animation->GetPreviewEntity() == entt::null);
+    entity = AddBot("shutdown");
+    ASSERT_TRUE(begin()) << error;
+    host.Shutdown();
+    EXPECT_TRUE(animation->GetPreviewEntity() == entt::null);
 }
 
 TEST_F(AnimationImport, SameJointCountWithDifferentSourceSignatureFallsBackToRestPalette) {

@@ -10,6 +10,10 @@ sri_add_editor_module(editor_module_content
     asset_dialogs.hpp
     scene_placement.cpp
     scene_placement.hpp
+    rig_dialog.cpp
+    rig_dialog.hpp
+    rig_workflow.cpp
+    rig_workflow.hpp
     thumbnail_cache.cpp
     thumbnail_cache.hpp
 )

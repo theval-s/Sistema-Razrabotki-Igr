@@ -3,6 +3,7 @@
 #include <SimpleMath.h>
 
 #include <engine/engine_export.hpp>
+#include <engine/rendering/RenderDebugView.hpp>
 
 #include <engine/rendering/resources/Buffer.hpp>
 #include <engine/rendering/RenderingContext.hpp>
@@ -101,6 +102,7 @@ struct ConstantBuffer {
     
     void Destroy(RenderingResourceManager& resourceManager) {
         resourceManager.DestroyBuffer(handle_);
+        handle_ = {};
     }
 
 private:
@@ -126,6 +128,8 @@ struct GBuffer {
 struct RenderingResources {
     uint32_t screenWith = 0;
     uint32_t screenHeight = 0;
+    // Per-frame copy of RenderingSystem selection, consumed only by presentation.
+    RenderDebugView debugView = RenderDebugView::Final;
 
     ConstantBuffer<FrameBufferData> frameCBuffer;
     ConstantBuffer<ViewBufferData> viewCBuffer;

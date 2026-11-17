@@ -13,7 +13,7 @@ void CreateMask(RenderingResourceManager& manager, RenderingResources& resources
 }
 }
 
-void SelectionMaskPass::Initialize(RenderingResourceManager& manager, RenderingContext&, RenderingResources& resources) {
+void SelectionMaskPass::Initialize(RenderingResourceManager& manager, RenderingContext& context, RenderingResources& resources) try {
     defaultVS_ = manager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
                                        {.defines = {{"MATERIAL_GBUFFER_VS"}}});
     skinnedDefaultVS_ = manager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
@@ -22,6 +22,9 @@ void SelectionMaskPass::Initialize(RenderingResourceManager& manager, RenderingC
     occludedPS_ = manager.CompileShader(L"engine/SelectionMask.hlsl", ShaderType::Pixel,
                                         {.defines = {{"OCCLUDED"}}});
     CreateMask(manager, resources);
+} catch (...) {
+    Destroy(manager, context, resources);
+    throw;
 }
 
 void SelectionMaskPass::Destroy(RenderingResourceManager& manager, RenderingContext&, RenderingResources& resources) {
@@ -31,12 +34,17 @@ void SelectionMaskPass::Destroy(RenderingResourceManager& manager, RenderingCont
     manager.DestroyShader(skinnedDefaultVS_);
     manager.DestroyShader(visiblePS_);
     manager.DestroyShader(occludedPS_);
+    defaultVS_ = {};
+    skinnedDefaultVS_ = {};
+    visiblePS_ = {};
+    occludedPS_ = {};
 }
 
 bool SelectionMaskPass::Reinitialize(RenderingResourceManager& manager, RenderingContext&, RenderingResources& resources) {
     manager.DestroyTexture(resources.selectionMask);
+    resources.selectionMask = {};
     CreateMask(manager, resources);
-    return static_cast<bool>(resources.selectionMask);
+    return true;
 }
 
 void SelectionMaskPass::Render(RenderWorld& world, RenderingContext& context, RenderingResources& resources) {

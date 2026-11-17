@@ -23,6 +23,7 @@ void Grow(Aabb& bounds, bool& empty, const Vector3& point) {
 }
 
 struct Player {
+    AssetReference reference;
     AssetHandle<AnimationClipAsset> handle;
     entt::resource<AnimationClipAsset> clip;
     ozz::animation::SamplingJob::Context context;
@@ -64,6 +65,7 @@ struct Instance {
 
 std::unique_ptr<Player> RequestPlayer(AssetSystem& assets, const AssetReference& clip, bool loop) {
     auto result = std::make_unique<Player>();
+    result->reference = clip;
     result->handle = assets.RequestAnimationClip(clip);
     result->loop = loop;
     return result;
@@ -94,7 +96,10 @@ LoadResult ResolvePlayer(Player& player, const SkeletonAsset& skeleton, AssetSys
 struct AnimationSubsystem::Impl {
     Engine* engine = nullptr;
     std::size_t observer = 0;
+    std::size_t changeObserver = 0;
     std::unordered_map<entt::entity, std::unique_ptr<Instance>> instances;
+    entt::entity preview = entt::null;
+    std::optional<SkinnedMeshRenderer> previewRenderer;
 
     Instance* Ensure(entt::entity entity) {
         if (!engine) return nullptr;
@@ -103,6 +108,7 @@ struct AnimationSubsystem::Impl {
         if (!component) return nullptr;
         auto& slot = instances[entity];
         if (slot && slot->authored == *component) return slot.get();
+        if (preview == entity) preview = entt::null;
         slot = std::make_unique<Instance>();
         slot->authored = *component;
         slot->speed = component->speed;
@@ -195,17 +201,42 @@ std::string_view AnimationSubsystem::GetName() const { return "AnimationSubsyste
 bool AnimationSubsystem::Initialize() {
     impl_->engine = &GetEngine();
     impl_->observer = GetEngine().GetScene().AddLifecycleObserver([this](Scene::LifecycleEvent event, entt::entity entity, entt::id_type type) {
-        if (event == Scene::LifecycleEvent::EntityDestroying || type == entt::type_hash<Animator>::value())
+        if (event == Scene::LifecycleEvent::EntityDestroying || type == entt::type_hash<Animator>::value() ||
+            (impl_->preview == entity && type == entt::type_hash<SkinnedMeshRenderer>::value())) {
+            if (impl_->preview == entity) impl_->preview = entt::null;
             impl_->instances.erase(entity);
+        }
+    });
+    impl_->changeObserver = GetEngine().GetScene().AddChangeObserver([this](Scene::ChangeKind, entt::entity entity) {
+        if (entity == entt::null || impl_->preview != entity) return;
+        const auto& scene = GetEngine().GetScene();
+        const auto* animator = scene.TryGetComponent<Animator>(entity);
+        const auto* renderer = scene.TryGetComponent<SkinnedMeshRenderer>(entity);
+        const auto found = impl_->instances.find(entity);
+        const auto& previous = impl_->previewRenderer;
+        const bool meshChanged = bool(renderer) != previous.has_value() ||
+            (renderer && previous && (renderer->mesh != previous->mesh || renderer->meshReference != previous->meshReference));
+        if (!animator || found == impl_->instances.end() || found->second->authored != *animator || meshChanged) {
+            // Scene change observers must not mutate the scene. Recreate the normal
+            // authored pose at the next LateUpdate, before render extraction.
+            impl_->preview = entt::null;
+            impl_->previewRenderer.reset();
+            impl_->instances.erase(entity);
+        }
     });
     return true;
 }
 void AnimationSubsystem::Shutdown() {
-    if (impl_->engine) impl_->engine->GetScene().RemoveLifecycleObserver(impl_->observer);
+    if (impl_->engine) {
+        impl_->engine->GetScene().RemoveLifecycleObserver(impl_->observer);
+        impl_->engine->GetScene().RemoveChangeObserver(impl_->changeObserver);
+    }
     ResetSimulation();
     impl_->engine = nullptr;
 }
 void AnimationSubsystem::ResetSimulation() {
+    impl_->preview = entt::null;
+    impl_->previewRenderer.reset();
     impl_->instances.clear();
     if (impl_->engine) impl_->engine->GetScene().ForEach<SkinnedMeshRenderer>([&](entt::entity entity, const SkinnedMeshRenderer&) {
         impl_->engine->GetScene().TryGetComponent<SkinnedMeshRenderer>(entity)->posedBounds.reset();
@@ -213,10 +244,15 @@ void AnimationSubsystem::ResetSimulation() {
 }
 void AnimationSubsystem::LateUpdate(const FrameContext& frame) {
     if (!impl_->engine) return;
-    const double delta = std::isfinite(frame.deltaSeconds) ? std::max(0.0, frame.deltaSeconds) : 0;
+    const bool edit = GetEngine().IsEditorMode() && !GetEngine().IsPlaying();
+    if (!edit && impl_->preview != entt::null) EndPreview();
+    const double delta = !edit && !frame.paused && !GetEngine().IsPaused() && std::isfinite(frame.deltaSeconds)
+        ? std::max(0.0, frame.deltaSeconds) : 0;
+    const double previewDelta = std::isfinite(frame.realDeltaSeconds) ? std::max(0.0, frame.realDeltaSeconds) : 0;
     auto& scene = GetEngine().GetScene();
     scene.ForEach<Animator>([&](entt::entity entity, const Animator&) {
-        if (auto* state = impl_->Ensure(entity)) impl_->Evaluate(*state, delta);
+        if (auto* state = impl_->Ensure(entity))
+            impl_->Evaluate(*state, edit && impl_->preview == entity ? previewDelta : delta);
     });
     std::erase_if(impl_->instances, [&](const auto& entry) { return !scene.HasComponent<Animator>(entry.first); });
     scene.ForEach<SkinnedMeshRenderer>([&](entt::entity entity, const SkinnedMeshRenderer& renderer) {
@@ -251,6 +287,46 @@ bool AnimationSubsystem::Play(entt::entity entity, const AssetReference& clip, f
     state->error.clear();
     return true;
 }
+bool AnimationSubsystem::Preview(entt::entity entity, const AssetReference& clip, float fadeSeconds,
+                                 bool loop, std::string& error) {
+    error.clear();
+    if (!impl_->engine || !GetEngine().IsEditorMode() || GetEngine().IsPlaying()) {
+        error = "animation preview requires an editor in Edit mode";
+        return false;
+    }
+    // Validate before replacing another entity's audition.
+    if (!GetEngine().GetScene().HasComponent<Animator>(entity) ||
+        !std::isfinite(fadeSeconds) || fadeSeconds < 0 ||
+        !GetEngine().GetSceneAssets().GetCatalog().Find(clip.id, CatalogAssetKind::AnimationClip)) {
+        error = "preview requires an Animator, a catalog clip and a finite nonnegative fade";
+        return false;
+    }
+    if (impl_->preview != entity) {
+        EndPreview();
+        impl_->instances.erase(entity);
+    }
+    if (!Play(entity, clip, fadeSeconds, loop, error)) return false;
+    impl_->preview = entity;
+    if (const auto* renderer = GetEngine().GetScene().TryGetComponent<SkinnedMeshRenderer>(entity))
+        impl_->previewRenderer = *renderer;
+    else impl_->previewRenderer.reset();
+    return true;
+}
+void AnimationSubsystem::EndPreview() {
+    const auto entity = impl_->preview;
+    impl_->preview = entt::null;
+    impl_->previewRenderer.reset();
+    if (entity == entt::null) return;
+    impl_->instances.erase(entity);
+    if (impl_->engine && GetEngine().IsEditorMode() && !GetEngine().IsPlaying()) {
+        if (auto* state = impl_->Ensure(entity)) impl_->Evaluate(*state, 0);
+        if (auto* renderer = GetEngine().GetScene().TryGetComponent<SkinnedMeshRenderer>(entity)) {
+            const auto mesh = GetEngine().GetSceneAssets().Peek(renderer->mesh);
+            renderer->posedBounds = mesh ? std::optional{SkinnedMeshBounds(*mesh, GetPose(entity).get())} : std::nullopt;
+        }
+    }
+}
+entt::entity AnimationSubsystem::GetPreviewEntity() const { return impl_->preview; }
 bool AnimationSubsystem::SetPaused(entt::entity entity, bool paused) {
     auto* state = impl_->Ensure(entity);
     if (!state) return false;
@@ -298,7 +374,9 @@ std::optional<AnimationPlaybackState> AnimationSubsystem::GetPlaybackState(entt:
     const auto& state = *it->second;
     const auto* player = state.current.get();
     return AnimationPlaybackState{state.pose != nullptr, state.playing, state.target != nullptr,
-        player ? player->time : 0, player && player->clip ? player->clip->duration : 0, state.error};
+        player ? player->time : 0, player && player->clip ? player->clip->duration : 0, state.error,
+        player ? player->reference : AssetReference{}, state.target ? state.target->reference : AssetReference{},
+        state.speed, player ? player->loop : state.authored.loop};
 }
 
 std::shared_ptr<const SkinningPalette> BuildSkinningPalette(const SkinBinding& binding,

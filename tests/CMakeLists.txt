@@ -17,6 +17,8 @@ add_executable(animation_tests
     animation_scene_tests.cpp
     animation_lua_tests.cpp
     animation_build_tests.cpp
+    rig_authoring_tests.cpp
+    rig_workflow_integration_tests.cpp
 )
 add_dependencies(animation_tests sri-build)
 target_link_libraries(animation_tests PRIVATE Engine::EngineStatic GTest::gtest_main ozz_animation)
@@ -42,6 +44,20 @@ add_custom_command(TARGET rendering_skinning_tests POST_BUILD
     COMMAND_EXPAND_LISTS VERBATIM
 )
 add_test(NAME rendering_skinning_tests COMMAND rendering_skinning_tests)
+
+foreach(render_target IN ITEMS rendering_diagnostics_tests rendering_resource_tests render_debug_view_tests
+        render_debug_native_tests asset_event_tests)
+    add_executable(${render_target} ${render_target}.cpp)
+    target_link_libraries(${render_target} PRIVATE Engine::EngineStatic GTest::gtest_main d3d11 d3dcompiler dxgi user32)
+    target_compile_definitions(${render_target} PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+    set_project_warnings(${render_target})
+    set_target_properties(${render_target} PROPERTIES FOLDER tests)
+    add_custom_command(TARGET ${render_target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:${render_target}> $<TARGET_FILE_DIR:${render_target}>
+        COMMAND_EXPAND_LISTS VERBATIM)
+    add_test(NAME ${render_target} COMMAND ${render_target})
+endforeach()
 
 # Exercise both generated export-header modes against the same utility contract.
 foreach(utf_target IN ITEMS utf_tests utf_shared_tests)
@@ -93,6 +109,7 @@ if(SRI_BUILD_EDITOR)
     find_package(spdlog CONFIG REQUIRED)
     add_executable(content_browser_drop_tests
         content_browser_drop_tests.cpp
+        content_rig_dialog_tests.cpp
         ../editor/modules/content/content_browser.cpp
         ../editor/modules/content/content_browser.hpp
         ../editor/modules/content/asset_filter_model.cpp
@@ -101,6 +118,10 @@ if(SRI_BUILD_EDITOR)
         ../editor/modules/content/asset_dialogs.cpp
         ../editor/modules/content/asset_dialogs.hpp
         ../editor/modules/content/scene_placement.cpp
+        ../editor/modules/content/rig_dialog.cpp
+        ../editor/modules/content/rig_dialog.hpp
+        ../editor/modules/content/rig_workflow.cpp
+        ../editor/modules/content/rig_workflow.hpp
         ../editor/modules/content/thumbnail_cache.cpp
         ../editor/modules/content/thumbnail_cache.hpp
     )
@@ -114,6 +135,22 @@ if(SRI_BUILD_EDITOR)
             $<TARGET_RUNTIME_DLLS:content_browser_drop_tests> $<TARGET_FILE_DIR:content_browser_drop_tests>
         COMMAND_EXPAND_LISTS VERBATIM)
     add_test(NAME content_browser_drop_tests COMMAND content_browser_drop_tests)
+
+    add_executable(audio_editor_tests
+        audio_editor_tests.cpp
+        ../editor/modules/audio/audio_panel.cpp
+        ../editor/modules/audio/audio_panel.hpp
+    )
+    target_include_directories(audio_editor_tests PRIVATE ../editor/modules/audio)
+    target_link_libraries(audio_editor_tests PRIVATE editor_core Engine::Engine GTest::gtest
+        Qt6::Widgets Qt6::Test ads::qtadvanceddocking-qt6)
+    set_project_warnings(audio_editor_tests)
+    set_target_properties(audio_editor_tests PROPERTIES FOLDER tests AUTOMOC ON)
+    add_custom_command(TARGET audio_editor_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:audio_editor_tests> $<TARGET_FILE_DIR:audio_editor_tests>
+        COMMAND_EXPAND_LISTS VERBATIM)
+    add_test(NAME audio_editor_tests COMMAND audio_editor_tests)
 
     add_executable(autoload_dialog_tests
         autoload_dialog_tests.cpp
@@ -207,6 +244,22 @@ if(SRI_BUILD_EDITOR)
     )
     add_test(NAME viewport_input_tests COMMAND viewport_input_tests)
 
+    add_executable(viewport_overlay_tests
+        viewport_overlay_tests.cpp
+        ../editor/src/viewport_labels.cpp
+        ../editor/src/viewport_overlay.cpp
+    )
+    target_include_directories(viewport_overlay_tests PRIVATE ../editor/include)
+    target_link_libraries(viewport_overlay_tests PRIVATE editor_core Engine::Engine GTest::gtest
+        Qt6::Widgets Qt6::Test d3d11)
+    set_project_warnings(viewport_overlay_tests)
+    set_target_properties(viewport_overlay_tests PROPERTIES FOLDER tests)
+    add_custom_command(TARGET viewport_overlay_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:viewport_overlay_tests> $<TARGET_FILE_DIR:viewport_overlay_tests>
+        COMMAND_EXPAND_LISTS VERBATIM)
+    add_test(NAME viewport_overlay_tests COMMAND viewport_overlay_tests)
+
     add_executable(scene_history_tests scene_history_tests.cpp)
     target_link_libraries(scene_history_tests PRIVATE editor_core Engine::Engine GTest::gtest_main Qt6::Widgets)
     set_project_warnings(scene_history_tests)
@@ -260,6 +313,71 @@ if(SRI_BUILD_EDITOR)
         COMMAND_EXPAND_LISTS VERBATIM
     )
     add_test(NAME log_model_tests COMMAND log_model_tests)
+
+    add_executable(editor_rendering_status_tests
+        editor_rendering_status_tests.cpp
+        ../editor/src/rendering_status.cpp
+        ../editor/include/editor/rendering_status.hpp
+        ../editor/src/log_model.cpp
+        ../editor/include/editor/log_model.hpp
+        ../editor/src/log_panel.cpp
+        ../editor/include/editor/log_panel.hpp
+    )
+    target_include_directories(editor_rendering_status_tests PRIVATE ../editor/include)
+    target_link_libraries(editor_rendering_status_tests PRIVATE editor_core Engine::Engine
+        GTest::gtest Qt6::Widgets spdlog::spdlog user32)
+    set_project_warnings(editor_rendering_status_tests)
+    set_target_properties(editor_rendering_status_tests PROPERTIES FOLDER tests AUTOMOC ON)
+    add_custom_command(TARGET editor_rendering_status_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:editor_rendering_status_tests> $<TARGET_FILE_DIR:editor_rendering_status_tests>
+        COMMAND_EXPAND_LISTS VERBATIM)
+    add_test(NAME editor_rendering_status_tests COMMAND editor_rendering_status_tests)
+
+    add_executable(editor_rendering_integration_tests
+        editor_rendering_integration_tests.cpp
+        ../editor/src/log_model.cpp
+        ../editor/src/log_panel.cpp
+        ../editor/src/main_window.cpp
+        ../editor/src/module_loader.cpp
+        ../editor/src/preferences_dialog.cpp
+        ../editor/src/project_dialog.cpp
+        ../editor/src/rendering_status.cpp
+        ../editor/src/session_log.cpp
+        ../editor/src/viewport_overlay.cpp
+        ../editor/src/viewport_labels.cpp
+        ../editor/src/viewport_widget.cpp
+        ../editor/include/editor/log_model.hpp
+        ../editor/include/editor/log_panel.hpp
+        ../editor/include/editor/main_window.hpp
+        ../editor/include/editor/module_loader.hpp
+        ../editor/include/editor/preferences_dialog.hpp
+        ../editor/include/editor/project_dialog.hpp
+        ../editor/include/editor/viewport_widget.hpp
+    )
+    target_include_directories(editor_rendering_integration_tests PRIVATE ../editor/include)
+    target_compile_definitions(editor_rendering_integration_tests PRIVATE SRI_ENGINE_VERSION="${PROJECT_VERSION}")
+    target_link_libraries(editor_rendering_integration_tests PRIVATE editor_core Engine::Engine
+        GTest::gtest Qt6::Widgets Qt6::Test spdlog::spdlog ads::qtadvanceddocking-qt6)
+    set_project_warnings(editor_rendering_integration_tests)
+    set_target_properties(editor_rendering_integration_tests PROPERTIES FOLDER tests AUTOMOC ON)
+    add_custom_command(TARGET editor_rendering_integration_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:editor_rendering_integration_tests> $<TARGET_FILE_DIR:editor_rendering_integration_tests>
+        COMMAND_EXPAND_LISTS VERBATIM)
+    add_test(NAME editor_rendering_integration_tests COMMAND editor_rendering_integration_tests)
+
+    add_executable(session_log_tests session_log_tests.cpp ../editor/src/session_log.cpp)
+    target_include_directories(session_log_tests PRIVATE ../editor/include ../editor/core/include)
+    target_compile_definitions(session_log_tests PRIVATE SRI_ENGINE_VERSION="${PROJECT_VERSION}")
+    target_link_libraries(session_log_tests PRIVATE Engine::EngineStatic GTest::gtest_main Qt6::Core spdlog::spdlog)
+    set_project_warnings(session_log_tests)
+    set_target_properties(session_log_tests PROPERTIES FOLDER tests)
+    add_custom_command(TARGET session_log_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:session_log_tests> $<TARGET_FILE_DIR:session_log_tests>
+        COMMAND_EXPAND_LISTS VERBATIM)
+    add_test(NAME session_log_tests COMMAND session_log_tests)
 endif()
 
 add_executable(lua_runtime_tests lua_runtime_tests.cpp autoload_session_tests.cpp play_mode_tests.cpp
@@ -322,6 +440,12 @@ add_custom_command(TARGET ui_benchmark POST_BUILD
 add_executable(asset_catalog_tests asset_catalog_tests.cpp)
 target_link_libraries(asset_catalog_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(asset_catalog_tests)
+set_target_properties(asset_catalog_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET asset_catalog_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:asset_catalog_tests> $<TARGET_FILE_DIR:asset_catalog_tests>
+    COMMAND_EXPAND_LISTS VERBATIM)
+add_test(NAME asset_catalog_tests COMMAND asset_catalog_tests)
 
 add_executable(asset_authoring_tests asset_authoring_tests.cpp)
 target_link_libraries(asset_authoring_tests PRIVATE Engine::EngineStatic GTest::gtest_main)

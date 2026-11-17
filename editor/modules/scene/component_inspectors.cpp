@@ -7,6 +7,7 @@
 #include <QTextDocument>
 #include <QObject>
 #include <QSignalBlocker>
+#include <QSettings>
 #include <QStringList>
 #include <QDesktopServices>
 #include <QUrl>
@@ -18,6 +19,8 @@
 #include <QComboBox>
 #include <QStandardItemModel>
 #include <QDoubleSpinBox>
+#include <QSlider>
+#include <QListView>
 #include <QStyle>
 #include <QVBoxLayout>
 #include <engine/core/FileSystem.hpp>
@@ -37,6 +40,7 @@
 #include <entt/core/type_info.hpp>
 
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/assets/RigAuthoring.hpp>
 #include <engine/animation/AnimationSubsystem.hpp>
 #include <engine/audio/AudioSubsystem.hpp>
 #include <engine/engine.hpp>
@@ -52,6 +56,7 @@
 
 #include "navigation_bake.hpp"
 #include "property_form.hpp"
+#include "../audio/audio_probe.hpp"
 
 namespace {
 
@@ -406,24 +411,138 @@ void buildMeshRenderer(PropertyForm& form, editor::EditorContext& context, const
     addSlotMaterials(form, context, entity);
 }
 
+template<class Definition, class Parse>
+bool readRigDefinition(const engine::AssetCatalog& catalog, const engine::AssetReference& reference,
+                       engine::CatalogAssetKind kind, Definition& definition, Parse parse) {
+    const auto* entry = catalog.Find(reference.id, kind);
+    std::string text, error;
+    return entry && engine::ReadTextFile(entry->source, text, error) && parse(text, definition, error);
+}
+
+bool compatibleClip(const engine::AssetCatalog& catalog, const engine::AssetReference& clip,
+                    const engine::AssetReference& skeleton) {
+    engine::AnimationClipDefinition definition;
+    if (!skeleton.id.IsValid() || !readRigDefinition(catalog, clip, engine::CatalogAssetKind::AnimationClip,
+            definition, engine::ParseAnimationClipDefinition)) return false;
+    if (definition.skeleton.id == skeleton.id) return true;
+    engine::SkeletonDefinition a, b;
+    return readRigDefinition(catalog, skeleton, engine::CatalogAssetKind::Skeleton, a, engine::ParseSkeletonDefinition) &&
+        readRigDefinition(catalog, definition.skeleton, engine::CatalogAssetKind::Skeleton, b, engine::ParseSkeletonDefinition) &&
+        a.source.id == b.source.id;
+}
+
+// Keep filtering local to the animation inspector, including each popup reload.
+class RigClipPicker final : public editor::AssetPicker {
+public:
+    RigClipPicker(editor::EditorContext& context, entt::entity entity, const QString& none)
+        : AssetPicker(context.engine().GetSceneAssets().GetCatalog(), engine::CatalogAssetKind::AnimationClip, none),
+          context_(context), entity_(entity) {}
+    void showPopup() override {
+        reload();
+        const auto* animator = context_.scene().TryGetComponent<engine::Animator>(entity_);
+        auto* items = qobject_cast<QStandardItemModel*>(model());
+        if (items) for (int i = 0; i < count(); ++i) {
+            const engine::AssetReference clip{engine::AssetUuid(itemData(i).toString().toStdString()), {}};
+            const bool enabled = !clip.id.IsValid() || (animator && compatibleClip(
+                context_.engine().GetSceneAssets().GetCatalog(), clip, animator->skeleton));
+            items->item(i)->setEnabled(enabled);
+            if (auto* list = qobject_cast<QListView*>(view())) list->setRowHidden(i, !enabled);
+            setItemData(i, enabled ? QString{} : QObject::tr("Clip is incompatible with the assigned skeleton or its descriptor is unavailable."), Qt::ToolTipRole);
+        }
+        QComboBox::showPopup();
+    }
+private:
+    editor::EditorContext& context_;
+    entt::entity entity_;
+};
+
+void inferRendererSkeleton(editor::EditorContext& context, entt::entity entity, const engine::AssetReference& mesh) {
+    engine::SkinnedMeshDefinition definition;
+    if (!readRigDefinition(context.engine().GetSceneAssets().GetCatalog(), mesh, engine::CatalogAssetKind::SkinnedMesh,
+            definition, engine::ParseSkinnedMeshDefinition)) return;
+    auto& scene = context.scene();
+    if (scene.HasComponent<engine::Animator>(entity)) {
+        scene.Modify<engine::Animator>(entity, [&](auto& animator) { animator.skeleton = definition.skeleton; });
+    } else {
+        engine::Animator animator;
+        animator.skeleton = definition.skeleton;
+        scene.AddComponent<engine::Animator>(entity, animator);
+    }
+}
+
 void buildSkinnedMeshRenderer(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
-    addRendererAsset(form, context, entity, QObject::tr("Mesh"), engine::CatalogAssetKind::SkinnedMesh,
-                     &engine::SkinnedMeshRenderer::meshReference, &engine::SkinnedMeshRenderer::mesh,
-                     &engine::AssetSystem::RequestSkinnedMesh);
+    auto* meshPicker = new editor::AssetPicker(context.engine().GetSceneAssets().GetCatalog(), engine::CatalogAssetKind::SkinnedMesh);
+    QObject::connect(meshPicker, &QComboBox::currentIndexChanged, meshPicker, [&context, entity, meshPicker] {
+        const auto reference = meshPicker->reference();
+        const auto* renderer = context.scene().TryGetComponent<engine::SkinnedMeshRenderer>(entity);
+        if (!reference || !renderer || renderer->meshReference.id == reference->id) return;
+        context.history().edit(QObject::tr("Change skinned mesh and skeleton"), [&] {
+            const auto handle = context.engine().GetSceneAssets().RequestSkinnedMesh(*reference);
+            context.scene().Modify<engine::SkinnedMeshRenderer>(entity, [&](auto& changed) {
+                changed.meshReference = *reference;
+                changed.mesh = handle;
+                changed.posedBounds.reset();
+            });
+            inferRendererSkeleton(context, entity, *reference);
+        });
+    });
+    form.addRow(QObject::tr("Mesh"), meshPicker, [&context, entity, meshPicker] {
+        const auto* renderer = context.scene().TryGetComponent<engine::SkinnedMeshRenderer>(entity);
+        if (!renderer || meshPicker->hasFocus() || meshPicker->lineEdit()->hasFocus() || meshPicker->view()->isVisible()) return;
+        const QSignalBlocker blocker(meshPicker);
+        if (!meshPicker->selectId(renderer->meshReference.id)) {
+            meshPicker->reload();
+            if (!meshPicker->selectId(renderer->meshReference.id)) {
+                meshPicker->setCurrentIndex(-1);
+                meshPicker->lineEdit()->setPlaceholderText(QObject::tr("%1 (missing)").arg(QString::fromStdString(renderer->meshReference.path)));
+            }
+        }
+    });
     addRendererAsset(form, context, entity, QObject::tr("Material"), engine::CatalogAssetKind::MaterialInstance,
                      &engine::SkinnedMeshRenderer::materialReference, &engine::SkinnedMeshRenderer::materialInstance,
                      &engine::AssetSystem::RequestMaterialInstance);
+    auto* diagnostic = new QLabel;
+    diagnostic->setWordWrap(true);
+    form.addRow(QObject::tr("Rig compatibility"), diagnostic, [&context, entity, diagnostic] {
+        const auto* renderer = context.scene().TryGetComponent<engine::SkinnedMeshRenderer>(entity);
+        const auto* animator = context.scene().TryGetComponent<engine::Animator>(entity);
+        if (!renderer) return;
+        const auto mesh = context.engine().GetSceneAssets().Peek(renderer->mesh);
+        engine::SkinnedMeshDefinition definition;
+        const bool known = readRigDefinition(context.engine().GetSceneAssets().GetCatalog(), renderer->meshReference,
+            engine::CatalogAssetKind::SkinnedMesh, definition, engine::ParseSkinnedMeshDefinition);
+        QString text;
+        if (!animator) text = QObject::tr("No Animator: mesh uses its rest pose.");
+        else if (known && definition.skeleton.id != animator->skeleton.id)
+            text = QObject::tr("Renderer and Animator reference different skeletons; incompatible poses fall back to rest.");
+        if (mesh && animator) {
+            auto& assets = context.engine().GetSceneAssets();
+            if (const auto* entry = assets.GetCatalog().Find(animator->skeleton.id, engine::CatalogAssetKind::Skeleton)) {
+                const auto skeleton = assets.Peek<engine::SkeletonAsset>(entry->path);
+                if (skeleton && skeleton->signature != mesh->skeletonSignature)
+                    text = QObject::tr("Skeleton/source revision mismatch: rendering uses the mesh rest pose.");
+            }
+        }
+        diagnostic->setText(text);
+    });
 }
 
 void addAnimatorReference(PropertyForm& form, editor::EditorContext& context, entt::entity entity,
                           const QString& label, engine::CatalogAssetKind kind,
                           engine::AssetReference engine::Animator::*member) {
-    auto* picker = new editor::AssetPicker(context.engine().GetSceneAssets().GetCatalog(), kind, QObject::tr("None"));
+    editor::AssetPicker* picker = kind == engine::CatalogAssetKind::AnimationClip
+        ? static_cast<editor::AssetPicker*>(new RigClipPicker(context, entity, QObject::tr("None")))
+        : new editor::AssetPicker(context.engine().GetSceneAssets().GetCatalog(), kind, QObject::tr("None"));
     picker->setMinimumContentsLength(12);
     QObject::connect(picker, &QComboBox::currentIndexChanged, picker, [&context, entity, picker, member, label] {
         const auto* animator = context.scene().TryGetComponent<engine::Animator>(entity);
         if (!animator || picker->currentIndex() < 0) return;
         const auto chosen = picker->reference().value_or(engine::AssetReference{});
+        if (member == &engine::Animator::clip && chosen.id.IsValid() &&
+            !compatibleClip(context.engine().GetSceneAssets().GetCatalog(), chosen, animator->skeleton)) {
+            context.showStatus(QObject::tr("Clip is incompatible with the assigned skeleton."), 5000);
+            return;
+        }
         if ((animator->*member).id == chosen.id && (animator->*member).path == chosen.path) return;
         context.history().edit(QObject::tr("Change %1").arg(label), [&] {
             context.scene().Modify<engine::Animator>(entity, [&](auto& changed) { changed.*member = chosen; });
@@ -453,16 +572,7 @@ void buildAnimator(PropertyForm& form, editor::EditorContext& context, const ent
                          &engine::Animator::skeleton);
     addAnimatorReference(form, context, entity, QObject::tr("Clip"), engine::CatalogAssetKind::AnimationClip,
                          &engine::Animator::clip);
-    auto speed = field(scene, entity, &engine::Animator::speed);
-    speed.set = [&context, entity](float value) {
-        value = std::max(0.0f, value);
-        context.scene().Modify<engine::Animator>(entity, [&](auto& animator) { animator.speed = value; });
-        if (auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>()) {
-            std::string ignored;
-            animation->SetSpeed(entity, value, ignored);
-        }
-    };
-    form.addFloat(QObject::tr("Speed"), std::move(speed), {.step = 0.1, .decimals = 3, .minimum = 0.0});
+    form.addFloat(QObject::tr("Starting speed"), field(scene, entity, &engine::Animator::speed), {.step = 0.1, .decimals = 3, .minimum = 0.0});
     form.addBool(QObject::tr("Loop"), field(scene, entity, &engine::Animator::loop));
     form.addBool(QObject::tr("Play on start"), field(scene, entity, &engine::Animator::playOnStart));
 
@@ -470,8 +580,9 @@ void buildAnimator(PropertyForm& form, editor::EditorContext& context, const ent
     auto* controls = new QWidget;
     auto* layout = new QVBoxLayout(controls);
     layout->setContentsMargins(0, 0, 0, 0);
-    auto* playbackClip = new editor::AssetPicker(context.engine().GetSceneAssets().GetCatalog(),
-        engine::CatalogAssetKind::AnimationClip, QObject::tr("Choose playback clip"));
+    auto* mode = new QLabel;
+    layout->addWidget(mode);
+    auto* playbackClip = new RigClipPicker(context, entity, QObject::tr("Choose playback clip"));
     if (const auto* animator = scene.TryGetComponent<engine::Animator>(entity))
         playbackClip->selectId(animator->clip.id);
     playbackClip->setToolTip(QObject::tr("Transient playback target; does not change the scene's starting clip."));
@@ -482,6 +593,16 @@ void buildAnimator(PropertyForm& form, editor::EditorContext& context, const ent
     fade->setSuffix(QObject::tr(" s fade"));
     PropertyForm::ignoreWheelUnlessFocused(fade);
     layout->addWidget(fade);
+    auto* previewSpeed = new QDoubleSpinBox;
+    previewSpeed->setRange(0.0, 1000.0);
+    previewSpeed->setSingleStep(0.1);
+    previewSpeed->setPrefix(QObject::tr("Transport speed: "));
+    previewSpeed->setValue(1.0);
+    PropertyForm::ignoreWheelUnlessFocused(previewSpeed);
+    layout->addWidget(previewSpeed);
+    auto* previewLoop = new QCheckBox(QObject::tr("Transport loop (restart clip to apply)"));
+    previewLoop->setChecked(true);
+    layout->addWidget(previewLoop);
     auto* buttons = new QHBoxLayout;
     auto* play = new QPushButton(QObject::tr("Play"));
     auto* pause = new QPushButton(QObject::tr("Pause"));
@@ -497,17 +618,40 @@ void buildAnimator(PropertyForm& form, editor::EditorContext& context, const ent
     seek->setSuffix(QObject::tr(" s"));
     PropertyForm::ignoreWheelUnlessFocused(seek);
     layout->addWidget(seek);
+    auto* timeline = new QSlider(Qt::Horizontal);
+    timeline->setRange(0, 10000);
+    timeline->setToolTip(QObject::tr("Seek within the loaded clip"));
+    layout->addWidget(timeline);
     auto* status = new QLabel;
     status->setWordWrap(true);
     layout->addWidget(status);
     auto error = std::make_shared<QString>();
-    QObject::connect(play, &QPushButton::clicked, controls, [&context, entity, fade, playbackClip, error] {
+    const auto start = [&context, entity, fade, playbackClip, previewSpeed, previewLoop, error] {
         auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>();
         const auto* animator = context.scene().TryGetComponent<engine::Animator>(entity);
         const auto clip = playbackClip->reference();
         if (!animation || !animator || !clip) return;
         std::string message;
-        animation->Play(entity, *clip, static_cast<float>(fade->value()), animator->loop, message);
+        if (!compatibleClip(context.engine().GetSceneAssets().GetCatalog(), *clip, animator->skeleton)) {
+            *error = QObject::tr("Clip is missing, malformed or incompatible with the assigned skeleton.");
+            return;
+        }
+        const bool started = context.engine().IsPlaying()
+            ? animation->Play(entity, *clip, static_cast<float>(fade->value()), previewLoop->isChecked(), message)
+            : animation->Preview(entity, *clip, static_cast<float>(fade->value()), previewLoop->isChecked(), message);
+        if (started) animation->SetSpeed(entity, static_cast<float>(previewSpeed->value()), message);
+        *error = QString::fromStdString(message);
+    };
+    QObject::connect(play, &QPushButton::clicked, controls, start);
+    QObject::connect(playbackClip, &QComboBox::currentIndexChanged, controls, [&context, entity, start] {
+        auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>();
+        if (animation && animation->GetPreviewEntity() == entity) start();
+    });
+    QObject::connect(previewSpeed, &QDoubleSpinBox::valueChanged, controls, [&context, entity, error](double value) {
+        auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>();
+        if (!animation || (!context.engine().IsPlaying() && animation->GetPreviewEntity() != entity)) return;
+        std::string message;
+        animation->SetSpeed(entity, static_cast<float>(value), message);
         *error = QString::fromStdString(message);
     });
     QObject::connect(pause, &QPushButton::clicked, controls, [&context, entity] {
@@ -516,7 +660,10 @@ void buildAnimator(PropertyForm& form, editor::EditorContext& context, const ent
         }
     });
     QObject::connect(stop, &QPushButton::clicked, controls, [&context, entity, error] {
-        if (auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>()) animation->Stop(entity);
+        if (auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>()) {
+            if (context.engine().IsPlaying()) animation->Stop(entity);
+            else animation->EndPreview();
+        }
         error->clear();
     });
     QObject::connect(seek, &QDoubleSpinBox::editingFinished, controls, [&context, entity, seek, error] {
@@ -526,23 +673,75 @@ void buildAnimator(PropertyForm& form, editor::EditorContext& context, const ent
             *error = QString::fromStdString(message);
         }
     });
+    QObject::connect(timeline, &QSlider::valueChanged, controls, [&context, entity, timeline, seek, error](int position) {
+        if (auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>()) {
+            const auto state = animation->GetPlaybackState(entity);
+            if (!state || state->duration <= 0 || state->transitioning) return;
+            const double seconds = state->duration * static_cast<double>(position) / timeline->maximum();
+            std::string message;
+            animation->Seek(entity, seconds, message);
+            seek->setValue(seconds);
+            *error = QString::fromStdString(message);
+        }
+    });
     // Transport is transient subsystem state, deliberately outside authored-property history.
-    form.addRow(QObject::tr("Playback"), controls, [&context, entity, controls, playbackClip, play, pause, stop, seek, status, error] {
+    form.addRow(QObject::tr("Playback"), controls, [&context, entity, controls, playbackClip, previewSpeed, play, pause, stop, seek, timeline, mode, status, error] {
         auto* animation = context.engine().GetSubsystem<engine::AnimationSubsystem>();
         const auto* animator = context.scene().TryGetComponent<engine::Animator>(entity);
         controls->setEnabled(animation && animator);
         if (!animation || !animator) return;
         const auto state = animation->GetPlaybackState(entity);
-        play->setEnabled(playbackClip->reference().has_value() && !(state && state->transitioning));
-        pause->setEnabled(state && state->ready);
-        stop->setEnabled(state.has_value());
-        seek->setEnabled(state && state->ready && state->duration > 0.0f && !state->transitioning);
+        const bool runtime = context.engine().IsPlaying();
+        const bool active = runtime || animation->GetPreviewEntity() == entity;
+        if (active && state && !previewSpeed->hasFocus()) {
+            const QSignalBlocker blocker(previewSpeed);
+            previewSpeed->setValue(state->speed);
+        }
+        mode->setText(runtime ? QObject::tr("Play mode — runtime transport") : QObject::tr("Edit mode — selected entity preview"));
+        play->setText(runtime ? QObject::tr("Play clip") : QObject::tr("Preview clip"));
+        stop->setText(runtime ? QObject::tr("Stop") : QObject::tr("End preview"));
+        const auto chosen = playbackClip->reference();
+        playbackClip->setEnabled(!(active && state && state->transitioning));
+        play->setEnabled(chosen && compatibleClip(context.engine().GetSceneAssets().GetCatalog(), *chosen, animator->skeleton) &&
+            !(active && state && state->transitioning));
+        pause->setEnabled(active && state && state->ready && state->duration > 0);
+        stop->setEnabled(active);
+        seek->setEnabled(active && state && state->ready && state->duration > 0.0f && !state->transitioning);
+        timeline->setEnabled(seek->isEnabled());
         pause->setText(state && !state->playing ? QObject::tr("Resume") : QObject::tr("Pause"));
         if (state && !seek->hasFocus()) {
             const QSignalBlocker blocker(seek);
+            seek->setMaximum(state->duration);
             seek->setValue(state->timeSeconds);
         }
-        status->setText(!error->isEmpty() ? *error : state ? QString::fromStdString(state->error) : QObject::tr("Stopped"));
+        if (state && !timeline->isSliderDown()) {
+            const QSignalBlocker blocker(timeline);
+            timeline->setValue(state->duration > 0 ? static_cast<int>(state->timeSeconds / state->duration * timeline->maximum()) : 0);
+        }
+        QString diagnostic;
+        const auto& catalog = context.engine().GetSceneAssets().GetCatalog();
+        if (animator->skeleton.id.IsValid() && !catalog.Find(animator->skeleton.id, engine::CatalogAssetKind::Skeleton))
+            diagnostic = QObject::tr("Authored skeleton is missing (reference preserved). ");
+        if (animator->clip.id.IsValid() && !compatibleClip(catalog, animator->clip, animator->skeleton))
+            diagnostic += QObject::tr("Authored starting clip is missing or incompatible (reference preserved). ");
+        const QString transport = !active ? QObject::tr("Stopped — normal Edit pose") : !state ? QObject::tr("Loading") :
+            state->transitioning ? QObject::tr("Loading / transitioning") : !state->ready ? QObject::tr("Loading") :
+            state->duration <= 0 ? QObject::tr("Stopped") : state->playing ? QObject::tr("Playing") : QObject::tr("Paused / finished");
+        const auto clipName = [&catalog](const engine::AssetReference& reference) {
+            if (const auto* entry = catalog.Find(reference.id, engine::CatalogAssetKind::AnimationClip))
+                return QString::fromStdString(entry->path);
+            return QString::fromStdString(reference.path);
+        };
+        QString playingClip;
+        if (active && state && state->clip.id.IsValid()) {
+            playingClip = QObject::tr("Current: %1 (%2x, %3)\n").arg(clipName(state->clip))
+                .arg(state->speed).arg(state->loop ? QObject::tr("loop") : QObject::tr("once"));
+            if (state->targetClip.id.IsValid()) playingClip += QObject::tr("Target: %1\n").arg(clipName(state->targetClip));
+        }
+        status->setText(diagnostic + playingClip + (!error->isEmpty() ? *error : state && !state->error.empty()
+            ? QObject::tr("Error: %1").arg(QString::fromStdString(state->error))
+            : QObject::tr("%1 — %2 / %3 s").arg(transport).arg(state ? state->timeSeconds : 0, 0, 'f', 3)
+                .arg(state ? state->duration : 0, 0, 'f', 3)));
     });
 }
 
@@ -640,7 +839,7 @@ void buildAudioSource(PropertyForm& form, editor::EditorContext& context, entt::
                      [&context, &scene, entity, picker, error, audio, previewVoice](int index) {
         const auto* source = std::as_const(scene).TryGetComponent<Source>(entity);
         if (!source || index < 0 || source->clip == picker->reference()) return;
-        if (auto* subsystem = audio()) subsystem->StopPreview();
+        if (auto* subsystem = audio()) subsystem->Stop(*previewVoice);
         *previewVoice = {};
         auto binding = audioField(scene, entity, &Source::clip, error);
         context.history().edit(QObject::tr("Change Audio Clip"), [&] { binding.set(picker->reference()); });
@@ -686,10 +885,47 @@ void buildAudioSource(PropertyForm& form, editor::EditorContext& context, entt::
     spatial->addText({}, [] { return QObject::tr("1 scene unit = 1 metre. Maximum distance is an attenuation bound, not a hard silence radius. 3D point emitters require mono clips."); });
     spatial->addText(QObject::tr("Listener"), [&context] { return audioListenerDiagnostic(context); });
 
+    struct Metadata {
+        std::optional<engine::AssetReference> clip;
+        std::filesystem::path path;
+        audio_editor::FileStamp stamp;
+        std::shared_ptr<audio_editor::Probe> probe;
+    };
+    auto metadata = std::make_shared<Metadata>();
+    form.addText(QObject::tr("Clip metadata"), [&context, &scene, entity, metadata, audio, previewVoice] {
+        const auto* source = std::as_const(scene).TryGetComponent<Source>(entity);
+        if (!source || !source->clip) {
+            if (auto* subsystem = audio()) subsystem->Stop(*previewVoice);
+            *previewVoice = {}; *metadata = {};
+            return QObject::tr("No clip assigned");
+        }
+        const auto* entry = context.engine().GetSceneAssets().GetCatalog().Find(source->clip->id, engine::CatalogAssetKind::AudioClip);
+        if (!entry) {
+            if (auto* subsystem = audio()) subsystem->Stop(*previewVoice);
+            *previewVoice = {}; *metadata = {};
+            return QObject::tr("Clip is missing from the catalog");
+        }
+        const auto stamp = audio_editor::FileStamp::read(entry->source);
+        if (metadata->clip != source->clip || metadata->path != entry->source || metadata->stamp != stamp) {
+            if (auto* subsystem = audio()) subsystem->Stop(*previewVoice);
+            *previewVoice = {};
+            metadata->clip = source->clip; metadata->path = entry->source;
+            metadata->stamp = stamp;
+            metadata->probe = audio_editor::Probe::start(entry->source);
+        }
+        const auto& probe = metadata->probe;
+        if (!probe || !probe->complete()) return QObject::tr("Inspecting audio…");
+        if (!probe->error.empty()) return QObject::tr("Invalid audio: %1").arg(QString::fromStdString(probe->error));
+        if (source->spatial == engine::AudioSpatialMode::ThreeD && probe->info.channels != 1)
+            return QObject::tr("Invalid 3D source: clip has %1 channels. Choose 2D or assign a mono clip.").arg(probe->info.channels);
+        return QObject::tr("%1 s · %2 channels · %3 Hz · %4 bytes")
+            .arg(probe->info.durationSeconds, 0, 'f', 3).arg(probe->info.channels).arg(probe->info.sampleRate).arg(qulonglong(probe->info.fileBytes));
+    });
+
     auto* buttons = new QWidget;
     auto* row = new QHBoxLayout(buttons);
     row->setContentsMargins(0, 0, 0, 0);
-    auto* preview = new QPushButton(QObject::tr("Preview"));
+    auto* preview = new QPushButton(QObject::tr("Audition raw clip (2D)"));
     auto* stop = new QPushButton(QObject::tr("Stop"));
     preview->setToolTip(QObject::tr("Audition the clip in 2D, independently of Edit pause. Does not start the scene source."));
     row->addWidget(preview);
@@ -699,11 +935,13 @@ void buildAudioSource(PropertyForm& form, editor::EditorContext& context, entt::
         if (context.engine().IsPlaying() || !source || !source->clip) return;
         if (auto* subsystem = audio()) {
             *previewClip = source->clip;
-            *previewVoice = subsystem->Preview(*source->clip, *error);
+            engine::AudioPreviewOptions options;
+            options.volume = qBound(0, QSettings().value("audio/auditionVolume", 100).toInt(), 100) / 100.f;
+            *previewVoice = subsystem->Preview(*source->clip, options, *error);
         }
     });
     QObject::connect(stop, &QPushButton::clicked, stop, [audio, previewVoice, error] {
-        if (auto* subsystem = audio()) subsystem->StopPreview();
+        if (auto* subsystem = audio()) subsystem->Stop(*previewVoice);
         *previewVoice = {};
         error->clear();
     });
@@ -723,6 +961,34 @@ void buildAudioSource(PropertyForm& form, editor::EditorContext& context, entt::
         const auto status = subsystem ? subsystem->GetStatus(*previewVoice) : engine::AudioVoiceStatus::Invalid;
         stop->setEnabled(status == engine::AudioVoiceStatus::Pending || status == engine::AudioVoiceStatus::Playing ||
                          status == engine::AudioVoiceStatus::Paused);
+    });
+    auto* sourceButtons = new QWidget;
+    auto* sourceRow = new QHBoxLayout(sourceButtons);
+    sourceRow->setContentsMargins(0, 0, 0, 0);
+    auto* playSource = new QPushButton(QObject::tr("Play source"));
+    auto* pauseSource = new QPushButton(QObject::tr("Pause"));
+    auto* resumeSource = new QPushButton(QObject::tr("Resume"));
+    auto* stopSource = new QPushButton(QObject::tr("Stop source"));
+    for (auto* button : {playSource, pauseSource, resumeSource, stopSource}) sourceRow->addWidget(button);
+    QObject::connect(playSource, &QPushButton::clicked, playSource, [audio, entity, error] {
+        if (auto* subsystem = audio()) (void)subsystem->PlaySource(entity, *error);
+    });
+    QObject::connect(pauseSource, &QPushButton::clicked, pauseSource, [audio, entity] { if (auto* a = audio()) a->PauseSource(entity); });
+    QObject::connect(resumeSource, &QPushButton::clicked, resumeSource, [audio, entity] { if (auto* a = audio()) a->ResumeSource(entity); });
+    QObject::connect(stopSource, &QPushButton::clicked, stopSource, [audio, entity] { if (auto* a = audio()) a->StopSource(entity); });
+    form.addRow(sourceButtons, [&context, &scene, entity, audio, metadata, sourceButtons, buttons, playSource, pauseSource, resumeSource, stopSource] {
+        const bool playing = context.engine().IsPlaying();
+        sourceButtons->setVisible(playing); buttons->setVisible(!playing);
+        auto* a = audio();
+        const auto* source = std::as_const(scene).TryGetComponent<Source>(entity);
+        const auto probe = metadata->probe;
+        const bool valid = source && source->clip && metadata->clip == source->clip && probe && probe->complete() && probe->error.empty() &&
+            (source->spatial == engine::AudioSpatialMode::TwoD || probe->info.channels == 1);
+        playSource->setEnabled(playing && a && a->IsAvailable() && valid && source->enabled);
+        const auto status = a ? a->GetStatus(a->GetSourceVoice(entity)) : engine::AudioVoiceStatus::Invalid;
+        pauseSource->setEnabled(playing && status == engine::AudioVoiceStatus::Playing);
+        resumeSource->setEnabled(playing && status == engine::AudioVoiceStatus::Paused);
+        stopSource->setEnabled(playing && (status == engine::AudioVoiceStatus::Pending || status == engine::AudioVoiceStatus::Playing || status == engine::AudioVoiceStatus::Paused));
     });
     form.addText(QObject::tr("Audio status"), [&context, &scene, entity, audio, previewVoice, error] {
         if (!error->empty()) return QString::fromStdString(*error);
@@ -1278,6 +1544,7 @@ void addSkinnedMeshRenderer(editor::EditorContext& context, const entt::entity e
         renderer.materialReference = {material->metadata.id, material->path};
     scene.RemoveComponent<engine::MeshRenderer>(entity);
     scene.AddComponent<engine::SkinnedMeshRenderer>(entity, std::move(renderer));
+    inferRendererSkeleton(context, entity, scene.TryGetComponent<engine::SkinnedMeshRenderer>(entity)->meshReference);
 }
 
 }  // namespace

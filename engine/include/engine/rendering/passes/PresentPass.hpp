@@ -20,6 +20,15 @@ struct ENGINE_API PresentPass : RenderPass {
         RenderingResources& resources) override;
 
 private:
+    // Matches PresentParameters at b5 in PresentPass.hlsl (one 16-byte register).
+    struct PresentBufferData {
+        uint32_t debugView = 0;
+        float nearPlane = 0.0f;
+        float farPlane = 0.0f;
+        float padding = 0.0f;
+    };
+    static_assert(sizeof(PresentBufferData) == 16);
+    BufferHandle presentBuffer_;
     ShaderHandle vertexShader_;
     ShaderHandle pixelShader_;
     ShaderHandle outlinedPixelShader_;

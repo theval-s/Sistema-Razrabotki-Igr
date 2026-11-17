@@ -9,6 +9,11 @@
 namespace engine {
 
 struct ENGINE_API RenderPass {
+    /// Initialize/Render/resize resource failures throw RenderingException. The system
+    /// adds the dispatch pass name if missing and catches at its lifecycle boundary.
+    /// Resize bools remain for source compatibility: built-in passes return true or throw;
+    /// a legacy false is converted by the system to an operation/pass-specific failure.
+    /// Destroy must not throw and must tolerate partial initialization and repeated calls.
     
     virtual ~RenderPass() = default;
     

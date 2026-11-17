@@ -7,7 +7,7 @@ RenderingResources::RenderingResources(const uint32_t aScreenWith, const uint32_
     screenHeight(aScreenHeight) {
 }
 
-void RenderingResources::Initialize(RenderingResourceManager& resourceManager) {
+void RenderingResources::Initialize(RenderingResourceManager& resourceManager) try {
     frameCBuffer.Initialize(resourceManager);
     viewCBuffer.Initialize(resourceManager);
     materialCBuffer.Initialize(resourceManager);
@@ -24,6 +24,9 @@ void RenderingResources::Initialize(RenderingResourceManager& resourceManager) {
                                                               .usage = TextureUsage::ShaderResource
                                                           },
                                                           std::span{&data, 1});
+} catch (...) {
+    Destroy(resourceManager);
+    throw;
 }
 
 void RenderingResources::Destroy(RenderingResourceManager& resourceManager) {
@@ -34,6 +37,8 @@ void RenderingResources::Destroy(RenderingResourceManager& resourceManager) {
     shadowCascadesCBuffer.Destroy(resourceManager);
     lightCBuffer.Destroy(resourceManager);
     skinningCBuffer.Destroy(resourceManager);
+    resourceManager.DestroyTexture(defaultAlbedoTexture_);
+    defaultAlbedoTexture_ = {};
 }
 
 void RenderingResources::BindCBuffers(RenderingContext& context) {

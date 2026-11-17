@@ -54,12 +54,15 @@
 #include <editor/editor_context.hpp>
 #include <editor/menu_button.hpp>
 #include <editor/paths.hpp>
+#include <editor/play_session.hpp>
 #include <editor/scene_document.hpp>
 #include <editor/shortcut_registry.hpp>
 
 #include "asset_dialogs.hpp"
 #include "asset_filter_model.hpp"
 #include "scene_placement.hpp"
+#include "rig_dialog.hpp"
+#include "rig_workflow.hpp"
 
 namespace content {
 
@@ -154,6 +157,7 @@ ContentBrowser::ContentBrowser(editor::EditorContext& context, QWidget* parent)
     adopt_timer_->setSingleShot(true);
     adopt_timer_->setInterval(500);
     connect(adopt_timer_, &QTimer::timeout, this, [this] {
+        if (context_.playSession().isPlaying()) return;
         operations_.adoptNewFiles();
         refreshBanner();
     });
@@ -187,6 +191,11 @@ ContentBrowser::ContentBrowser(editor::EditorContext& context, QWidget* parent)
     layout->addWidget(splitter, 1);
 
     buildActions();
+    connect(&context_.playSession(), &editor::PlaySession::playingChanged, this, [this](const bool playing) {
+        if (playing) adopt_timer_->stop();
+        else adopt_timer_->start();
+        updateActions();
+    });
     connect(QGuiApplication::clipboard(), &QClipboard::dataChanged, this, &ContentBrowser::updateActions);
     applyViewMode();
     navigate(0, roots_[0].path);
@@ -389,7 +398,7 @@ void ContentBrowser::buildActions() {
     rename_ = add(QStringLiteral("rename"), tr("Rename"), QKeySequence(Qt::Key_F2),
                   [this] { items_->edit(items_->currentIndex()); });
     duplicate_ = add(QStringLiteral("duplicate"), tr("Duplicate"), QKeySequence(Qt::CTRL | Qt::Key_D),
-                     [this] { select(operations_.duplicate(selectedPaths())); });
+                     [this] { if (!context_.playSession().isPlaying()) select(operations_.duplicate(selectedPaths())); });
     cut_ = add(QStringLiteral("cut"), tr("Cut"), QKeySequence::Cut, [this] { copyToClipboard(selectedPaths(), true); });
     copy_ = add(QStringLiteral("copy"), tr("Copy"), QKeySequence::Copy,
                 [this] { copyToClipboard(selectedPaths(), false); });
@@ -413,6 +422,16 @@ void ContentBrowser::buildActions() {
     import_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
     import_->setToolTip(tr("Copies images, models and audio clips into the shown folder"));
     import_button_->setDefaultAction(import_);
+    import_rig_ = add(QStringLiteral("import-rig"), tr("Import Animated Rig..."), {},
+                      [this] { const auto path = importAnimatedRig(); if (!path.isEmpty()) select({path}); });
+    reimport_rig_ = add(QStringLiteral("reimport-rig"), tr("Reimport Animated Rig..."), {},
+                        [this] { reimportAnimatedRig(selectedPaths().value(0)); });
+    duplicate_rig_ = add(QStringLiteral("duplicate-rig"), tr("Duplicate Animated Rig..."), {},
+                         [this] { duplicateAnimatedRig(selectedPaths().value(0)); });
+    auto* import_menu = new QMenu(import_button_);
+    import_menu->addActions({import_, import_rig_});
+    import_button_->setMenu(import_menu);
+    import_button_->setPopupMode(QToolButton::MenuButtonPopup);
     instance_from_texture_ = add(QStringLiteral("create-material-instance"), tr("Create Material Instance..."), {},
                                  [this] { newMaterialInstance(selectedPaths().value(0)); });
     extract_materials_ = add(QStringLiteral("extract-materials"), tr("Extract Materials..."), {},
@@ -502,6 +521,7 @@ void ContentBrowser::activate(const QModelIndex& index) {
 }
 
 void ContentBrowser::editMaterial(const QString& path, const engine::CatalogAssetKind kind) {
+    if (context_.playSession().isPlaying()) return;
     if (roots_[root_].read_only) {
         QMessageBox::information(window(), tr("Read-only asset"), tr("Engine assets cannot be edited here."));
         return;
@@ -662,7 +682,8 @@ void ContentBrowser::updateActions() {
     if (open_ == nullptr) {
         return;  // before buildActions()
     }
-    const bool writable = !roots_[root_].read_only;
+    const bool editing = !context_.playSession().isPlaying();
+    const bool writable = !roots_[root_].read_only && editing;
     const QStringList selected = selectedPaths();
     const bool any = !selected.isEmpty();
     const bool assets = std::ranges::any_of(selected, [](const QString& path) {
@@ -679,8 +700,14 @@ void ContentBrowser::updateActions() {
         open_->setText(tr("Open"));
     }
     // Engine assets too: its primitives are worth placing.
-    add_to_scene_->setEnabled(std::ranges::any_of(
-        selected, [this](const QString& path) { return placeableMesh(catalog(), path) != nullptr; }));
+    add_to_scene_->setEnabled(editing && std::ranges::any_of(
+        selected, [this](const QString& path) {
+            // Folders are candidates; inspect their contents only when placement is invoked.
+            if (QFileInfo(path).isDir()) return true;
+            const auto* entry = catalog().FindPath(assetName(path).toStdString());
+            return entry && (entry->metadata.kind == engine::CatalogAssetKind::Mesh ||
+                             entry->metadata.kind == engine::CatalogAssetKind::SkinnedMesh);
+        }));
     new_folder_->setEnabled(writable);
     rename_->setEnabled(writable && selected.size() == 1);
     duplicate_->setEnabled(writable && any);
@@ -690,6 +717,29 @@ void ContentBrowser::updateActions() {
     delete_->setEnabled(writable && any);
     copy_uuid_->setEnabled(assets);
     import_->setEnabled(writable);
+    import_rig_->setEnabled(writable);
+    // Only cheap path/catalog-kind checks here. ReadRigAssetGroup snapshots the tree and
+    // validates the catalog, so actual group validation belongs to action invocation.
+    const bool rig_candidate = selected.size() == 1 && [&] {
+        const QFileInfo info(selected.front());
+        if (info.isDir() || info.fileName() == QLatin1String("rig.import.json")) return true;
+        const auto* entry = catalog().FindPath(assetName(selected.front()).toStdString());
+        if (!entry) return false;
+        switch (entry->metadata.kind) {
+        case engine::CatalogAssetKind::Mesh:
+        case engine::CatalogAssetKind::SkinnedMesh:
+        case engine::CatalogAssetKind::Skeleton:
+        case engine::CatalogAssetKind::AnimationClip:
+        case engine::CatalogAssetKind::MaterialInstance:
+        case engine::CatalogAssetKind::Texture: return true;
+        default: return false;
+        }
+    }();
+    reimport_rig_->setEnabled(writable && rig_candidate);
+    duplicate_rig_->setEnabled(writable && rig_candidate);
+    for (const Root& root : roots_) {
+        if (!root.read_only) { root.folders->setWritable(editing); root.contents->setWritable(editing); }
+    }
     new_menu_->setEnabled(writable);
     new_button_->setEnabled(writable);
     instance_from_texture_->setEnabled(
@@ -723,6 +773,7 @@ void ContentBrowser::showItemMenu(const QPoint& pos) {
         }
         menu.addSeparator();
         menu.addActions({cut_, copy_, paste_, duplicate_});
+        menu.addActions({reimport_rig_, duplicate_rig_});
         menu.addSeparator();
         menu.addActions({rename_, delete_});
         menu.addSeparator();
@@ -730,6 +781,7 @@ void ContentBrowser::showItemMenu(const QPoint& pos) {
     } else {
         menu.addMenu(new_menu_.get());
         menu.addAction(import_);
+        menu.addAction(import_rig_);
         menu.addSeparator();
         menu.addAction(paste_);
         menu.addSeparator();
@@ -742,7 +794,7 @@ void ContentBrowser::showFolderMenu(const std::size_t root, const QPoint& pos) {
     const Root& shown = roots_[root];
     const QModelIndex index = shown.tree->indexAt(pos);
     const QString folder = index.isValid() ? shown.model->filePath(shown.folders->mapToSource(index)) : shown.path;
-    const bool writable = !shown.read_only;
+    const bool writable = !shown.read_only && !context_.playSession().isPlaying();
     const bool top = folder == shown.path;  // the root folder itself can't be renamed or deleted
     const QMimeData* clipboard = QGuiApplication::clipboard()->mimeData();
 
@@ -751,6 +803,8 @@ void ContentBrowser::showFolderMenu(const std::size_t root, const QPoint& pos) {
     menu.addAction(tr("Paste"), this, [this, folder] { pasteInto(folder); })
         ->setEnabled(writable && clipboard != nullptr && !AssetFilterModel::droppedPaths(clipboard).isEmpty());
     menu.addSeparator();
+    menu.addAction(tr("Reimport Animated Rig..."), this, [this, folder] { reimportAnimatedRig(folder); })->setEnabled(writable && !top);
+    menu.addAction(tr("Duplicate Animated Rig..."), this, [this, folder] { duplicateAnimatedRig(folder); })->setEnabled(writable && !top);
     menu.addAction(tr("Rename"), this, [&shown, index] { shown.tree->edit(index); })->setEnabled(writable && !top);
     menu.addAction(tr("Delete"), this, [this, folder] { deleteItems({folder}); })->setEnabled(writable && !top);
     menu.addSeparator();
@@ -760,6 +814,7 @@ void ContentBrowser::showFolderMenu(const std::size_t root, const QPoint& pos) {
 }
 
 void ContentBrowser::renameItem(const QString& path, const QString& name) {
+    if (context_.playSession().isPlaying()) return;
     const QString renamed = operations_.rename(path, name);
     if (renamed.isEmpty()) {
         return;
@@ -773,6 +828,7 @@ void ContentBrowser::renameItem(const QString& path, const QString& name) {
 
 void ContentBrowser::dropItems(const std::size_t root, const QStringList& paths, const QString& folder,
                                const Qt::DropAction action) {
+    if (context_.playSession().isPlaying()) return;
     // Files from outside the content are copied in, never taken from where they were.
     QStringList moves;
     QStringList copies;
@@ -786,6 +842,7 @@ void ContentBrowser::dropItems(const std::size_t root, const QStringList& paths,
 }
 
 void ContentBrowser::newFolder(const std::size_t root, const QString& parent) {
+    if (context_.playSession().isPlaying()) return;
     if (root != root_ || parent != folder_) {
         navigate(root, parent);
     }
@@ -800,6 +857,7 @@ void ContentBrowser::newFolder(const std::size_t root, const QString& parent) {
 }
 
 void ContentBrowser::deleteItems(const QStringList& paths) {
+    if (context_.playSession().isPlaying()) return;
     operations_.remove(paths);
     leaveMissingFolder();
 }
@@ -821,6 +879,7 @@ void ContentBrowser::copyToClipboard(const QStringList& paths, const bool cut) {
 }
 
 void ContentBrowser::pasteInto(const QString& folder) {
+    if (context_.playSession().isPlaying()) return;
     const QMimeData* mime = QGuiApplication::clipboard()->mimeData();
     if (mime == nullptr) {
         return;
@@ -878,6 +937,7 @@ const engine::AssetCatalog& ContentBrowser::catalog() const {
 }
 
 QStringList ContentBrowser::copyIn(const QStringList& paths, const QString& folder) {
+    if (context_.playSession().isPlaying()) return {};
     const auto external_model = [this](const QString& path) {
         const bool in_project =
             std::ranges::any_of(roots_, [&path](const Root& root) { return isWithin(path, root.path); });
@@ -899,6 +959,16 @@ QStringList ContentBrowser::copyIn(const QStringList& paths, const QString& fold
 }
 
 QString ContentBrowser::importModel(const QString& source, const QString& folder) {
+    if (context_.playSession().isPlaying()) return {};
+    if (QFileInfo(source).suffix().compare(QLatin1String("glb"), Qt::CaseInsensitive) == 0) {
+        QMessageBox choice(QMessageBox::Question, tr("Import GLB"), tr("Import this GLB as an animated rig or a static model?"),
+                           QMessageBox::Cancel, window());
+        auto* animated = choice.addButton(tr("Animated Rig..."), QMessageBox::AcceptRole);
+        auto* static_model = choice.addButton(tr("Static Model..."), QMessageBox::ActionRole);
+        choice.exec();
+        if (choice.clickedButton() == animated) return importAnimatedRig(source, folder);
+        if (choice.clickedButton() != static_model) return {};
+    }
     ImportModelDialog dialog(catalog(), source, folder, window());
     if (dialog.exec() != QDialog::Accepted) {
         return {};
@@ -914,6 +984,7 @@ void ContentBrowser::extractMaterials(const QString& model) {
 }
 
 void ContentBrowser::importAssets() {
+    if (context_.playSession().isPlaying()) return;
     QSettings settings;
     const QStringList files = QFileDialog::getOpenFileNames(
         window(), tr("Import"), settings.value(ImportDirectoryKey).toString(), importFilter());
@@ -922,13 +993,80 @@ void ContentBrowser::importAssets() {
     }
     settings.setValue(ImportDirectoryKey, QFileInfo(files.front()).absolutePath());
     QStringList sources;
+    QStringList imported;
     for (const QString& file : files) {
-        sources << cleanPath(file);
+        // Normal Import also offers rig authoring for a GLB already inside project content.
+        if (QFileInfo(file).suffix().compare(QLatin1String("glb"), Qt::CaseInsensitive) == 0) {
+            const auto path = importModel(cleanPath(file), folder_);
+            if (!path.isEmpty()) imported << path;
+        } else sources << cleanPath(file);
     }
-    select(copyIn(sources, folder_));
+    imported << copyIn(sources, folder_);
+    select(imported);
+}
+
+QString ContentBrowser::importAnimatedRig(const QString& source, const QString& folder) {
+    if (context_.playSession().isPlaying()) return {};
+    const QString file = source.isEmpty() ? QFileDialog::getOpenFileName(window(), tr("Import Animated Rig"), {},
+                                                                       tr("Self-contained GLB (*.glb)")) : source;
+    if (file.isEmpty()) return {};
+    const QString destination = folder.isEmpty() ? folder_ : folder;
+    RigDialog dialog(catalog(), file, destination, window());
+    if (dialog.exec() != QDialog::Accepted || context_.playSession().isPlaying()) return {};
+    adopt_timer_->stop();
+    const auto result = engine::ImportAnimatedRig(rigContext(context_), dialog.importRequest());
+    if (!showRigResult(context_, window(), result)) return {};
+    rescan();
+    const auto path = editor::toQString(result.group.directory);
+    if (dialog.addToScene()) {
+        const int count = addToScene(context_, {path});
+        context_.showStatus(count ? tr("Animated rig imported and added to scene") : tr("Rig imported; could not place mesh in scene"), 6000);
+    }
+    return path;
+}
+
+void ContentBrowser::reimportAnimatedRig(const QString& path) {
+    if (context_.playSession().isPlaying()) return;
+    engine::RigAssetGroup group;
+    std::string error;
+    if (!selectedRig(context_, path, group, error)) {
+        QMessageBox::warning(window(), tr("Reimport Animated Rig"), QString::fromStdString(error));
+        return;
+    }
+    const QString source = QFileDialog::getOpenFileName(window(), tr("Replacement self-contained GLB"),
+        editor::toQString(engine::AssetPathResolver::ToAbsolute(group.source.path)), tr("Self-contained GLB (*.glb)"));
+    if (source.isEmpty()) return;
+    RigDialog dialog(catalog(), source, editor::toQString(group.directory.parent_path()), window(), &group);
+    if (dialog.exec() != QDialog::Accepted || !prepareRigReload(context_, window())) return;
+    if (context_.playSession().isPlaying()) return;
+    adopt_timer_->stop();
+    const auto result = engine::ReimportAnimatedRig(rigContext(context_), dialog.reimportRequest());
+    if (!showRigResult(context_, window(), result)) return;
+    rescan();
+    reloadRigScene(context_, window());
+}
+
+void ContentBrowser::duplicateAnimatedRig(const QString& path) {
+    if (context_.playSession().isPlaying()) return;
+    engine::RigAssetGroup group;
+    std::string error;
+    if (!selectedRig(context_, path, group, error)) {
+        QMessageBox::warning(window(), tr("Duplicate Animated Rig"), QString::fromStdString(error));
+        return;
+    }
+    const auto parent = editor::toQString(group.directory.parent_path());
+    NewAssetDialog dialog(tr("Duplicate Animated Rig"), parent, {}, editor::toQString(group.directory.filename()) + tr(" Copy"), window());
+    if (dialog.exec() != QDialog::Accepted || context_.playSession().isPlaying()) return;
+    adopt_timer_->stop();
+    const auto result = engine::DuplicateAnimatedRig(rigContext(context_), group.directory, editor::toPath(dialog.path()), group.revision);
+    if (!showRigResult(context_, window(), result)) return;
+    rescan();
+    navigate(0, parent);
+    select({editor::toQString(result.group.directory)});
 }
 
 void ContentBrowser::newMaterial() {
+    if (context_.playSession().isPlaying()) return;
     MaterialDialog dialog(catalog(), folder_, tr("New Material"), window());
     if (dialog.exec() == QDialog::Accepted && operations_.createMaterial(dialog.path(), dialog.definition())) {
         select({dialog.path()});
@@ -936,6 +1074,7 @@ void ContentBrowser::newMaterial() {
 }
 
 void ContentBrowser::newMaterialInstance(const QString& albedo) {
+    if (context_.playSession().isPlaying()) return;
     QString name = tr("New Material Instance");
     if (!albedo.isEmpty()) {
         // Named after the texture, or after its model folder for a model's texture.png.
@@ -956,6 +1095,7 @@ void ContentBrowser::newMaterialInstance(const QString& albedo) {
 }
 
 void ContentBrowser::newScene() {
+    if (context_.playSession().isPlaying()) return;
     NewAssetDialog dialog(tr("New Scene"), folder_, QStringLiteral(".scene.json"), tr("New Scene"), window());
     if (dialog.exec() == QDialog::Accepted &&
         context_.sceneDocument().createInteractive(window(), editor::toPath(dialog.path()))) {
@@ -964,6 +1104,7 @@ void ContentBrowser::newScene() {
 }
 
 void ContentBrowser::newScript(bool followNavigation) {
+    if (context_.playSession().isPlaying()) return;
     // No spaces by default: require() names map onto file names.
     NewAssetDialog dialog(tr("New Script"), folder_, QStringLiteral(".lua"), followNavigation ? QStringLiteral("NavigationFollower") : QStringLiteral("NewScript"), window());
     if (dialog.exec() == QDialog::Accepted && operations_.createScript(dialog.path(), followNavigation)) {
@@ -972,6 +1113,7 @@ void ContentBrowser::newScript(bool followNavigation) {
 }
 
 void ContentBrowser::newBehaviorTree() {
+    if (context_.playSession().isPlaying()) return;
     NewAssetDialog dialog(tr("New Behavior Tree"), folder_, QStringLiteral(".bt.lua"),
                           QStringLiteral("NewTree"), window());
     if (dialog.exec() == QDialog::Accepted && operations_.createBehaviorTree(dialog.path())) {

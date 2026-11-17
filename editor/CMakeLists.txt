@@ -27,7 +27,10 @@ qt_add_executable(editor
     src/module_loader.cpp
     src/preferences_dialog.cpp
     src/project_dialog.cpp
+    src/rendering_status.cpp
+    src/session_log.cpp
     src/viewport_overlay.cpp
+    src/viewport_labels.cpp
     src/viewport_widget.cpp
     include/editor/log_model.hpp
     include/editor/log_panel.hpp
@@ -35,13 +38,17 @@ qt_add_executable(editor
     include/editor/module_loader.hpp
     include/editor/preferences_dialog.hpp
     include/editor/project_dialog.hpp
+    include/editor/rendering_status.hpp
+    include/editor/session_log.hpp
     include/editor/viewport_overlay.hpp
+    include/editor/viewport_labels.hpp
     include/editor/viewport_widget.hpp
 )
 
 target_include_directories(editor PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+target_compile_definitions(editor PRIVATE SRI_ENGINE_VERSION="${PROJECT_VERSION}")
 
 
 target_link_libraries(editor PRIVATE
@@ -112,6 +119,7 @@ add_subdirectory(modules/content)
 add_subdirectory(modules/scripting)
 add_subdirectory(modules/build)
 add_subdirectory(modules/ai)
+add_subdirectory(modules/audio)
 
 # --- Install / deploy ------------------------------------------------------
 

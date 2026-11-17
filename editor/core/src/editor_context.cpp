@@ -15,6 +15,7 @@
 #include <engine/engine.hpp>
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/audio/AudioSubsystem.hpp>
+#include <engine/animation/AnimationSubsystem.hpp>
 #include <engine/project/Project.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 
@@ -58,9 +59,14 @@ EditorContext::EditorContext(engine::Engine& engine, engine::Project& project, Q
       scene_document_(std::make_unique<SceneDocument>(engine, project, selection_, *history_)),
       play_session_(std::make_unique<PlaySession>(engine, project, selection_, *scene_document_)),
       edit_actions_(std::make_unique<EditActions>(engine, selection_, *history_, *play_session_, *shortcuts_)),
-      startup_scene_(std::make_unique<StartupScene>(*this)) {}
+      startup_scene_(std::make_unique<StartupScene>(*this)) {
+    QObject::connect(&selection_, &Selection::changed, &selection_, [this] {
+        if (auto* animation = engine_.GetSubsystem<engine::AnimationSubsystem>()) animation->EndPreview();
+    });
+}
 
 EditorContext::~EditorContext() {
+    if (auto* animation = engine_.GetSubsystem<engine::AnimationSubsystem>()) animation->EndPreview();
     // Panels would otherwise die with the dock manager, after the engine they show.
     // Not deleteDockWidget(): that defers the delete past the engine's shutdown.
     for (const Panel& panel : panels_) {
@@ -82,6 +88,7 @@ const engine::Project& EditorContext::project() const noexcept {
 bool EditorContext::updateProject(engine::Project project, std::string& error) {
     if (!project.Save(error)) return false;
     if (auto* audio = engine_.GetSubsystem<engine::AudioSubsystem>()) audio->StopPreview();
+    if (auto* animation = engine_.GetSubsystem<engine::AnimationSubsystem>()) animation->EndPreview();
     project_ = std::move(project);
     return true;
 }

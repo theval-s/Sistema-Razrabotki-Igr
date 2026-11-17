@@ -235,14 +235,30 @@ void Engine::Shutdown() {
     impl_->scene.SetControllersActive(false);
     impl_->scene.Clear();
 
+    auto* rendering = GetSubsystem<RenderingSubsystem>();
+    bool renderingWasInitialized = false;
+    // Consumers can still use assets in Shutdown. Defer the device owner regardless
+    // of registration order: LoadJob retains a raw device pointer until it finishes.
     while (impl_->initializedCount > 0) {
-        impl_->subsystems[--impl_->initializedCount].subsystem->Shutdown();
+        auto* subsystem = impl_->subsystems[--impl_->initializedCount].subsystem.get();
+        if (subsystem == rendering) renderingWasInitialized = true;
+        else subsystem->Shutdown();
     }
-    // After the subsystems (they may still read assets in their Shutdown()), before the
-    // scheduler goes away (in-flight loads have to be waited for).
-    impl_->sceneAssets->UnloadAll();
+    if (rendering) {
+        rendering->ClearHostOverlayCallbacks();
+        rendering->ClearOverlayCallbacks();
+        rendering->GetWorld().sceneItems.clear();
+        rendering->GetWorld().renderItems.clear();
+        rendering->GetWorld().selectedSceneItems.clear();
+        rendering->GetWorld().debugDraw.Clear();
+    }
+    // Wait for both worker queues and evict Ready GPU records before invalidating
+    // their handles. Global assets must also be evicted for a supported fresh start.
     impl_->sceneAssets->Shutdown();
     impl_->assets->Shutdown();
+    impl_->sceneAssets->UnloadAll();
+    impl_->assets->UnloadAll();
+    if (renderingWasInitialized) rendering->Shutdown();
     impl_->scheduler.WaitforAllAndShutdown();
     impl_->initialized = false;
 }

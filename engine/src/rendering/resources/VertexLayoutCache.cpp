@@ -1,11 +1,16 @@
 #include <engine/rendering/resources/VertexLayoutCache.hpp>
 
-#include <cassert>
 #include <utility>
 #include <vector>
-#include <engine/core/Log.hpp>
+#include "../LifecycleFailure.hpp"
 
 namespace engine {
+
+void InputLayoutCache::Clear() noexcept {
+    inputLayoutCache_.clear();
+    meshVertexLayouts_.Clear();
+    shaderVertexLayouts_.Clear();
+}
 
 bool InputLayoutCache::LayoutKey::operator==(const LayoutKey& other) const {
     return mesh == other.mesh && shader == other.shader;
@@ -31,8 +36,8 @@ ShaderLayoutHandle InputLayoutCache::RegisterShaderLayout(ShaderVertexLayout&& v
 
 ID3D11InputLayout* InputLayoutCache::GetInputLayout(ID3D11Device* device, const MeshLayoutHandle meshLayout,
                                                      const ShaderLayoutHandle shaderLayout) {
-    assert(meshLayout);
-    assert(shaderLayout);
+    if (!device || !meshVertexLayouts_.Contains(meshLayout) || !shaderVertexLayouts_.Contains(shaderLayout))
+        rendering_detail::Check(E_INVALIDARG, "CreateInputLayout", device, "Missing device, mesh layout or vertex shader layout.");
     const LayoutKey key{meshLayout, shaderLayout};
     if (const auto result = inputLayoutCache_.find(key); result != inputLayoutCache_.end()) {
         return result->second.Get();
@@ -50,9 +55,8 @@ ComPtr<ID3D11InputLayout> InputLayoutCache::CreateInputLayout(ID3D11Device* devi
     for (auto& att : shaderLayout.attributes) {
         const auto* meshAttribute = meshLayout.FindAttribute(att.semantic, att.semanticIndex);
         if (meshAttribute == nullptr) {
-            log::Render().error("Failed to create input layout! Mesh vertex is missing attribute {} {}!", att.semantic,
-                          att.semanticIndex);
-            return {};
+            rendering_detail::Check(E_INVALIDARG, "CreateInputLayout", device,
+                fmt::format("Mesh vertex is missing shader attribute {} {}.", att.semantic, att.semanticIndex));
         }
         inputDescriptions.push_back(D3D11_INPUT_ELEMENT_DESC{
             .SemanticName = att.semantic.c_str(),
@@ -65,16 +69,16 @@ ComPtr<ID3D11InputLayout> InputLayoutCache::CreateInputLayout(ID3D11Device* devi
         });
     }
     ComPtr<ID3D11InputLayout> result;
+    if (!shaderLayout.vertexShaderBlob)
+        rendering_detail::Check(E_INVALIDARG, "CreateInputLayout", device, "Vertex shader bytecode is absent.");
     const auto success = device->CreateInputLayout(
         inputDescriptions.data(),
         static_cast<uint32_t>(inputDescriptions.size()),
         shaderLayout.vertexShaderBlob->GetBufferPointer(),
         shaderLayout.vertexShaderBlob->GetBufferSize(),
         &result);
-    if (FAILED(success)) {
-        // We kindly expect those upper on the callstack to print some more helpful info
-        log::Render().error("Failed to create input layout!");
-    }
+    rendering_detail::Check(success, "CreateInputLayout", device,
+        fmt::format("Mesh/shader input layout, {} elements", inputDescriptions.size()));
     return result;
 }
 

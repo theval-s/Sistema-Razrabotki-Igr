@@ -172,6 +172,7 @@ QWidget* LogPanel::buildToolBar() {
     bar->addSeparator();
 
     auto* search = new QLineEdit;
+    search_ = search;
     search->setPlaceholderText(tr("Search"));
     search->setClearButtonEnabled(true);
     search->setMaximumWidth(260);
@@ -271,6 +272,35 @@ void LogPanel::showSelected() {
     }
     details_->setPlainText(current.data(LogModel::TextRole).toString());
     details_->show();
+}
+
+void LogPanel::revealDiagnostic(const QString& search, const QString& detail) {
+    follow_->setChecked(false);
+    drain(); // Startup errors may still be queued in the sink.
+    search_->clear();
+    for (auto* action : level_actions_) action->setChecked(true);
+    for (int level = 0; level < spdlog::level::n_levels; ++level)
+        filter_->setLevelShown(static_cast<spdlog::level::level_enum>(level), true);
+    for (const auto& source : filter_->hiddenSources()) filter_->setSourceShown(source, true);
+    refreshSources();
+    view_->clearSelection();
+    for (int row = filter_->rowCount() - 1; row >= 0; --row) {
+        const auto index = filter_->index(row, LogModel::MessageColumn);
+        const bool matches = search.isEmpty()
+            ? index.data(LogModel::LevelRole).toInt() >= spdlog::level::warn
+            : index.data(LogModel::TextRole).toString().contains(search, Qt::CaseInsensitive);
+        if (!matches) continue;
+        view_->selectionModel()->setCurrentIndex(index, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        view_->scrollTo(index);
+        break;
+    }
+    // Preserve every structured field even if the log entry is absent or split
+    // over several messages. A later explicit row selection shows that row as usual.
+    if (!detail.isEmpty()) {
+        details_->setPlainText(detail);
+        details_->show();
+    }
+    view_->setFocus();
 }
 
 void LogPanel::copySelected() const {

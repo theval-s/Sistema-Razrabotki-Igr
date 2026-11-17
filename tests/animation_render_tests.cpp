@@ -168,7 +168,8 @@ struct FrameImage { Image color, selection; };
 void RenderAndRead(RenderingSubsystem& rendering, const FrameContext& frame, bool selected, FrameImage& image) {
     bool captured = false;
     // Capture before Present (the swap chain uses FLIP_DISCARD). The public
-    // overlay hook also lets us inspect the actual selection SRV used by Present.
+    // overlay hook also lets us inspect the actual selection texture. Present
+    // deliberately unbinds its inputs; residual PS state is not its public API.
     rendering.GetRendering().RenderFrame(frame, [&](RenderingContext& context, const FrameContext&) {
         ComPtr<ID3D11RenderTargetView> target;
         context.GetDeviceContext()->OMGetRenderTargets(1, &target, nullptr);
@@ -179,9 +180,14 @@ void RenderAndRead(RenderingSubsystem& rendering, const FrameContext& frame, boo
         ASSERT_TRUE(SUCCEEDED(resource.As(&texture)));
         ASSERT_NO_FATAL_FAILURE(ReadTexture(context, texture.Get(), image.color));
         if (selected) {
+            const auto handle = rendering.GetRendering().GetResources().selectionMask;
+            ASSERT_TRUE(handle);
+            context.SetShaderResources(BindSlots::Texture::Pass0, handle);
             ComPtr<ID3D11ShaderResourceView> mask;
             context.GetDeviceContext()->PSGetShaderResources(16, 1, &mask); // Texture::Pass0
-            ASSERT_TRUE(mask) << "selection did not reach the outline compositor";
+            ID3D11ShaderResourceView* empty = nullptr;
+            context.GetDeviceContext()->PSSetShaderResources(16, 1, &empty);
+            ASSERT_TRUE(mask) << "selection texture is unavailable";
             mask->GetResource(resource.ReleaseAndGetAddressOf());
             texture.Reset();
             ASSERT_TRUE(SUCCEEDED(resource.As(&texture)));
@@ -232,8 +238,7 @@ void ExpectImportedVertexShaderOutput(RenderingSubsystem& rendering, const Rende
 void GSMain(triangle GBufferInput vertices[3], inout TriangleStream<GBufferInput> output) {
     for (uint i = 0; i < 3; ++i) output.Append(vertices[i]);
 })", path, ShaderType::Geometry);
-    ASSERT_TRUE(vs && gs);
-    const auto shader = manager.RegisterCompiledShader(*vs);
+    const auto shader = manager.RegisterCompiledShader(vs);
     ASSERT_TRUE(shader);
     context.ClearState();
     context.SetShader(shader);
@@ -265,7 +270,7 @@ void GSMain(triangle GBufferInput vertices[3], inout TriangleStream<GBufferInput
     const UINT outputStride = sizeof(Output);
     ComPtr<ID3D11GeometryShader> streamShader;
     ASSERT_TRUE(SUCCEEDED(context.GetDevice()->CreateGeometryShaderWithStreamOutput(
-        gs->blob->GetBufferPointer(), gs->blob->GetBufferSize(), declarations, 2, &outputStride, 1,
+        gs.blob->GetBufferPointer(), gs.blob->GetBufferSize(), declarations, 2, &outputStride, 1,
         D3D11_SO_NO_RASTERIZED_STREAM, nullptr, &streamShader)));
     D3D11_BUFFER_DESC outputDesc{};
     outputDesc.ByteWidth = 3 * sizeof(Output);

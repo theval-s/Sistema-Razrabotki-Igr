@@ -1,22 +1,34 @@
 #include <engine/rendering/RenderingContext.hpp>
 
-#include <cassert>
-#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <engine/core/Log.hpp>
 
 #include "engine/window.hpp"
+#include "LifecycleFailure.hpp"
 
 namespace engine {
 
 RenderingContext::RenderingContext() = default;
 
 RenderingContext::~RenderingContext() {
+    Shutdown();
+}
+
+void RenderingContext::Shutdown() noexcept {
     if (deviceContext_) {
-        deviceContext_->Flush();
         deviceContext_->ClearState();
+        deviceContext_->Flush();
     }
+    lineBuffer_.Reset();
+    lineBufferCapacity_ = 0;
+    lineLayout_ = {};
+    vsInputLayout_ = {};
+    renderingStates_ = {};
+    resourceManager_.Shutdown();
+    swapChain_.Reset();
+    deviceContext_.Reset();
+    device_.Reset();
 }
 
 
@@ -25,7 +37,12 @@ bool RenderingContext::Initialize(const NativeSurface& surface, const bool debug
         log::Render().error("RenderingContext::Initialize: the engine has no valid native surface");
         return false;
     }
-    return CreateDeviceAndSwapChain(static_cast<HWND>(surface.windowHandle), surface.width, surface.height, debugLayer);
+    try {
+        return CreateDeviceAndSwapChain(static_cast<HWND>(surface.windowHandle), surface.width, surface.height, debugLayer);
+    } catch (...) {
+        Shutdown();
+        throw;
+    }
 }
 
 bool RenderingContext::Reinitialize(const NativeSurface& surface) const {
@@ -33,10 +50,7 @@ bool RenderingContext::Reinitialize(const NativeSurface& surface) const {
         return false;
     }
     const auto r = swapChain_->ResizeBuffers(0, surface.width, surface.height, DXGI_FORMAT_UNKNOWN, 0);
-    if (FAILED(r)) {
-        log::Render().error("Failed to resize swap chain: {:08x}", static_cast<unsigned long>(r));
-        return false;
-    }
+    rendering_detail::Check(r, "ResizeBuffers", device_.Get(), fmt::format("Requested surface {}x{}", surface.width, surface.height));
     return true;
 }
 
@@ -82,10 +96,7 @@ bool RenderingContext::CreateDeviceAndSwapChain(const HWND hwnd, const uint32_t 
         log::Render().warn("D3D debug layer unavailable ({:08x}), continuing without it", static_cast<unsigned long>(r));
         r = create(flags & ~static_cast<UINT>(D3D11_CREATE_DEVICE_DEBUG));
     }
-    if (FAILED(r)) {
-        log::Render().critical("D3D11CreateDeviceAndSwapChain failed: {:08x}", static_cast<unsigned long>(r));
-        return false;
-    }
+    rendering_detail::Check(r, "D3D11CreateDeviceAndSwapChain", device_.Get(), fmt::format("Requested surface {}x{}", width, height));
 
     resourceManager_.Initialize(device_.Get());
     renderingStates_.Initialize(device_.Get());
@@ -136,7 +147,7 @@ void RenderingContext::SetViewport(const uint32_t width, const uint32_t height) 
 }
 
 void RenderingContext::BindMesh(const MeshHandle h) {
-    assert(vsInputLayout_); // Vertex shader should be set before mesh bindings as we need to bind input layout
+    if (!vsInputLayout_) rendering_detail::Check(E_INVALIDARG, "BindMesh", device_.Get(), "Bind a vertex shader before binding a mesh.");
     const auto& mesh = resourceManager_.meshes_.Get(h);
     const auto inputLayout = resourceManager_.inputLayoutCache_.GetInputLayout(
         device_.Get(), mesh.meshLayout, vsInputLayout_);
@@ -167,18 +178,21 @@ void RenderingContext::DrawLines(const std::span<const LineVertex> endpoints) {
         endpoints.size_bytes() > std::numeric_limits<uint32_t>::max()) return;
     const auto bytes = static_cast<uint32_t>(endpoints.size_bytes());
     if (bytes > lineBufferCapacity_) {
-        lineBuffer_.Reset();
         const D3D11_BUFFER_DESC desc{
             .ByteWidth = bytes,
             .Usage = D3D11_USAGE_DYNAMIC,
             .BindFlags = D3D11_BIND_VERTEX_BUFFER,
             .CPUAccessFlags = D3D11_CPU_ACCESS_WRITE,
         };
-        if (FAILED(device_->CreateBuffer(&desc, nullptr, lineBuffer_.GetAddressOf()))) return;
+        ComPtr<ID3D11Buffer> replacement;
+        rendering_detail::Check(device_->CreateBuffer(&desc, nullptr, replacement.GetAddressOf()),
+            "CreateBuffer", device_.Get(), fmt::format("Debug line vertex buffer, {} bytes", bytes));
+        lineBuffer_ = std::move(replacement);
         lineBufferCapacity_ = bytes;
     }
     D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(deviceContext_->Map(lineBuffer_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) return;
+    rendering_detail::Check(deviceContext_->Map(lineBuffer_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped),
+        "Map", device_.Get(), "Debug line vertex buffer");
     std::memcpy(mapped.pData, endpoints.data(), bytes);
     deviceContext_->Unmap(lineBuffer_.Get(), 0);
 
@@ -189,7 +203,6 @@ void RenderingContext::DrawLines(const std::span<const LineVertex> endpoints) {
         lineLayout_ = resourceManager_.inputLayoutCache_.RegisterMeshLayout(std::move(layout));
     }
     const auto inputLayout = resourceManager_.inputLayoutCache_.GetInputLayout(device_.Get(), lineLayout_, vsInputLayout_);
-    if (!inputLayout) return;
     deviceContext_->IASetInputLayout(inputLayout);
     const UINT stride = sizeof(LineVertex), offset = 0;
     ID3D11Buffer* buffer = lineBuffer_.Get();
@@ -238,15 +251,19 @@ void RenderingContext::UnbindCBuffer(const BindSlot slot) {
 
 void RenderingContext::SetRenderTargets(const std::initializer_list<TextureHandle> targets,
                                         const TextureHandle depth, const bool depthReadOnly) {
+    if (targets.size() > D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT)
+        rendering_detail::Check(E_INVALIDARG, "OMSetRenderTargets", device_.Get(), "Too many render targets.");
     ID3D11DepthStencilView* dsv = nullptr;
     if (depth) {
         const auto& depthTexture = resourceManager_.textures_.Get(depth);
         dsv = depthReadOnly ? depthTexture.GetReadOnlyDSV() : depthTexture.GetDSV();
+        if (!dsv) rendering_detail::Check(E_INVALIDARG, "OMSetRenderTargets", device_.Get(), "Required depth-stencil view is absent.");
     }
     std::array<ID3D11RenderTargetView*, 16> renderTargetViews;
     for (int i = 0; i < targets.size(); i++) {
         if (const auto target = targets.begin()[i]) {
             renderTargetViews[i] = resourceManager_.textures_.Get(target).GetRTV();
+            if (!renderTargetViews[i]) rendering_detail::Check(E_INVALIDARG, "OMSetRenderTargets", device_.Get(), "Required render-target view is absent.");
         } else {
             renderTargetViews[i] = nullptr;
         }
@@ -257,6 +274,7 @@ void RenderingContext::SetRenderTargets(const std::initializer_list<TextureHandl
 void RenderingContext::SetShaderResources(const BindSlot slot, const TextureHandle h) {
     const auto& texture = resourceManager_.textures_.Get(h);
     const auto srv = texture.GetSRV();
+    if (!srv) rendering_detail::Check(E_INVALIDARG, "SetShaderResources", device_.Get(), "Required shader-resource view is absent.");
     if (slot.HasStage(ShaderStage::Vertex)) {
         deviceContext_->VSSetShaderResources(slot.id_, 1, &srv);
     }
@@ -306,7 +324,8 @@ void RenderingContext::SetGraphicalState(const GraphicalState state) const {
 }
 
 void RenderingContext::ClearState() {
-    deviceContext_->ClearState();
+    if (deviceContext_) deviceContext_->ClearState();
+    vsInputLayout_ = {};
 }
 
 void RenderingContext::ClearHazardousState() const {
@@ -338,33 +357,31 @@ void RenderingContext::ClearDepthView(const TextureHandle h, const std::optional
     UINT flags = depth ? D3D11_CLEAR_DEPTH : 0;
     flags |= stencil ? D3D11_CLEAR_STENCIL : 0;
     const auto& texture = resourceManager_.textures_.Get(h);
+    if (!texture.GetDSV()) rendering_detail::Check(E_INVALIDARG, "ClearDepthStencilView", device_.Get(), "Required depth-stencil view is absent.");
     deviceContext_->ClearDepthStencilView(
         texture.GetDSV(), flags, depth.value_or(0.f), static_cast<UINT8>(stencil.value_or(0)));
 }
 
 void RenderingContext::ClearRenderTargetView(const TextureHandle h, const std::array<float, 4> color) {
     const auto& texture = resourceManager_.textures_.Get(h);
+    if (!texture.GetRTV()) rendering_detail::Check(E_INVALIDARG, "ClearRenderTargetView", device_.Get(), "Required render-target view is absent.");
     deviceContext_->ClearRenderTargetView(texture.GetRTV(), color.data());
 }
 
 void RenderingContext::UpdateBuffer(const GpuBuffer& buffer, const void* data, const uint32_t size) const {
+    if (!deviceContext_ || !buffer.buffer || !data || size > buffer.size)
+        rendering_detail::Check(E_INVALIDARG, "UpdateBuffer", device_.Get(), "Missing context/buffer/data or upload exceeds buffer capacity.");
     D3D11_MAPPED_SUBRESOURCE mapped{};
     const HRESULT hr = deviceContext_->Map(buffer.buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-    assert(SUCCEEDED(hr)); // Idk what to do if not...
+    rendering_detail::Check(hr, "Map", device_.Get(), fmt::format("Dynamic buffer upload, {} bytes", size));
     std::memcpy(mapped.pData, data, size);
     deviceContext_->Unmap(buffer.buffer.Get(), 0);
 }
 
 void RenderingContext::Present() const {
+    if (!swapChain_) rendering_detail::Check(E_POINTER, "Present", device_.Get(), "No swap chain is initialized.");
     const auto res = swapChain_->Present(1, 0);
-    assert(SUCCEEDED(res));
-}
-
-void RenderingContext::checkResult(const HRESULT result, const char* message) {
-    if (FAILED(result)) {
-        log::Render().critical(message);
-        std::exit(1);
-    }
+    rendering_detail::Check(res, "Present", device_.Get());
 }
 
 }

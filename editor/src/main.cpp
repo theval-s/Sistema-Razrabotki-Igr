@@ -1,14 +1,10 @@
 #include <QApplication>
 #include <QCommandLineParser>
-#include <QDir>
 #include <QMessageBox>
 
 #include <optional>
 #include <string>
 #include <utility>
-
-#include <spdlog/sinks/rotating_file_sink.h>
-#include <spdlog/spdlog.h>
 
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/project/Project.hpp>
@@ -16,22 +12,9 @@
 #include <editor/main_window.hpp>
 #include <editor/paths.hpp>
 #include <editor/project_dialog.hpp>
-#include <editor/editor_log.hpp>
+#include <editor/session_log.hpp>
 
 namespace {
-
-void addFileLog() {
-    //logging in the exe path instead of cwd
-    const QString path = QDir::toNativeSeparators(QCoreApplication::applicationDirPath() + "/logs/editor.log");
-    try {
-        // spdlog opens narrow paths with the ANSI code page on Windows, hence local 8-bit.
-        engine::log::Sinks()->add_sink(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-            path.toLocal8Bit().toStdString(), 5 * 1024 * 1024, 3));
-        spdlog::flush_on(spdlog::level::warn);
-    } catch (const spdlog::spdlog_ex& e) {
-        editor::editorLog().warn("Could not open log file '{}': {}", path.toStdString(), e.what());
-    }
-}
 
 /// `file` if it loads, otherwise whatever the user picks in the project dialog; empty if they quit.
 std::optional<engine::Project> chooseProject(QString file) {
@@ -64,7 +47,7 @@ int main(int argc, char* argv[]) {
     QCoreApplication::setApplicationName(QStringLiteral("SRI Editor"));
 
     // Before the window starts the engine and its threads, which log to the same logger.
-    addFileLog();
+    editor::initializeSessionLog();
 
     QCommandLineParser parser;
     parser.addHelpOption();
@@ -77,6 +60,7 @@ int main(int argc, char* argv[]) {
     if (!project) {
         return 0;
     }
+    editor::logSession(editor::toQString(project->file));
     // Before the engine exists: nothing may resolve a game/... name until this is set.
     engine::AssetPathResolver::SetGameRoot(project->ContentDir());
 

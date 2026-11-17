@@ -1,15 +1,20 @@
 #include <engine/navigation/NavigationMesh.hpp>
 #include <editor/viewport_overlay.hpp>
+#include <editor/viewport_labels.hpp>
 
 #include <QWidget>
+#include <QColor>
+#include <QVariant>
 
 #include <algorithm>
 #include <cmath>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/animation/AnimationSubsystem.hpp>
+#include <engine/audio/AudioComponents.hpp>
 #include <engine/engine.hpp>
 #include <engine/physics/PhysicsSubsystem.hpp>
 #include <engine/rendering/DebugDraw.hpp>
@@ -33,6 +38,83 @@ const Color LightColor{1.0f, 0.8f, 0.25f};
 /// The orientation axes' length and their center's distance from the corner, in logical pixels.
 constexpr float AxesLength = 34.0f;
 constexpr float AxesMargin = 60.0f;
+
+void addLabel(ViewportLabels& labels, const ViewportView& view, const Vector3& position,
+              const QString& text, const QColor& color) {
+    if (const auto screen = view.project(position))
+        labels.add({screen->x + 5, screen->y - 5}, text,
+                   {color.redF(), color.greenF(), color.blueF(), color.alphaF()});
+}
+
+void drawSkeleton(engine::DebugDraw& draw, engine::Engine& host, entt::entity entity,
+                  ViewportLabels& labels, const ViewportView& view) {
+    const auto& scene = host.GetScene();
+    auto& assets = host.GetSceneAssets();
+    engine::AssetReference reference;
+    // Prefer the renderer's rig: on a mismatch the visible mesh uses that rig's
+    // rest pose, and the diagnostic overlay must describe the same geometry.
+    if (const auto* renderer = scene.TryGetComponent<engine::SkinnedMeshRenderer>(entity)) {
+        if (const auto mesh = assets.Peek(renderer->mesh)) reference = mesh->skeletonReference;
+    }
+    if (!reference.id.IsValid())
+        if (const auto* animator = scene.TryGetComponent<engine::Animator>(entity)) reference = animator->skeleton;
+    const auto* entry = assets.GetCatalog().Find(reference.id, engine::CatalogAssetKind::Skeleton);
+    if (!entry) return;
+    if (assets.GetState<engine::SkeletonAsset>(entry->path) == engine::AssetState::Unloaded)
+        (void)assets.RequestSkeleton(reference);
+    const auto skeleton = assets.Peek<engine::SkeletonAsset>(entry->path);
+    if (!skeleton || skeleton->restModels.size() != skeleton->jointCount ||
+        skeleton->jointParents.size() != skeleton->jointCount || skeleton->jointNames.size() != skeleton->jointCount) return;
+    const auto* animation = host.GetSubsystem<engine::AnimationSubsystem>();
+    const auto pose = animation ? animation->GetPose(entity) : nullptr;
+    const auto& models = pose && pose->skeletonSignature == skeleton->signature &&
+        pose->jointModels.size() == skeleton->jointCount ? pose->jointModels : skeleton->restModels;
+    const auto world = scene.GetWorldMatrix(entity);
+    const Color color{0.25f, 0.85f, 1.0f};
+    const auto finite = [](const Vector3& p) { return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z); };
+    for (std::size_t i = 0; i < models.size(); ++i) {
+        const auto point = Vector3::Transform(models[i].Translation(), world);
+        if (!finite(point)) continue;
+        draw.Sphere(point, 0.025f, color);
+        const auto parent = skeleton->jointParents[i];
+        if (parent >= 0 && static_cast<std::size_t>(parent) < models.size() && parent != static_cast<std::int32_t>(i)) {
+            const auto from = Vector3::Transform(models[parent].Translation(), world);
+            if (finite(from)) draw.Line(from, point, color);
+        }
+        addLabel(labels, view, point, QString::fromStdString(skeleton->jointNames[i]), QColor(65, 220, 255));
+    }
+}
+
+void drawAudio(engine::DebugDraw& draw, const engine::Scene& scene, entt::entity entity, bool selected,
+               ViewportLabels& labels, const ViewportView& view) {
+    const auto world = scene.GetWorldMatrix(entity);
+    const auto origin = world.Translation();
+    if (const auto* source = scene.TryGetComponent<engine::AudioSource>(entity)) {
+        const Color color = source->enabled ? Color{1.0f, 0.55f, 0.2f} : Color{0.5f, 0.5f, 0.5f};
+        draw.Sphere(origin, 0.12f, color);
+        QString text = source->spatial == engine::AudioSpatialMode::ThreeD ? QObject::tr("Audio emitter (3D)") : QObject::tr("Audio emitter (2D)");
+        if (!source->enabled) text += QObject::tr(" — disabled");
+        if (selected && source->spatial == engine::AudioSpatialMode::ThreeD) {
+            // Distances are world units, deliberately independent of entity scale.
+            if (std::isfinite(source->minDistance) && source->minDistance > 0)
+                draw.Sphere(origin, source->minDistance, {0.4f, 1.0f, 0.5f});
+            if (std::isfinite(source->maxDistance) && source->maxDistance > 0)
+                draw.Sphere(origin, source->maxDistance, color);
+            text += QObject::tr(" | green min %1, orange max %2 (attenuation bound, not cull)")
+                .arg(source->minDistance).arg(source->maxDistance);
+            if (source->attenuation == engine::AudioAttenuation::None) text += QObject::tr(" — attenuation off");
+        }
+        addLabel(labels, view, origin, text, QColor(255, 160, 75));
+    }
+    if (const auto* listener = scene.TryGetComponent<engine::AudioListener>(entity)) {
+        Vector3 forward = Vector3::TransformNormal(Vector3::Forward, world);
+        if (forward.LengthSquared() > 0) forward.Normalize();
+        draw.Arrow(origin, origin + forward * 0.5f, 0.12f, {0.75f, 0.45f, 1.0f});
+        draw.Sphere(origin, 0.16f, {0.75f, 0.45f, 1.0f});
+        addLabel(labels, view, origin + Vector3(0, .2f, 0), listener->enabled
+            ? QObject::tr("Audio listener") : QObject::tr("Audio listener — disabled"), QColor(200, 140, 255));
+    }
+}
 
 /// The reach of an entity's lights, or for a directional light where it shines.
 void drawLights(engine::DebugDraw& draw, const engine::Scene& scene, const entt::entity entity) {
@@ -72,11 +154,25 @@ void drawLights(engine::DebugDraw& draw, const engine::Scene& scene, const entt:
 }  // namespace
 
 ViewportOverlaySubsystem::ViewportOverlaySubsystem(const Selection& selection, const TransformGizmo& gizmo,
-                                                   const QWidget& viewport)
-    : selection_(selection), gizmo_(gizmo), viewport_(viewport) {}
+                                                    const QWidget& viewport)
+    : selection_(selection), gizmo_(gizmo), viewport_(viewport), labels_(std::make_unique<ViewportLabels>()) {}
+
+ViewportOverlaySubsystem::~ViewportOverlaySubsystem() = default;
 
 std::string_view ViewportOverlaySubsystem::GetName() const {
     return "ViewportOverlaySubsystem";
+}
+
+bool ViewportOverlaySubsystem::Initialize() {
+    auto* rendering = GetEngine().GetSubsystem<engine::RenderingSubsystem>();
+    if (!rendering) return false;
+    // DXGI flip-model surfaces cannot be composited with Qt/GDI child painting.
+    // Draw diagnostic text into the same target as the scene before its one Present.
+    rendering->SetHostOverlayCallbacks([this](engine::RenderingContext& context, const engine::FrameContext&) {
+        labels_->render(context.GetDevice(), context.GetDeviceContext());
+    });
+    overlayRegistered_ = true;
+    return true;
 }
 
 void ViewportOverlaySubsystem::LateUpdate(const engine::FrameContext&) {
@@ -90,6 +186,26 @@ void ViewportOverlaySubsystem::LateUpdate(const engine::FrameContext&) {
                                AxesLength * scale);
     auto& assets = GetEngine().GetSceneAssets();
     const auto& scene = GetEngine().GetScene();
+    const auto view = ViewportView::fromCamera(world.camera, {static_cast<float>(viewport_.width()), static_cast<float>(viewport_.height())});
+    labels_->beginFrame(viewport_.font(), viewport_.devicePixelRatioF());
+    const auto enabled = [this](const char* property) {
+        const auto value = viewport_.property(property);
+        return !value.isValid() || value.toBool();
+    };
+    if (viewport_.width() > 0 && viewport_.height() > 0) {
+        if (enabled("showSkeletonOverlay"))
+            for (const auto entity : selection_.entities())
+                if (scene.IsValid(entity)) drawSkeleton(world.debugDraw, GetEngine(), entity, *labels_, view);
+        if (enabled("showAudioOverlay")) {
+            scene.ForEach<engine::AudioSource>([&](entt::entity entity, const engine::AudioSource&) {
+                drawAudio(world.debugDraw, scene, entity, selection_.contains(entity), *labels_, view);
+            });
+            scene.ForEach<engine::AudioListener>([&](entt::entity entity, const engine::AudioListener&) {
+                if (!scene.HasComponent<engine::AudioSource>(entity))
+                    drawAudio(world.debugDraw, scene, entity, selection_.contains(entity), *labels_, view);
+            });
+        }
+    }
     const auto selected = selection_.primary();
     const auto* region = scene.TryGetComponent<engine::NavigationRegion>(selected);
     if (region && !GetEngine().IsPlaying()) {
@@ -139,7 +255,12 @@ void ViewportOverlaySubsystem::LateUpdate(const engine::FrameContext&) {
 }
 
 void ViewportOverlaySubsystem::Shutdown() {
-    GetEngine().GetSubsystem<engine::RenderingSubsystem>()->GetWorld().selectedSceneItems.clear();
+    if (auto* rendering = GetEngine().GetSubsystem<engine::RenderingSubsystem>()) {
+        if (overlayRegistered_) rendering->ClearHostOverlayCallbacks();
+        rendering->GetWorld().selectedSceneItems.clear();
+    }
+    overlayRegistered_ = false;
+    labels_->clear();
 }
 
 }  // namespace editor

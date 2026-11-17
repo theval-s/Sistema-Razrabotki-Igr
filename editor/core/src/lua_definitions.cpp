@@ -144,7 +144,23 @@ function Quaternion:Rotate(vector) end
 ---@return Quaternion
 function Quaternion:Compose(other) end
 
----@alias ComponentType 'Camera'|'DirectionalLight'|'PointLight'|'SpotLight'|'MeshRenderer'|'RigidBody'|'Collider'|'Script'|'GamePersistence'|'Bounds'
+---@alias ComponentType 'Camera'|'DirectionalLight'|'PointLight'|'SpotLight'|'MeshRenderer'|'RigidBody'|'Collider'|'Script'|'GamePersistence'|'Bounds'|'AudioSource'|'AudioListener'
+---@class AudioListenerSnapshot
+---@field enabled boolean Exactly one enabled explicit listener; otherwise active camera fallback.
+---@class AudioSourceSnapshot
+---@field clip string UUID (getter); UUID or catalog path when writing. Empty string clears.
+---@field enabled boolean
+---@field playOnStart boolean Once per activation, during Play only.
+---@field looping boolean
+---@field loading 'Buffered'|'Streamed'
+---@field bus 'Music'|'SFX'|'UI'
+---@field volume number Gain in [0,1].
+---@field pitch number Finite positive ratio.
+---@field spatial 'TwoD'|'ThreeD' ThreeD requires native mono audio.
+---@field attenuation 'None'|'Inverse'|'Linear'|'Exponential'
+---@field minDistance number Positive metres.
+---@field maxDistance number Metres, at least minDistance; not a hard silence radius.
+---@field rolloff number Finite nonnegative factor.
 ---@class CameraSnapshot
 ---@field fovY number Radians, between zero and pi.
 ---@field nearPlane number Positive.
@@ -185,7 +201,7 @@ function Quaternion:Compose(other) end
 ---@class BoundsSnapshot
 ---@field min Vector3
 ---@field max Vector3
----@alias ComponentSnapshot CameraSnapshot|DirectionalLightSnapshot|PointLightSnapshot|SpotLightSnapshot|MeshRendererSnapshot|RigidBodySnapshot|ColliderSnapshot|ScriptSnapshot|GamePersistenceSnapshot|BoundsSnapshot
+---@alias ComponentSnapshot CameraSnapshot|DirectionalLightSnapshot|PointLightSnapshot|SpotLightSnapshot|MeshRendererSnapshot|RigidBodySnapshot|ColliderSnapshot|ScriptSnapshot|GamePersistenceSnapshot|BoundsSnapshot|AudioSourceSnapshot|AudioListenerSnapshot
 ---@class MaterialParametersSnapshot
 ---@field specularColor Vector3 Nonnegative RGB.
 ---@field shininess number Nonnegative.
@@ -274,6 +290,8 @@ function Entity:HasComponent(type) end
 ---@overload fun(self: Entity, type: 'Script'): ScriptSnapshot?
 ---@overload fun(self: Entity, type: 'GamePersistence'): GamePersistenceSnapshot?
 ---@overload fun(self: Entity, type: 'Bounds'): BoundsSnapshot?
+---@overload fun(self: Entity, type: 'AudioSource'): AudioSourceSnapshot?
+---@overload fun(self: Entity, type: 'AudioListener'): AudioListenerSnapshot?
 ---@param type ComponentType
 ---@return ComponentSnapshot?
 function Entity:GetComponent(type) end
@@ -569,7 +587,109 @@ function Input.SetCursorMode(mode) end
 function Input.GetCursorMode() end
 
 )"
-R"(Physics = {}
+R"(---@alias AudioVoiceStatus 'Invalid'|'Pending'|'Playing'|'Paused'|'Finished'|'Stopped'|'Failed'
+---@alias AudioBus 'Music'|'SFX'|'UI'
+---@class AudioPlayOptions
+---@field loading? 'Buffered'|'Streamed' Default Buffered.
+---@field bus? AudioBus Default SFX.
+---@field scope? 'scene'|'session' Default scene; session is supported only by Play2D.
+---@field looping? boolean Default false.
+---@field volume? number Finite gain in [0,1], default 1.
+---@field pitch? number Finite positive ratio, default 1.
+---@field attenuation? 'None'|'Inverse'|'Linear'|'Exponential' Default Inverse.
+---@field minDistance? number Positive metres, default 1.
+---@field maxDistance? number At least minDistance, default 100.
+---@field rolloff? number Nonnegative, default 1.
+---A lifetime-checked token. Dropping it does not stop playback; terminal tokens remain valid until shutdown/retry.
+---@class AudioVoice
+AudioVoice = {}
+---@return boolean
+function AudioVoice:IsValid() end
+---@return AudioVoiceStatus
+function AudioVoice:GetStatus() end
+---@return string
+function AudioVoice:GetError() end
+---@return boolean success
+---@return string error
+function AudioVoice:Pause() end
+---@return boolean success
+---@return string error
+function AudioVoice:Resume() end
+---@return boolean success
+---@return string error
+function AudioVoice:Stop() end
+---@param volume number Finite gain in [0,1].
+---@return boolean success
+---@return string error
+function AudioVoice:SetVolume(volume) end
+---@param pitch number Finite positive ratio.
+---@return boolean success
+---@return string error
+function AudioVoice:SetPitch(pitch) end
+---Uses playback time; freezes during pause.
+---@param targetVolume number Finite gain in [0,1].
+---@param seconds number Finite nonnegative seconds, at most 86400.
+---@param stopAtEnd? boolean Default false.
+---@return boolean success
+---@return string error
+function AudioVoice:Fade(targetVolume, seconds, stopAtEnd) end
+Audio = {}
+---Starts independent nonpositional playback; decoding may fail after Pending.
+---@param clip string AudioClip UUID or catalog path.
+---@param options? AudioPlayOptions
+---@return AudioVoice? voice
+---@return string error
+function Audio.Play2D(clip, options) end
+---Scene-owned mono point emitter, at a fixed world position in metres.
+---@param clip string AudioClip UUID or catalog path.
+---@param position Vector3
+---@param options? AudioPlayOptions scope must be scene.
+---@return AudioVoice? voice
+---@return string error
+function Audio.PlayAt(clip, position, options) end
+---Restarts the entity's primary voice, using its authored AudioSource and world pose.
+---@param target Entity
+---@return AudioVoice? voice
+---@return string error
+function Audio.PlaySource(target) end
+---@param target Entity
+---@return AudioVoice? voice
+---@return string error
+function Audio.GetSourceVoice(target) end
+---@param target Entity
+---@return boolean success
+---@return string error
+function Audio.PauseSource(target) end
+---@param target Entity
+---@return boolean success
+---@return string error
+function Audio.ResumeSource(target) end
+---@param target Entity
+---@return boolean success
+---@return string error
+function Audio.StopSource(target) end
+---@param volume number Finite gain in [0,1]. Runtime only.
+---@return boolean success
+---@return string error
+function Audio.SetMasterVolume(volume) end
+---@return number? volume
+---@return string error
+function Audio.GetMasterVolume() end
+---@param bus AudioBus
+---@param volume number Finite gain in [0,1]. Runtime only.
+---@return boolean success
+---@return string error
+function Audio.SetBusVolume(bus, volume) end
+---@param bus AudioBus
+---@return number? volume
+---@return string error
+function Audio.GetBusVolume(bus) end
+---@return boolean
+function Audio.IsAvailable() end
+---@return string
+function Audio.GetDiagnostic() end
+
+Physics = {}
 ---@param target Entity
 ---@param velocity Vector3 Dynamic body; world-space velocity.
 ---@return boolean success
