@@ -23,6 +23,11 @@ struct AnimationPlaybackState {
     double timeSeconds = 0.0;
     float duration = 0.0f;
     std::string error;
+    /// Runtime transport values, distinct from the Animator's authored defaults.
+    AssetReference clip;
+    AssetReference targetClip;
+    float speed = 1.0f;
+    bool loop = true;
 };
 
 /// Main-thread control API. Evaluates local poses before render extraction.
@@ -45,6 +50,16 @@ public:
     bool Stop(entt::entity entity);
     bool Seek(entt::entity entity, double seconds, std::string& error);
     bool SetSpeed(entt::entity entity, float speed, std::string& error);
+    /// Edit-mode audition of one scene entity. Uses real time while simulation stays
+    /// frozen. Subsequent Pause/Seek/SetSpeed controls affect this transient player.
+    /// Replacing the entity ends its previous preview; clip changes may crossfade.
+    /// Requires an editor host outside Play. Authored components are never changed.
+    bool Preview(entt::entity entity, const AssetReference& clip, float fadeSeconds,
+                 bool loop, std::string& error);
+    /// Restores the normal Edit pose (authored starting clip at zero, or rest pose).
+    /// Also called on simulation reset, scene replacement, and entering Play.
+    void EndPreview();
+    [[nodiscard]] entt::entity GetPreviewEntity() const;
     [[nodiscard]] std::shared_ptr<const AnimationPose> GetPose(entt::entity entity) const;
     [[nodiscard]] std::optional<AnimationPlaybackState> GetPlaybackState(entt::entity entity) const;
 

@@ -48,6 +48,25 @@ Scene sources do not autoplay in Edit. Inspector edits use scene history for und
 The editor free camera is not the gameplay listener during Play. Preview is one
 audition at a time, separate from paused game audio.
 
+Double-click an AudioClip in Content Browser to open the **Audio** dock. Metadata
+inspection runs asynchronously and reports native duration, channels, sample rate,
+and file bytes even without an output device. The dock offers Play, Pause/Resume,
+Stop, looping, Buffered/Streamed loading, audition volume, and a seek/time display
+once playback is ready. Loading changes apply to the next Play. Audition volume is
+the only persisted audio-panel preference (editor QSettings); it is never scene data.
+Closing/hiding or replacing the panel's audition stops its owned voice. Source
+inspectors provide a separate explicitly labelled raw 2D audition in Edit mode,
+and Play/Pause/Resume/Stop for the actual authored source during Play. Their async
+metadata diagnostic identifies invalid audio and non-mono 3D clips before playback,
+independently of device availability.
+
+The dock's **Game mixer** controls master, Music, SFX, and UI gains. These are
+transient runtime settings, polled to reflect script changes; they are not saved or
+undoable authoring edits. It also displays live voice count, effective listener or
+listener conflicts, device availability, and explicit RetryDevice. Retrying invalidates
+all old playback handles. Audition bypasses both game master and every runtime bus:
+muting UI or master cannot mute the audition. Per-audition volume still applies.
+
 ## Components and units
 
 `AudioSource` stores these authored values (C++ enum spellings and Lua strings agree):
@@ -127,6 +146,22 @@ Handle controls: `Pause`, `Resume`, `Stop`, `SetVolume`, `SetPitch`, and
 while paused; `stopAtEnd=true` reclaims playback at fade completion. Master and bus
 volume compose with per-voice gain. Zero gain is mute, not pause. Set gains with
 `SetMasterVolume` / `SetBusVolume` and read them with corresponding getters.
+
+Native transport additionally provides `SetLooping`, `GetPlaybackPosition` and
+`Seek(voice, seconds, error)`. Position and duration are **source seconds**, independent
+of output sample rate and pitch. Only loaded live voices expose a position; Pending,
+terminal, invalid, and expired handles cannot seek. Seek rejects negative/nonfinite
+seconds, clamps to clip duration, and maps the end of a looping clip to its beginning.
+Seeking preserves explicit and game pause intent; streamed seeks are serviced by the
+resource worker. These native editor features do not extend the runtime Lua API.
+
+`InspectAudioClip(path, info, error)` is a read-only, thread-safe file probe using the
+same WAV/FLAC/MP3 decoders as playback. It needs neither an Engine nor an output device.
+`AudioClipInfo` contains native channels, sampleRate, frameCount, durationSeconds and
+fileBytes; failure leaves the output unchanged. Paths use native Unicode filesystem
+access. Run probes on workers because inspecting compressed length may perform I/O.
+`Preview(clip, AudioPreviewOptions, error)` selects loading, looping and audition
+volume; the existing overload keeps Buffered, non-looping, full-volume defaults.
 
 ## Lua playback and components
 

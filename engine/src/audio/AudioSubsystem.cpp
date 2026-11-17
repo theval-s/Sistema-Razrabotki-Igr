@@ -47,6 +47,32 @@ ma_attenuation_model Attenuation(AudioAttenuation model) {
 }
 } // namespace
 
+bool InspectAudioClip(const std::filesystem::path& source, AudioClipInfo& info, std::string& error) {
+    std::error_code ec;
+    const auto bytes = std::filesystem::file_size(source, ec);
+    if (ec) { error = "Cannot inspect audio file (filesystem error " + std::to_string(ec.value()) + ")"; return false; }
+    ma_decoder decoder{};
+    const auto config = ma_decoder_config_init(ma_format_unknown, 0, 0);
+#ifdef _WIN32
+    auto result = ma_decoder_init_file_w(source.c_str(), &config, &decoder);
+#else
+    auto result = ma_decoder_init_file(source.c_str(), &config, &decoder);
+#endif
+    if (result != MA_SUCCESS) { error = ma_result_description(result); return false; }
+    ma_uint64 frames = 0;
+    ma_uint32 channels = 0, rate = 0;
+    result = ma_decoder_get_data_format(&decoder, nullptr, &channels, &rate, nullptr, 0);
+    if (result == MA_SUCCESS) result = ma_decoder_get_length_in_pcm_frames(&decoder, &frames);
+    ma_decoder_uninit(&decoder);
+    if (result != MA_SUCCESS || !rate || !channels || !frames) {
+        error = result == MA_SUCCESS ? "Audio file has no decodable frames" : ma_result_description(result);
+        return false;
+    }
+    info = {channels, rate, frames, bytes, static_cast<double>(frames) / rate};
+    error.clear();
+    return true;
+}
+
 bool ValidateAudioSource(const AudioSource& source, std::string& error) {
     if (source.loading != AudioLoadingMode::Buffered && source.loading != AudioLoadingMode::Streamed)
         error = "Invalid audio loading mode";
@@ -111,6 +137,8 @@ struct AudioSubsystem::Impl {
     };
     ma_resource_manager resources{};
     ma_engine backend{};
+    ma_sound_group gameMaster{};
+    bool gameMasterReady = false;
     std::array<ma_sound_group, 3> groups{};
     bool resourcesReady = false, backendReady = false;
     std::size_t groupsReady = 0;
@@ -139,6 +167,8 @@ struct AudioSubsystem::Impl {
         if (backendReady) ma_engine_stop(&backend);
         voices.clear(); sources.clear();
         while (groupsReady) ma_sound_group_uninit(&groups[--groupsReady]);
+        if (gameMasterReady) ma_sound_group_uninit(&gameMaster);
+        gameMasterReady = false;
         if (backendReady) ma_engine_uninit(&backend);
         backendReady = false;
         if (resourcesReady) ma_resource_manager_uninit(&resources);
@@ -259,7 +289,8 @@ struct AudioSubsystem::Impl {
                     Finish(voice, AudioVoiceStatus::Failed, "3D point emitters require a mono clip; use 2D for multichannel audio"); continue;
                 }
                 const auto initResult = ma_sound_init_from_data_source(&backend, &voice.resource,
-                    MA_SOUND_FLAG_NO_SPATIALIZATION, &groups[static_cast<std::size_t>(voice.options.bus)], &voice.sound);
+                    MA_SOUND_FLAG_NO_SPATIALIZATION, voice.options.scope == AudioScope::Preview ? nullptr :
+                    &groups[static_cast<std::size_t>(voice.options.bus)], &voice.sound);
                 if (initResult != MA_SUCCESS) { Finish(voice, AudioVoiceStatus::Failed, ma_result_description(initResult)); continue; }
                 voice.soundReady = true;
                 ma_sound_set_looping(&voice.sound, voice.options.looping);
@@ -341,13 +372,20 @@ bool AudioSubsystem::Initialize() {
             p.backendReady = true;
             // Set before the device starts. Engine coordinates: RH, +Y up, local -Z forward.
             p.backend.listeners[0].config.handedness = ma_handedness_right;
+            // These nodes only multiply gain. A pitch-enabled group keeps resampler history
+            // even at unity pitch, leaking old samples after its last child is detached.
+            constexpr auto groupFlags = MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_NO_PITCH;
+            result = ma_sound_group_init(&p.backend, groupFlags, nullptr, &p.gameMaster);
+            p.gameMasterReady = result == MA_SUCCESS;
             for (auto& group : p.groups) {
-                result = ma_sound_group_init(&p.backend, MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, &group);
+                if (result != MA_SUCCESS) break;
+                result = ma_sound_group_init(&p.backend, groupFlags, &p.gameMaster, &group);
                 if (result != MA_SUCCESS) break;
                 ++p.groupsReady;
             }
             if (result == MA_SUCCESS) {
-                ma_engine_set_volume(&p.backend, p.master);
+                ma_engine_set_volume(&p.backend, 1);
+                ma_sound_group_set_volume(&p.gameMaster, p.master);
                 for (std::size_t i = 0; i < p.groups.size(); ++i) ma_sound_group_set_volume(&p.groups[i], p.busVolumes[i]);
                 if (config_.output == AudioOutputMode::Device) result = ma_engine_start(&p.backend);
             }
@@ -493,10 +531,42 @@ bool AudioSubsystem::Fade(const AudioVoiceHandle& handle, float target, double s
     if (voice->soundReady) impl_->StartFade(*voice);
     return true;
 }
+bool AudioSubsystem::SetLooping(const AudioVoiceHandle& handle, bool looping) {
+    auto* voice = impl_->Find(handle); if (!voice) return false;
+    voice->options.looping = looping;
+    if (voice->soundReady) ma_sound_set_looping(&voice->sound, looping);
+    return true;
+}
+std::optional<AudioPlaybackPosition> AudioSubsystem::GetPlaybackPosition(const AudioVoiceHandle& handle) const {
+    auto* voice = impl_->Find(handle);
+    if (!voice || !voice->soundReady) return std::nullopt;
+    ma_uint64 cursor = 0, length = 0;
+    ma_uint32 rate = 0;
+    if (ma_data_source_get_data_format(&voice->resource, nullptr, nullptr, &rate, nullptr, 0) != MA_SUCCESS || !rate ||
+        ma_sound_get_cursor_in_pcm_frames(&voice->sound, &cursor) != MA_SUCCESS ||
+        ma_sound_get_length_in_pcm_frames(&voice->sound, &length) != MA_SUCCESS) return std::nullopt;
+    return AudioPlaybackPosition{static_cast<double>(cursor) / rate, static_cast<double>(length) / rate};
+}
+bool AudioSubsystem::Seek(const AudioVoiceHandle& handle, double seconds, std::string& error) {
+    auto* voice = impl_->Find(handle);
+    if (!voice) { error = "Invalid or expired live audio voice"; return false; }
+    if (!std::isfinite(seconds) || seconds < 0) { error = "Seek seconds must be finite and nonnegative"; return false; }
+    const auto position = GetPlaybackPosition(handle);
+    if (!position) { error = "Audio voice is pending or its position is unavailable"; return false; }
+    ma_uint64 length = 0;
+    ma_sound_get_length_in_pcm_frames(&voice->sound, &length);
+    const double duration = position->durationSeconds;
+    seconds = std::min(seconds, duration);
+    if (voice->options.looping && duration > 0 && seconds == duration) seconds = 0;
+    const auto frame = duration > 0 ? static_cast<ma_uint64>(seconds / duration * length) : 0;
+    const auto result = ma_sound_seek_to_pcm_frame(&voice->sound, frame);
+    if (result != MA_SUCCESS) { error = ma_result_description(result); return false; }
+    error.clear(); return true;
+}
 bool AudioSubsystem::SetMasterVolume(float volume) {
     if (!Gain(volume)) return false;
     impl_->master = volume;
-    if (impl_->backendReady) ma_engine_set_volume(&impl_->backend, volume);
+    if (impl_->gameMasterReady) ma_sound_group_set_volume(&impl_->gameMaster, volume);
     return true;
 }
 float AudioSubsystem::GetMasterVolume() const { return impl_->master; }
@@ -512,7 +582,11 @@ std::size_t AudioSubsystem::GetVoiceCount() const { return impl_->voices.size();
 entt::entity AudioSubsystem::GetEffectiveListener() const { return impl_->listener; }
 std::string AudioSubsystem::GetListenerDiagnostic() const { return impl_->listenerDiagnostic; }
 AudioVoiceHandle AudioSubsystem::Preview(const AssetReference& clip, std::string& error) {
+    return Preview(clip, AudioPreviewOptions{}, error);
+}
+AudioVoiceHandle AudioSubsystem::Preview(const AssetReference& clip, const AudioPreviewOptions& preview, std::string& error) {
     StopPreview(); AudioPlayOptions options; options.scope = AudioScope::Preview; options.bus = AudioBus::UI;
+    options.loading = preview.loading; options.looping = preview.looping; options.volume = preview.volume;
     return Play2D(clip, options, error);
 }
 void AudioSubsystem::StopPreview() { impl_->StopScope(AudioScope::Preview); }

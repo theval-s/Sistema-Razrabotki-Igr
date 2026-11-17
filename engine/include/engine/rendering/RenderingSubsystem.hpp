@@ -31,6 +31,12 @@ public:
     void SetOverlayCallbacks(RenderingSystem::OverlayCallback render, std::function<void()> beforeResize);
     void ClearOverlayCallbacks() noexcept;
 
+    /// Optional native-host diagnostics, composited after the scene and before
+    /// the engine UI, into the same target before Present. Hosts must detach
+    /// before their resources die. This lease is independent of the UI lease.
+    void SetHostOverlayCallbacks(RenderingSystem::OverlayCallback render, std::function<void()> beforeResize = {});
+    void ClearHostOverlayCallbacks() noexcept;
+
 private:
     void OnSurfaceChanged(const SurfaceChangedEvent& event);
 
@@ -39,6 +45,8 @@ private:
     bool resizePending_ = false;
     RenderingSystem::OverlayCallback overlay_;
     std::function<void()> beforeOverlayResize_;
+    RenderingSystem::OverlayCallback hostOverlay_;
+    std::function<void()> beforeHostOverlayResize_;
 };
 
 }  // namespace engine

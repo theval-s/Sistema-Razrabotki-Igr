@@ -30,7 +30,7 @@ constexpr entt::entity NullEntity = entt::null;
 
 // Integer square waves have an integral period at the output rate. The stepped
 // fixture makes two cursors observable without exposing backend cursor state.
-std::string Wave(unsigned channels, bool stepped = false) {
+std::string Wave(unsigned channels, bool stepped = false, unsigned rate = SampleRate) {
     std::string bytes;
     const auto u16 = [&](unsigned value) {
         bytes.push_back(static_cast<char>(value & 255));
@@ -39,7 +39,7 @@ std::string Wave(unsigned channels, bool stepped = false) {
     const auto u32 = [&](unsigned value) { u16(value & 65535); u16(value >> 16); };
     const unsigned dataSize = ClipFrames * channels * 2;
     bytes += "RIFF"; u32(36 + dataSize); bytes += "WAVEfmt "; u32(16);
-    u16(1); u16(channels); u32(SampleRate); u32(SampleRate * channels * 2);
+    u16(1); u16(channels); u32(rate); u32(rate * channels * 2);
     u16(channels * 2); u16(16); bytes += "data"; u32(dataSize);
     for (unsigned i = 0; i < ClipFrames; ++i) {
         const int amplitude = stepped ? (i < ClipFrames / 2 ? 2048 : 8192) : 4096;
@@ -572,6 +572,145 @@ TEST_F(AudioDeviceTests, WorkerStreamCancellationShutdownReinitializeAndRetryInv
 }
 
 struct AudioLoadingTests : AudioTests, testing::WithParamInterface<AudioLoadingMode> {};
+
+TEST_P(AudioLoadingTests, GainOnlyGroupsDoNotRetainSamplesAfterLastChildStops) {
+    for (const auto bus : {AudioBus::Music, AudioBus::SFX, AudioBus::UI}) {
+        SCOPED_TRACE(static_cast<int>(bus));
+        const auto voice = audio->Play2D(tone, AudioPlayOptions{.loading = GetParam(), .bus = bus, .looping = true}, error);
+        ASSERT_TRUE(static_cast<bool>(voice)) << error;
+        ASSERT_GT(Energy(Mix()), 1e-5);
+        ASSERT_TRUE(audio->Stop(voice));
+        EXPECT_EQ(audio->GetVoiceCount(), 0u);
+        // Unity-pitch resamplers on bus/master nodes used to emit old samples here.
+        // Detaching the last child of a gain-only graph must silence the whole next block.
+        EXPECT_LT(Energy(Mix()), 1e-10);
+    }
+}
+
+TEST_F(AudioTests, MetadataPreservesNativeFormatAndOutputOnFailureWithoutDevice) {
+    AudioClipInfo info;
+    ASSERT_TRUE(InspectAudioClip(root / "stereo.wav", info, error)) << error;
+    EXPECT_EQ(info.channels, 2u);
+    EXPECT_EQ(info.sampleRate, SampleRate);
+    EXPECT_EQ(info.frameCount, ClipFrames);
+    EXPECT_EQ(info.fileBytes, Wave(2).size());
+    EXPECT_DOUBLE_EQ(info.durationSeconds, 0.5);
+    const auto before = info;
+    EXPECT_FALSE(InspectAudioClip(root / "missing.wav", info, error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_EQ(info.channels, before.channels);
+    EXPECT_EQ(info.frameCount, before.frameCount);
+    EXPECT_EQ(info.fileBytes, before.fileBytes);
+    EXPECT_EQ(info.sampleRate, before.sampleRate);
+    EXPECT_DOUBLE_EQ(info.durationSeconds, before.durationSeconds);
+    const auto unicode = root / FromUtf8("\xD0\xB7\xD0\xB2\xD1\x83\xD0\xBA-\xE9\x9F\xB3.wav");
+    ASSERT_TRUE(CreateNewFile(unicode, Wave(1), error)) << error;
+    audio->Shutdown(); // Probe is independent of subsystem/device lifetime.
+    ASSERT_TRUE(InspectAudioClip(unicode, info, error)) << error;
+    EXPECT_EQ(info.channels, 1u);
+    EXPECT_EQ(info.frameCount, ClipFrames);
+    std::vector<AudioClipInfo> concurrentInfo(4);
+    std::vector<std::string> concurrentErrors(4);
+    std::vector<std::thread> probes;
+    for (std::size_t i = 0; i < concurrentInfo.size(); ++i) probes.emplace_back([&, i] {
+        (void)InspectAudioClip(i % 2 ? unicode : root / "stereo.wav", concurrentInfo[i], concurrentErrors[i]);
+    });
+    for (auto& probe : probes) probe.join();
+    for (std::size_t i = 0; i < concurrentInfo.size(); ++i) {
+        EXPECT_TRUE(concurrentErrors[i].empty()) << concurrentErrors[i];
+        EXPECT_EQ(concurrentInfo[i].channels, i % 2 ? 1u : 2u);
+        EXPECT_EQ(concurrentInfo[i].frameCount, ClipFrames);
+    }
+    ASSERT_TRUE(CreateNewFile(root / "invalid.wav", "not audio", error)) << error;
+    EXPECT_FALSE(InspectAudioClip(root / "invalid.wav", info, error));
+    EXPECT_EQ(info.channels, 1u);
+    EXPECT_EQ(info.frameCount, ClipFrames);
+    EXPECT_FALSE(error.empty());
+}
+
+TEST_F(AudioTests, AuditionGainIsIndependentOfEveryRuntimeGainAndPersistsAcrossRetry) {
+    audio->EndSession(); host.SetEditorMode();
+    ASSERT_TRUE(audio->SetMasterVolume(0));
+    for (auto bus : {AudioBus::Music, AudioBus::SFX, AudioBus::UI}) ASSERT_TRUE(audio->SetBusVolume(bus, 0));
+    const auto first = audio->Preview(tone, AudioPreviewOptions{.looping = true}, error);
+    ASSERT_TRUE(static_cast<bool>(first)) << error;
+    const auto full = Energy(Mix());
+    ASSERT_GT(full, 1e-5);
+    ASSERT_TRUE(audio->SetVolume(first, 0.5f)); (void)Mix();
+    EXPECT_NEAR(Energy(Mix()) / full, 0.25, 0.01);
+    ASSERT_TRUE(audio->RetryDevice(error)) << error;
+    EXPECT_EQ(audio->GetStatus(first), AudioVoiceStatus::Invalid);
+    const auto second = audio->Preview(tone, AudioPreviewOptions{.loading = AudioLoadingMode::Streamed, .looping = true, .volume = 0.5f}, error);
+    ASSERT_TRUE(static_cast<bool>(second)) << error;
+    EXPECT_NEAR(Energy(Mix()) / full, 0.25, 0.01);
+    EXPECT_FLOAT_EQ(audio->GetMasterVolume(), 0);
+    EXPECT_FLOAT_EQ(audio->GetBusVolume(AudioBus::UI), 0);
+}
+
+TEST_P(AudioLoadingTests, SeekUsesSourceSecondsRejectsPendingAndPreservesPause) {
+    const auto voice = audio->Play2D(cursor, AudioPlayOptions{.loading = GetParam(), .looping = true}, error);
+    ASSERT_TRUE(static_cast<bool>(voice)) << error;
+    EXPECT_FALSE(audio->GetPlaybackPosition(voice));
+    EXPECT_FALSE(audio->Seek(voice, 0.3, error));
+    EXPECT_FALSE(error.empty());
+    (void)Mix();
+    ASSERT_TRUE(audio->Pause(voice));
+    ExpectSilentAfterControlBoundary(Mix());
+    ASSERT_TRUE(audio->Seek(voice, 0.3, error)) << error;
+    EXPECT_EQ(audio->GetStatus(voice), AudioVoiceStatus::Paused);
+    (void)Mix(); // Stream seek is serviced by the resource worker, not by unpausing.
+    auto position = audio->GetPlaybackPosition(voice);
+    ASSERT_TRUE(position);
+    EXPECT_NEAR(position->durationSeconds, 0.5, 1.0 / SampleRate);
+    EXPECT_NEAR(position->timeSeconds, 0.3, 1.0 / SampleRate);
+    EXPECT_LT(Energy(Mix()), 1e-10);
+    EXPECT_NEAR(audio->GetPlaybackPosition(voice)->timeSeconds, 0.3, 1.0 / SampleRate);
+    for (const double value : {-1., std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+        EXPECT_FALSE(audio->Seek(voice, value, error)); EXPECT_FALSE(error.empty());
+    }
+    ASSERT_TRUE(audio->Resume(voice));
+    const auto loud = Energy(Mix());
+    ASSERT_TRUE(audio->Seek(voice, 0.05, error));
+    (void)Mix();
+    const auto quiet = Energy(Mix());
+    ASSERT_GT(quiet, 1e-5);
+    EXPECT_GT(loud, quiet * 8);
+    ASSERT_TRUE(audio->Pause(voice));
+    ASSERT_TRUE(audio->Seek(voice, 100, error)); // Looping clamp maps duration to the loop start.
+    (void)Mix();
+    ASSERT_TRUE(audio->GetPlaybackPosition(voice));
+    EXPECT_NEAR(audio->GetPlaybackPosition(voice)->timeSeconds, 0, 1.0 / SampleRate);
+    ASSERT_TRUE(audio->SetLooping(voice, false));
+    ASSERT_TRUE(audio->Seek(voice, 0.49, error));
+    ASSERT_TRUE(audio->Resume(voice)); (void)Mix(2400);
+    EXPECT_EQ(audio->GetStatus(voice), AudioVoiceStatus::Finished);
+    EXPECT_FALSE(audio->GetPlaybackPosition(voice));
+    EXPECT_FALSE(audio->Seek(voice, 0, error));
+    EXPECT_FALSE(audio->SetLooping(voice, true));
+    EXPECT_FALSE(audio->Seek({}, 0, error));
+}
+
+TEST_P(AudioLoadingTests, TransportUsesNativeRateRatherThanMixerRateOrPitch) {
+    const auto clip = Asset("native-rate.wav", Wave(1, true, 24000), CatalogAssetKind::AudioClip);
+    ASSERT_TRUE(host.GetAssets().RescanCatalog(error)) << error;
+    ASSERT_TRUE(host.GetSceneAssets().RescanCatalog(error)) << error;
+    AudioClipInfo info;
+    ASSERT_TRUE(InspectAudioClip(root / "native-rate.wav", info, error)) << error;
+    EXPECT_EQ(info.sampleRate, 24000u);
+    EXPECT_EQ(info.channels, 1u);
+    EXPECT_DOUBLE_EQ(info.durationSeconds, 1);
+    const auto voice = audio->Play2D(clip, AudioPlayOptions{.loading = GetParam(), .looping = true, .pitch = 2}, error);
+    ASSERT_TRUE(static_cast<bool>(voice)) << error;
+    (void)Mix();
+    ASSERT_TRUE(audio->Pause(voice));
+    ASSERT_TRUE(audio->Seek(voice, 0.75, error)) << error;
+    (void)Mix();
+    const auto position = audio->GetPlaybackPosition(voice);
+    ASSERT_TRUE(position);
+    EXPECT_NEAR(position->timeSeconds, 0.75, 1.0 / 24000);
+    EXPECT_NEAR(position->durationSeconds, 1, 1.0 / 24000);
+    EXPECT_EQ(audio->GetStatus(voice), AudioVoiceStatus::Paused);
+}
 
 TEST_P(AudioLoadingTests, CorruptSupportedClipFailsExplicitlyAndReclaimsCapacityWithoutPathFallback) {
     auto truncated = Wave(1);

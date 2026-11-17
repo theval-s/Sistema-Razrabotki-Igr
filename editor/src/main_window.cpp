@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QCloseEvent>
+#include <QCheckBox>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenuBar>
@@ -101,6 +102,19 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     connect(viewport_, &ViewportWidget::mouseMoved, this, &MainWindow::viewportMoved);
     connect(viewport_, &ViewportWidget::mouseReleased, this, &MainWindow::viewportReleased);
     auto* tool_bar = new ViewportToolBar;
+    // Qt controls belong outside the native flip-model swap-chain surface.
+    for (const auto& entry : {std::pair{"showSkeletonOverlay", tr("Skeleton")},
+                             std::pair{"showAudioOverlay", tr("Audio")}}) {
+        auto* toggle = new QCheckBox(entry.second);
+        toggle->setObjectName(QString::fromUtf8(entry.first));
+        toggle->setFocusPolicy(Qt::NoFocus);
+        toggle->setChecked(true);
+        viewport_->setProperty(entry.first, true);
+        connect(toggle, &QCheckBox::toggled, viewport_, [viewport = viewport_, property = entry.first](bool checked) {
+            viewport->setProperty(property, checked);
+        });
+        tool_bar->section(ViewportToolBar::Section::Right)->addWidget(toggle);
+    }
     auto* viewport_panel = new QWidget;
     auto* viewport_layout = new QVBoxLayout(viewport_panel);
     viewport_layout->setContentsMargins(0, 0, 0, 0);

@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <SimpleMath.h>
@@ -51,6 +53,30 @@ struct AudioPlayOptions {
     float rolloff = 1.0f;
 };
 
+/// Native source format, inspected without opening an output device. Inspection
+/// may perform file I/O; callers should run it on a worker. No backend types escape.
+struct AudioClipInfo {
+    std::uint32_t channels = 0;
+    std::uint32_t sampleRate = 0;
+    std::uint64_t frameCount = 0;
+    std::uint64_t fileBytes = 0;
+    double durationSeconds = 0;
+};
+/// Thread-safe, read-only probe. On failure output is unchanged; error is UTF-8.
+[[nodiscard]] ENGINE_API bool InspectAudioClip(const std::filesystem::path& source,
+                                               AudioClipInfo& info, std::string& error);
+
+struct AudioPreviewOptions {
+    AudioLoadingMode loading = AudioLoadingMode::Buffered;
+    bool looping = false;
+    float volume = 1.0f;
+};
+
+struct AudioPlaybackPosition {
+    double timeSeconds = 0;
+    double durationSeconds = 0;
+};
+
 /// All operations, including offline mixing, are main-thread only. No backend types cross the SDK.
 class ENGINE_API AudioSubsystem final : public Subsystem {
 public:
@@ -81,6 +107,11 @@ public:
     bool Stop(const AudioVoiceHandle& voice);
     bool SetVolume(const AudioVoiceHandle& voice, float volume);
     bool SetPitch(const AudioVoiceHandle& voice, float pitch);
+    bool SetLooping(const AudioVoiceHandle& voice, bool looping);
+    /// Available for prepared live voices only. Cursor is in source seconds.
+    [[nodiscard]] std::optional<AudioPlaybackPosition> GetPlaybackPosition(const AudioVoiceHandle& voice) const;
+    /// Seeks a prepared live voice, clamped to its duration; preserves pause intent.
+    bool Seek(const AudioVoiceHandle& voice, double seconds, std::string& error);
     /// Fades use playback time (freeze while paused). stopAtEnd releases the voice.
     bool Fade(const AudioVoiceHandle& voice, float targetVolume, double seconds, bool stopAtEnd = false);
     bool SetMasterVolume(float volume);
@@ -91,6 +122,9 @@ public:
     [[nodiscard]] entt::entity GetEffectiveListener() const;
     [[nodiscard]] std::string GetListenerDiagnostic() const;
     [[nodiscard]] AudioVoiceHandle Preview(const AssetReference& clip, std::string& error);
+    /// A single 2D audition, independent of game master/bus gains and pause.
+    [[nodiscard]] AudioVoiceHandle Preview(const AssetReference& clip, const AudioPreviewOptions& options,
+                                           std::string& error);
     void StopPreview();
 
     /// Interleaved stereo floats. Only Offline mode; jobs are pumped deterministically here.

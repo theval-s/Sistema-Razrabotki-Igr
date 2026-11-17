@@ -47,6 +47,10 @@ struct SkeletonAsset {
     std::shared_ptr<const detail::SkeletonData> data;
     std::uint64_t signature = 0;
     std::uint32_t jointCount = 0;
+    // Engine-order hierarchy for editor inspection; -1 denotes a root.
+    std::vector<std::string> jointNames;
+    std::vector<std::int32_t> jointParents;
+    std::vector<DirectX::SimpleMath::Matrix> restModels;
 };
 
 struct AnimationClipAsset {

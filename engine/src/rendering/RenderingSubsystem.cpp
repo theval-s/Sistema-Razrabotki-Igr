@@ -27,6 +27,7 @@ bool RenderingSubsystem::Initialize() {
 }
 
 void RenderingSubsystem::Shutdown() {
+    ClearHostOverlayCallbacks();
     ClearOverlayCallbacks();
     GetEngine().GetEvents().sink<SurfaceChangedEvent>().disconnect<&RenderingSubsystem::OnSurfaceChanged>(*this);
 }
@@ -39,12 +40,16 @@ void RenderingSubsystem::OnSurfaceChanged(const SurfaceChangedEvent& event) {
 void RenderingSubsystem::Render(const FrameContext& frame) {
     // A minimized window has no drawable area. Keep the pending resize for restoration.
     if (surface_.IsValid() && resizePending_) {
+        if (beforeHostOverlayResize_) beforeHostOverlayResize_();
         if (beforeOverlayResize_) beforeOverlayResize_();
         if (renderer_.Reinitialize(surface_)) resizePending_ = false;
     }
     // A failed resize is retried next frame; never draw with missing or mismatched resources.
     if (surface_.IsValid() && !resizePending_) {
-        renderer_.RenderFrame(frame, overlay_);
+        renderer_.RenderFrame(frame, [this](RenderingContext& context, const FrameContext& current) {
+            if (hostOverlay_) hostOverlay_(context, current);
+            if (overlay_) overlay_(context, current);
+        });
     }
     GetWorld().debugDraw.Clear();
 }
@@ -79,6 +84,18 @@ void RenderingSubsystem::SetOverlayCallbacks(RenderingSystem::OverlayCallback re
 void RenderingSubsystem::ClearOverlayCallbacks() noexcept {
     overlay_ = {};
     beforeOverlayResize_ = {};
+}
+
+void RenderingSubsystem::SetHostOverlayCallbacks(RenderingSystem::OverlayCallback render,
+                                                 std::function<void()> beforeResize) {
+    if (hostOverlay_) throw std::logic_error("A host rendering overlay is already registered");
+    hostOverlay_ = std::move(render);
+    beforeHostOverlayResize_ = std::move(beforeResize);
+}
+
+void RenderingSubsystem::ClearHostOverlayCallbacks() noexcept {
+    hostOverlay_ = {};
+    beforeHostOverlayResize_ = {};
 }
 
 }  // namespace engine

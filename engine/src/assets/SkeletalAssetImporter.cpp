@@ -2,6 +2,11 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/core/FileSystem.hpp>
 #include "../animation/AnimationData.hpp"
+#include "RigProbe.hpp"
+#include <sstream>
+#include <iomanip>
+#include <wincodec.h>
+#include <wrl/client.h>
 
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
@@ -125,14 +130,36 @@ Json GlbJson(const std::vector<std::uint8_t>& bytes) {
             Word(bytes, 8) == bytes.size(), "source must be a valid glTF 2 GLB");
     Require(Word(bytes, 16) == 0x4e4f534a, "GLB first chunk must be JSON");
     const auto length = Word(bytes, 12);
-    Require(length <= MaxJsonBytes && length <= bytes.size() - 20, "GLB JSON chunk exceeds size limit or is truncated");
+    Require(length % 4 == 0 && length <= MaxJsonBytes && length <= bytes.size() - 20, "GLB JSON chunk exceeds size limit, is unaligned or is truncated");
+    std::optional<std::size_t> binLength;
+    for (std::size_t offset = 20 + length; offset < bytes.size();) {
+        Require(bytes.size() - offset >= 8, "truncated GLB chunk header");
+        const auto size = Word(bytes, offset), type = Word(bytes, offset + 4);
+        Require(size % 4 == 0 && size <= bytes.size() - offset - 8, "invalid GLB chunk length");
+        Require(type != 0x4e4f534a, "duplicate GLB JSON chunk");
+        if (type == 0x004e4942) {
+            Require(!binLength && offset == 20 + length, "GLB BIN must be the single second chunk");
+            binLength = size;
+        }
+        offset += 8 + size;
+    }
     auto json = ParseJson(std::string_view(reinterpret_cast<const char*>(bytes.data() + 20), length));
     Require(json.is_object() && json.at("asset").at("version") == "2.0", "only glTF 2.0 is supported");
     if (json.contains("buffers")) {
         Require(json.at("buffers").is_array() && json.at("buffers").size() <= 1,
                 "version 1 skeletal sources require a single embedded GLB buffer");
-        for (const auto& buffer : json.at("buffers"))
+        for (const auto& buffer : json.at("buffers")) {
             Require(!buffer.contains("uri"), "external/data URI buffers are unsupported; embed the buffer in GLB");
+            const auto size = buffer.at("byteLength").get<std::size_t>();
+            Require(binLength && size <= *binLength && *binLength - size <= 3, "GLB buffer length does not match BIN chunk");
+        }
+    }
+    if (json.contains("bufferViews")) for (const auto& view : json.at("bufferViews")) {
+        Require(view.at("buffer") == 0 && json.contains("buffers") && json.at("buffers").size() == 1, "invalid GLB buffer view buffer");
+        const auto size = json.at("buffers")[0].at("byteLength").get<std::size_t>();
+        const auto offset = view.value("byteOffset", std::size_t(0));
+        const auto count = view.at("byteLength").get<std::size_t>();
+        Require(offset <= size && count <= size - offset, "GLB buffer view exceeds embedded buffer");
     }
     if (json.contains("images")) for (const auto& image : json.at("images"))
         Require(!image.contains("uri"), "version 1 skeletal sources require embedded GLB images (no URI dependencies)");
@@ -606,6 +633,177 @@ SkinnedMeshCpu BuildMesh(const aiScene& scene, const SceneSkeleton& skeleton, co
 }
 } // namespace
 
+namespace detail {
+namespace {
+// Decode without a rendering device. A PNG/JPEG signature alone is not proof
+// that the extracted asset can be loaded. Keep the factory local to this COM scope.
+void ValidateRigImage(const std::vector<std::uint8_t>& bytes) {
+    struct ComScope {
+        HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        ~ComScope() { if (SUCCEEDED(result)) CoUninitialize(); }
+    } com;
+    Require(SUCCEEDED(com.result) || com.result == RPC_E_CHANGED_MODE, "cannot initialize image decoder");
+    Microsoft::WRL::ComPtr<IWICImagingFactory> factory;
+    Require(SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS(factory.GetAddressOf()))), "cannot create image decoder");
+    Microsoft::WRL::ComPtr<IWICStream> stream;
+    Require(SUCCEEDED(factory->CreateStream(stream.GetAddressOf())) &&
+            SUCCEEDED(stream->InitializeFromMemory(const_cast<BYTE*>(bytes.data()), static_cast<DWORD>(bytes.size()))), "invalid embedded image stream");
+    Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
+    Require(SUCCEEDED(factory->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnLoad, decoder.GetAddressOf())), "invalid embedded image");
+    Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
+    Require(SUCCEEDED(decoder->GetFrame(0, frame.GetAddressOf())), "missing embedded image frame");
+    UINT width = 0, height = 0;
+    Require(SUCCEEDED(frame->GetSize(&width, &height)) && width && height && width <= 16384 && height <= 16384 &&
+            std::uint64_t(width) * height * 4 <= MaxSourceBytes, "embedded image exceeds decode limits");
+    Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
+    Require(SUCCEEDED(factory->CreateFormatConverter(converter.GetAddressOf())) &&
+            SUCCEEDED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone,
+                                           nullptr, 0, WICBitmapPaletteTypeCustom)), "unsupported embedded image format");
+    std::vector<BYTE> pixels(std::size_t(width) * height * 4);
+    Require(SUCCEEDED(converter->CopyPixels(nullptr, width * 4, static_cast<UINT>(pixels.size()), pixels.data())), "corrupt embedded image pixels");
+}
+}
+std::string RigDigest(std::string_view bytes) {
+    Signature hash;
+    for (unsigned char c : bytes) hash.Byte(c);
+    std::ostringstream out;
+    out << std::hex << std::setfill('0') << std::setw(16) << hash.value;
+    return out.str();
+}
+
+bool ProbeRig(const std::vector<std::uint8_t>& bytes, RigProbe& result, std::string& error) {
+    try {
+        Require(bytes.size() <= MaxSourceBytes, "GLB source exceeds size limit");
+        RigProbe probe;
+        probe.inspection.sourceRevision = RigDigest({reinterpret_cast<const char*>(bytes.data()), bytes.size()});
+        const auto gltf = GlbJson(bytes);
+        Assimp::Importer importer;
+        const auto* scene = importer.ReadFileFromMemory(bytes.data(), bytes.size(), ImportFlags, "glb");
+        Require(scene && scene->mRootNode && !(scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE),
+                "Assimp skeletal read failed: " + std::string(importer.GetErrorString()));
+        SceneSkeleton skeleton;
+        bool validSkeleton = false;
+        try {
+            skeleton.Build(*scene, bytes, gltf);
+            validSkeleton = true;
+            probe.inspection.jointCount = static_cast<std::uint32_t>(skeleton.nodes.size());
+            const auto mesh = BuildMesh(*scene, skeleton, {}, gltf);
+            probe.inspection.sectionCount = static_cast<std::uint32_t>(mesh.sections.size());
+            probe.inspection.importable = true;
+        } catch (const std::exception& e) { probe.inspection.diagnostics.push_back(e.what()); }
+        if (gltf.contains("animations")) for (const auto& animation : gltf.at("animations")) {
+            RigClipInfo clip;
+            clip.name = animation.value("name", std::string{});
+            for (unsigned i = 0; i < scene->mNumAnimations; ++i) {
+                const auto* a = scene->mAnimations[i];
+                if (a && clip.name == std::string(a->mName.C_Str(), a->mName.length) && a->mTicksPerSecond > 0)
+                    clip.durationSeconds = a->mDuration / a->mTicksPerSecond;
+            }
+            try {
+                Require(validSkeleton, "source skeleton is unsupported");
+                (void)BuildClip(*scene, gltf, clip.name, skeleton);
+                clip.importable = true;
+            } catch (const std::exception& e) { clip.diagnostic = e.what(); }
+            probe.inspection.clips.push_back(std::move(clip));
+        }
+        // Only one *used* glTF material may be extracted. Ignore unused materials.
+        try {
+            Require(probe.inspection.importable, "cannot extract from an unsupported rig");
+            std::set<std::size_t> materials;
+            for (const auto index : skeleton.jointToSource) {
+                if (index < 0) continue;
+                const auto& node = gltf.at("nodes").at(index);
+                if (!node.contains("mesh")) continue;
+                for (const auto& primitive : gltf.at("meshes").at(node.at("mesh").get<std::size_t>()).at("primitives")) {
+                    Require(primitive.contains("material"), "mesh section has no explicit material");
+                    materials.insert(primitive.at("material").get<std::size_t>());
+                }
+            }
+            Require(materials.size() == 1, "base color extraction requires one used material");
+            const auto& material = gltf.at("materials").at(*materials.begin());
+            const auto& texture = material.at("pbrMetallicRoughness").at("baseColorTexture");
+            Require(texture.value("texCoord", 0) == 0 && !texture.contains("extensions"), "unsupported base color UV mapping");
+            const auto imageIndex = gltf.at("textures").at(texture.at("index").get<std::size_t>()).at("source").get<std::size_t>();
+            const auto& image = gltf.at("images").at(imageIndex);
+            const auto mime = image.at("mimeType").get<std::string>();
+            Require(mime == "image/png" || mime == "image/jpeg", "embedded base color must be PNG or JPEG");
+            const auto& view = gltf.at("bufferViews").at(image.at("bufferView").get<std::size_t>());
+            Require(view.value("buffer", 0) == 0, "invalid embedded image buffer");
+            const std::size_t start = 20 + Word(bytes, 12);
+            Require(start + 8 <= bytes.size() && Word(bytes, start + 4) == 0x004e4942, "missing GLB BIN chunk");
+            const auto offset = view.value("byteOffset", std::size_t(0));
+            const auto length = view.at("byteLength").get<std::size_t>();
+            Require(offset <= Word(bytes, start) && length <= Word(bytes, start) - offset &&
+                    start + 8 <= bytes.size() && offset <= bytes.size() - start - 8 && length <= bytes.size() - start - 8 - offset,
+                    "embedded image is out of bounds");
+            const auto begin = bytes.begin() + start + 8 + offset;
+            probe.baseColor.assign(begin, begin + length);
+            Require((mime == "image/png" && length >= 8 && probe.baseColor[0] == 137 && probe.baseColor[1] == 'P' && probe.baseColor[2] == 'N' && probe.baseColor[3] == 'G' &&
+                     probe.baseColor[4] == 13 && probe.baseColor[5] == 10 && probe.baseColor[6] == 26 && probe.baseColor[7] == 10) ||
+                    (mime == "image/jpeg" && length >= 3 && probe.baseColor[0] == 255 && probe.baseColor[1] == 216 && probe.baseColor[2] == 255), "embedded image signature mismatch");
+            probe.textureExtension = mime == "image/png" ? ".png" : ".jpg";
+            ValidateRigImage(probe.baseColor);
+            probe.inspection.canExtractBaseColor = true;
+        } catch (const std::exception& e) {
+            probe.baseColor.clear();
+            probe.inspection.diagnostics.push_back("Base color extraction unavailable: " + std::string(e.what()));
+        }
+        result = std::move(probe);
+        error.clear();
+        return true;
+    } catch (const std::exception& e) { error = e.what(); return false; }
+}
+} // namespace detail
+
+bool InspectAnimatedGlb(const std::filesystem::path& source, RigInspection& result, std::string& error) {
+    std::vector<std::uint8_t> bytes;
+    detail::RigProbe probe;
+    if (!ReadBinaryFile(source, bytes, error, MaxSourceBytes) || !detail::ProbeRig(bytes, probe, error)) return false;
+    result = std::move(probe.inspection);
+    return true;
+}
+
+namespace {
+template<class T> bool ParseDefinition(std::string_view text, T& value, std::string& error) {
+    try {
+        Require(text.size() <= 1024 * 1024, "skeletal descriptor exceeds size limit");
+        auto json = ParseJson(text);
+        if constexpr (std::is_same_v<T, SkeletonDefinition>) Fields(json, {"version", "source"});
+        else if constexpr (std::is_same_v<T, AnimationClipDefinition>) Fields(json, {"version", "skeleton", "clip"});
+        else Fields(json, {"version", "skeleton"});
+        Require(json.at("version").is_number_integer() && json.at("version") == 1, "skeletal descriptor version must be integer 1");
+        T parsed;
+        if constexpr (std::is_same_v<T, SkeletonDefinition>) parsed.source = Reference(json.at("source"));
+        else parsed.skeleton = Reference(json.at("skeleton"));
+        if constexpr (std::is_same_v<T, AnimationClipDefinition>) {
+            parsed.clip = json.at("clip").get<std::string>();
+            Require(!parsed.clip.empty() && parsed.clip.size() <= 1024, "clip must be a nonempty exact animation name (at most 1024 bytes)");
+        }
+        value = std::move(parsed); error.clear(); return true;
+    } catch (const std::exception& e) { error = e.what(); return false; }
+}
+template<class T> bool SerializeDefinition(const T& value, std::string& text, std::string& error) {
+    try {
+    Json json = {{"version", 1}};
+    const auto ref = [](const AssetReference& r) { return Json{{"id", r.id.ToString()}, {"path", r.path}}; };
+    if constexpr (std::is_same_v<T, SkeletonDefinition>) json["source"] = ref(value.source);
+    else json["skeleton"] = ref(value.skeleton);
+    if constexpr (std::is_same_v<T, AnimationClipDefinition>) json["clip"] = value.clip;
+    T check;
+    const auto serialized = json.dump(2) + "\n";
+    if (!ParseDefinition(serialized, check, error)) return false;
+    text = serialized; return true;
+    } catch (const std::exception& e) { error = e.what(); return false; }
+}
+}
+bool ParseSkeletonDefinition(std::string_view s, SkeletonDefinition& v, std::string& e) { return ParseDefinition(s,v,e); }
+bool ParseSkinnedMeshDefinition(std::string_view s, SkinnedMeshDefinition& v, std::string& e) { return ParseDefinition(s,v,e); }
+bool ParseAnimationClipDefinition(std::string_view s, AnimationClipDefinition& v, std::string& e) { return ParseDefinition(s,v,e); }
+bool SerializeSkeletonDefinition(const SkeletonDefinition& v, std::string& s, std::string& e) { return SerializeDefinition(v,s,e); }
+bool SerializeSkinnedMeshDefinition(const SkinnedMeshDefinition& v, std::string& s, std::string& e) { return SerializeDefinition(v,s,e); }
+bool SerializeAnimationClipDefinition(const AnimationClipDefinition& v, std::string& s, std::string& e) { return SerializeDefinition(v,s,e); }
+
 bool SkeletalAssetImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, CpuPayload& payload,
                                    std::string& error) const {
     try {
@@ -638,6 +836,9 @@ bool SkeletalAssetImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, CpuPay
         if (kind_ == AssetKind::Skeleton) {
             parsed.kind = CpuPayload::Kind::Skeleton;
             parsed.skeleton = {skeleton.data, skeleton.signature, static_cast<std::uint32_t>(skeleton.nodes.size())};
+            for (const auto* node : skeleton.nodes) parsed.skeleton.jointNames.emplace_back(node->mName.C_Str(), node->mName.length);
+            parsed.skeleton.jointParents.assign(skeleton.parents.begin(), skeleton.parents.end());
+            parsed.skeleton.restModels = skeleton.models;
         } else if (kind_ == AssetKind::AnimationClip) {
             parsed.kind = CpuPayload::Kind::AnimationClip;
             Require(document.at("clip").is_string(), "clip must be an exact animation name string");

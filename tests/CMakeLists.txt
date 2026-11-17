@@ -17,6 +17,8 @@ add_executable(animation_tests
     animation_scene_tests.cpp
     animation_lua_tests.cpp
     animation_build_tests.cpp
+    rig_authoring_tests.cpp
+    rig_workflow_integration_tests.cpp
 )
 add_dependencies(animation_tests sri-build)
 target_link_libraries(animation_tests PRIVATE Engine::EngineStatic GTest::gtest_main ozz_animation)
@@ -93,6 +95,7 @@ if(SRI_BUILD_EDITOR)
     find_package(spdlog CONFIG REQUIRED)
     add_executable(content_browser_drop_tests
         content_browser_drop_tests.cpp
+        content_rig_dialog_tests.cpp
         ../editor/modules/content/content_browser.cpp
         ../editor/modules/content/content_browser.hpp
         ../editor/modules/content/asset_filter_model.cpp
@@ -101,6 +104,10 @@ if(SRI_BUILD_EDITOR)
         ../editor/modules/content/asset_dialogs.cpp
         ../editor/modules/content/asset_dialogs.hpp
         ../editor/modules/content/scene_placement.cpp
+        ../editor/modules/content/rig_dialog.cpp
+        ../editor/modules/content/rig_dialog.hpp
+        ../editor/modules/content/rig_workflow.cpp
+        ../editor/modules/content/rig_workflow.hpp
     )
     target_include_directories(content_browser_drop_tests PRIVATE ../editor/modules/content)
     target_link_libraries(content_browser_drop_tests PRIVATE editor_core GTest::gtest
@@ -112,6 +119,22 @@ if(SRI_BUILD_EDITOR)
             $<TARGET_RUNTIME_DLLS:content_browser_drop_tests> $<TARGET_FILE_DIR:content_browser_drop_tests>
         COMMAND_EXPAND_LISTS VERBATIM)
     add_test(NAME content_browser_drop_tests COMMAND content_browser_drop_tests)
+
+    add_executable(audio_editor_tests
+        audio_editor_tests.cpp
+        ../editor/modules/audio/audio_panel.cpp
+        ../editor/modules/audio/audio_panel.hpp
+    )
+    target_include_directories(audio_editor_tests PRIVATE ../editor/modules/audio)
+    target_link_libraries(audio_editor_tests PRIVATE editor_core Engine::Engine GTest::gtest
+        Qt6::Widgets Qt6::Test ads::qtadvanceddocking-qt6)
+    set_project_warnings(audio_editor_tests)
+    set_target_properties(audio_editor_tests PROPERTIES FOLDER tests AUTOMOC ON)
+    add_custom_command(TARGET audio_editor_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:audio_editor_tests> $<TARGET_FILE_DIR:audio_editor_tests>
+        COMMAND_EXPAND_LISTS VERBATIM)
+    add_test(NAME audio_editor_tests COMMAND audio_editor_tests)
 
     add_executable(autoload_dialog_tests
         autoload_dialog_tests.cpp
@@ -204,6 +227,22 @@ if(SRI_BUILD_EDITOR)
         COMMAND_EXPAND_LISTS VERBATIM
     )
     add_test(NAME viewport_input_tests COMMAND viewport_input_tests)
+
+    add_executable(viewport_overlay_tests
+        viewport_overlay_tests.cpp
+        ../editor/src/viewport_labels.cpp
+        ../editor/src/viewport_overlay.cpp
+    )
+    target_include_directories(viewport_overlay_tests PRIVATE ../editor/include)
+    target_link_libraries(viewport_overlay_tests PRIVATE editor_core Engine::Engine GTest::gtest
+        Qt6::Widgets Qt6::Test d3d11)
+    set_project_warnings(viewport_overlay_tests)
+    set_target_properties(viewport_overlay_tests PROPERTIES FOLDER tests)
+    add_custom_command(TARGET viewport_overlay_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:viewport_overlay_tests> $<TARGET_FILE_DIR:viewport_overlay_tests>
+        COMMAND_EXPAND_LISTS VERBATIM)
+    add_test(NAME viewport_overlay_tests COMMAND viewport_overlay_tests)
 
     add_executable(scene_history_tests scene_history_tests.cpp)
     target_link_libraries(scene_history_tests PRIVATE editor_core Engine::Engine GTest::gtest_main Qt6::Widgets)
