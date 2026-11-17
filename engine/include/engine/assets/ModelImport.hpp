@@ -31,7 +31,7 @@ struct ModelSlotInfo {
 };
 
 struct ModelInfo {
-    std::vector<ModelSlotInfo> slots;  // numbered as MeshAsset::materialSlots
+    std::vector<ModelSlotInfo> materialSlots;  // numbered as MeshAsset::materialSlots
     std::vector<ModelTexture> textures;
     // Files the model loads by name, which an import copies along: .gltf buffers and images, .obj .mtl.
     std::vector<std::filesystem::path> companions;

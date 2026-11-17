@@ -7,8 +7,10 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <engine/assets/AssetCatalog.hpp>
+#include <engine/assets/ModelImport.hpp>
 
 class QWidget;
 
@@ -36,13 +38,12 @@ namespace content {
 [[nodiscard]] bool isWithin(const QString& path, const QString& root);
 
 /// A model to import into a folder of its own, laid out as the engine looks a model folder up:
-/// model.<ext>, texture.<ext> and optionally <name>.material-instance.json using the texture.
+/// model.<ext> with the files it loads, textures/ and materials/ (engine::ImportModel).
 struct ModelImport {
-    QString source;          // the model file
-    QString name;            // of the new folder
+    QString source;  // the model file
+    QString name;    // of the new folder
     bool center_on_load = true;
-    QString texture;         // image to bring along; empty for none
-    std::optional<engine::AssetReference> material;  // base of the material instance; none for no instance
+    engine::ModelMaterialSettings materials;
 };
 
 /// The content browser's file commands. We need custom ones to move both meta files and asset files
@@ -63,6 +64,8 @@ public:
     bool remove(const QStringList& paths);
     /// Creates the folder `folder`/`import.name` with the model in it. Returns the folder, or empty on failure.
     QString importModel(const ModelImport& import, const QString& folder);
+    /// Gives a model in the project its textures and a material instance per slot. False on failure.
+    bool extractMaterials(const QString& model, const engine::ModelMaterialSettings& settings);
     /// Write a new .material.json / .material-instance.json at `path`, with its meta. False on failure.
     bool createMaterial(const QString& path, const engine::MaterialDefinition& definition);
     bool createMaterialInstance(const QString& path, const engine::MaterialInstanceDefinition& definition);
@@ -84,6 +87,8 @@ public:
 private:
     /// Shows the errors of one command, if any.
     void report(const QString& command, const QStringList& errors) const;
+    /// Logs what a command that went ahead left out.
+    static void warn(const QString& command, const std::vector<std::string>& warnings);
     /// Writes `text` to the new file `path` and gives it a meta of `kind`, then rescans.
     bool createFile(const QString& command, const QString& path, const std::string& text,
                     engine::CatalogAssetKind kind);

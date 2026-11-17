@@ -108,6 +108,8 @@ private:
     QStringList copyIn(const QStringList& paths, const QString& folder);
     /// Shows the import dialog for one model file. Returns the new model folder, or empty.
     QString importModel(const QString& source, const QString& folder);
+    /// Shows the Extract Materials dialog for a model in the project.
+    void extractMaterials(const QString& model);
     /// Picks files to import.
     void importAssets();
     void newMaterial();
@@ -161,6 +163,7 @@ private:
     QAction* show_in_explorer_ = nullptr;
     QAction* import_ = nullptr;
     QAction* instance_from_texture_ = nullptr;
+    QAction* extract_materials_ = nullptr;
 };
 
 }  // namespace content

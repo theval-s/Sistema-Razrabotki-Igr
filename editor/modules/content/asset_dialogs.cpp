@@ -17,8 +17,10 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QStyle>
 #include <QToolButton>
 #include <QTimer>
+#include <QTreeWidget>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 
@@ -27,6 +29,7 @@
 #include <string>
 
 #include <engine/assets/AssetPathResolver.hpp>
+#include <engine/assets/ModelImport.hpp>
 #include <engine/core/FileSystem.hpp>
 
 #include <editor/asset_picker.hpp>
@@ -234,11 +237,126 @@ void NewAssetDialog::setVisible(const bool visible) {
     QDialog::setVisible(visible);
 }
 
+ModelMaterialsForm::ModelMaterialsForm(const engine::AssetCatalog& catalog, const QString& model,
+                                       QWidget* parent)
+    : QWidget(parent) {
+    engine::ModelInfo info;
+    if (std::string error; !engine::InspectModel(editor::toPath(model), info, error)) {
+        error_ = QString::fromStdString(error);
+    }
+
+    auto* summary = new QLabel(tr("%n material slot(s), ", nullptr, static_cast<int>(info.materialSlots.size())) +
+                               tr("%n triangle(s)", nullptr, static_cast<int>(info.triangles)));
+    auto* slot_list = new QTreeWidget;
+    slot_list->setHeaderLabels({tr("Slot"), tr("Base color"), tr("UV set")});
+    slot_list->setRootIsDecorated(false);
+    slot_list->setSelectionMode(QAbstractItemView::NoSelection);
+    slot_list->setFocusPolicy(Qt::NoFocus);
+    slot_list->setMaximumHeight(160);
+    bool untextured = false;
+    for (const engine::ModelSlotInfo& slot : info.materialSlots) {
+        auto* item = new QTreeWidgetItem(slot_list, {QString::fromStdString(slot.name), tr("None"),
+                                                 QString::number(slot.uvChannel)});
+        if (!slot.texture) {
+            untextured = true;
+            continue;
+        }
+        const engine::ModelTexture& texture = info.textures[*slot.texture];
+        item->setText(1, QString::fromStdString(texture.name));
+        if (!texture.problem.empty()) {
+            untextured = true;
+            item->setIcon(1, style()->standardIcon(QStyle::SP_MessageBoxWarning));
+            item->setToolTip(1, QString::fromStdString(texture.problem));
+        }
+    }
+    slot_list->resizeColumnToContents(0);
+    slot_list->resizeColumnToContents(1);
+    slot_list->setVisible(!info.materialSlots.empty());
+
+    extract_ = new QCheckBox(tr("Extract textures"));
+    extract_->setToolTip(tr("Writes the textures the model holds or names into textures/ beside it.\n"
+                            "Textures already in the project are used where they are."));
+    extract_->setChecked(true);
+    extract_->setEnabled(!info.textures.empty());
+
+    instances_ = new QGroupBox(tr("Create a material instance per slot"));
+    instances_->setCheckable(true);
+    instances_->setChecked(!info.materialSlots.empty());
+    instances_->setEnabled(!info.materialSlots.empty());
+    instances_->setToolTip(tr("The mesh's own materials: a mesh renderer without a material draws each slot with its instance"));
+    connect(instances_, &QGroupBox::toggled, this, &ModelMaterialsForm::changed);
+    material_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Material);
+    material_->selectPath(DefaultMaterial);
+    connect(material_, &QComboBox::currentIndexChanged, this, &ModelMaterialsForm::changed);
+
+    // A model without textures of its own most likely goes with the image beside it.
+    const QFileInfo source(model);
+    const bool textured =
+        std::ranges::any_of(info.textures, [](const engine::ModelTexture& texture) { return texture.problem.empty(); });
+    fallback_ = new QLineEdit(textured ? QString() : QDir::toNativeSeparators(findTexture(source)));
+    fallback_->setPlaceholderText(tr("None"));
+    fallback_->setClearButtonEnabled(true);
+    fallback_->setToolTip(tr("An image for the slots without a texture of their own"));
+    connect(fallback_, &QLineEdit::textChanged, this, &ModelMaterialsForm::changed);
+    auto* browse = new QToolButton;
+    browse->setText(QStringLiteral("…"));
+    browse->setToolTip(tr("Choose an image"));
+    connect(browse, &QToolButton::clicked, this, [this, source] {
+        const QString current = fallback_->text().trimmed();
+        const QString chosen = QFileDialog::getOpenFileName(
+            this, tr("Texture"), current.isEmpty() ? source.absolutePath() : current, imageFilter());
+        if (!chosen.isEmpty()) {
+            fallback_->setText(QDir::toNativeSeparators(chosen));
+        }
+    });
+    auto* fallback_row = new QHBoxLayout;
+    fallback_row->addWidget(fallback_, 1);
+    fallback_row->addWidget(browse);
+    auto* instance_form = new QFormLayout(instances_);
+    instance_form->addRow(tr("Material"), material_);
+    instance_form->addRow(textured ? tr("Other slots") : tr("Texture"), fallback_row);
+
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(summary);
+    layout->addWidget(slot_list);
+    layout->addWidget(extract_);
+    layout->addWidget(instances_);
+}
+
+engine::ModelMaterialSettings ModelMaterialsForm::settings() const {
+    engine::ModelMaterialSettings settings;
+    settings.extractTextures = extract_->isChecked();
+    if (instances_->isChecked()) {
+        settings.baseMaterial = material_->reference();
+        if (const QString fallback = fallback_->text().trimmed(); !fallback.isEmpty()) {
+            settings.fallbackTexture = editor::toPath(cleanPath(fallback));
+        }
+    }
+    return settings;
+}
+
+QString ModelMaterialsForm::problem() const {
+    if (!error_.isEmpty()) {
+        return tr("Can't read the model: %1").arg(error_);
+    }
+    if (!instances_->isChecked()) {
+        return {};
+    }
+    if (!material_->reference()) {
+        return tr("Choose the material for the material instances.");
+    }
+    if (const QString fallback = fallback_->text().trimmed();
+        !fallback.isEmpty() && (!QFileInfo(fallback).isFile() || !isImage(fallback))) {
+        return tr("The texture isn't an image file.");
+    }
+    return {};
+}
+
 ImportModelDialog::ImportModelDialog(const engine::AssetCatalog& catalog, const QString& source,
                                      const QString& folder, QWidget* parent)
     : NewAssetDialog(tr("Import Model"), folder, {}, modelName(QFileInfo(source)), parent),
       source_(cleanPath(source)) {
-    const QFileInfo info(source_);
     auto* file = new QLabel(QDir::toNativeSeparators(source_));
     file->setTextInteractionFlags(Qt::TextSelectableByMouse);
     file->setWordWrap(true);
@@ -249,65 +367,48 @@ ImportModelDialog::ImportModelDialog(const engine::AssetCatalog& catalog, const 
     center_->setChecked(true);
     form()->addRow(QString(), center_);
 
-    texture_ = new QLineEdit(QDir::toNativeSeparators(findTexture(info)));
-    texture_->setPlaceholderText(tr("None"));
-    texture_->setClearButtonEnabled(true);
-    connect(texture_, &QLineEdit::textChanged, this, &ImportModelDialog::validate);
-    auto* browse = new QToolButton;
-    browse->setText(QStringLiteral("…"));
-    browse->setToolTip(tr("Choose an image"));
-    connect(browse, &QToolButton::clicked, this, [this, info] {
-        const QString current = texture_->text().trimmed();
-        const QString chosen = QFileDialog::getOpenFileName(
-            this, tr("Texture"), current.isEmpty() ? info.absolutePath() : current, imageFilter());
-        if (!chosen.isEmpty()) {
-            texture_->setText(QDir::toNativeSeparators(chosen));
-        }
-    });
-    auto* texture_row = new QHBoxLayout;
-    texture_row->addWidget(texture_, 1);
-    texture_row->addWidget(browse);
-    form()->addRow(tr("Texture"), texture_row);
-
-    instance_ = new QGroupBox(tr("Create a material instance"));
-    instance_->setCheckable(true);
-    instance_->setChecked(true);
-    instance_->setToolTip(tr("For mesh renderers: the base material with the texture as its albedo"));
-    connect(instance_, &QGroupBox::toggled, this, &ImportModelDialog::validate);
-    material_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Material);
-    material_->selectPath(DefaultMaterial);
-    auto* instance_form = new QFormLayout(instance_);
-    instance_form->addRow(tr("Material"), material_);
-    form()->addRow(instance_);
+    materials_ = new ModelMaterialsForm(catalog, source_);
+    connect(materials_, &ModelMaterialsForm::changed, this, &ImportModelDialog::validate);
+    form()->addRow(materials_);
     validate();
 }
 
 ModelImport ImportModelDialog::result() const {
-    ModelImport result;
-    result.source = source_;
-    result.name = name();
-    result.center_on_load = center_->isChecked();
-    if (const QString texture = texture_->text().trimmed(); !texture.isEmpty()) {
-        result.texture = cleanPath(texture);
-    }
-    if (instance_->isChecked()) {
-        result.material = material_->reference();
-    }
-    return result;
+    return {source_, name(), center_->isChecked(), materials_->settings()};
 }
 
 QString ImportModelDialog::problem() const {
     if (QString problem = NewAssetDialog::problem(); !problem.isEmpty()) {
         return problem;
     }
-    if (const QString texture = texture_->text().trimmed();
-        !texture.isEmpty() && (!QFileInfo(texture).isFile() || !isImage(texture))) {
-        return tr("The texture isn't an image file.");
+    return materials_->problem();
+}
+
+ExtractMaterialsDialog::ExtractMaterialsDialog(const engine::AssetCatalog& catalog, const QString& model,
+                                               QWidget* parent)
+    : NewAssetDialog(tr("Extract Materials"), QFileInfo(model).absolutePath(), {}, QFileInfo(model).fileName(),
+                     parent, true) {
+    const QString into = assetName(editor::toQString(engine::ModelMaterialsFolder(editor::toPath(model))));
+    auto* target = new QLabel(tr("%1/textures and %1/materials. Files already there are kept.").arg(into));
+    target->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    target->setWordWrap(true);
+    form()->addRow(tr("Into"), target);
+
+    materials_ = new ModelMaterialsForm(catalog, model);
+    connect(materials_, &ModelMaterialsForm::changed, this, &ExtractMaterialsDialog::validate);
+    form()->addRow(materials_);
+    validate();
+}
+
+engine::ModelMaterialSettings ExtractMaterialsDialog::result() const {
+    return materials_->settings();
+}
+
+QString ExtractMaterialsDialog::problem() const {
+    if (QString problem = NewAssetDialog::problem(); !problem.isEmpty()) {
+        return problem;
     }
-    if (instance_->isChecked() && !material_->reference()) {
-        return tr("Choose the material for the material instance.");
-    }
-    return {};
+    return materials_->problem();
 }
 
 MaterialInstanceDialog::MaterialInstanceDialog(const engine::AssetCatalog& catalog, const QString& folder,

@@ -96,12 +96,12 @@ TEST_F(ModelImportTest, InspectionListsSlotsTheirTexturesAndUvSets) {
     Token().WriteGlb(downloads / "token.glb");
     ModelInfo info;
     ASSERT_TRUE(InspectModel(downloads / "token.glb", info, error)) << error;
-    ASSERT_EQ(info.slots.size(), 2u);
-    EXPECT_EQ(info.slots[0].name, "Gold");
-    EXPECT_EQ(info.slots[0].texture, 0u);
-    EXPECT_EQ(info.slots[0].uvChannel, 1u);
-    EXPECT_EQ(info.slots[1].name, "Gem");
-    EXPECT_FALSE(info.slots[1].texture);
+    ASSERT_EQ(info.materialSlots.size(), 2u);
+    EXPECT_EQ(info.materialSlots[0].name, "Gold");
+    EXPECT_EQ(info.materialSlots[0].texture, 0u);
+    EXPECT_EQ(info.materialSlots[0].uvChannel, 1u);
+    EXPECT_EQ(info.materialSlots[1].name, "Gem");
+    EXPECT_FALSE(info.materialSlots[1].texture);
     ASSERT_EQ(info.textures.size(), 1u);
     EXPECT_EQ(info.textures[0].name, "Gold Color.png");
     EXPECT_EQ(std::string(info.textures[0].bytes.begin(), info.textures[0].bytes.end()), Png);

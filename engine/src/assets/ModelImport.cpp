@@ -299,8 +299,8 @@ bool Extract(const fs::path& model, const ModelInfo& info, const ModelMaterialSe
         if (settings.baseMaterial) {
             std::set<std::string> names;
             meta.materials.clear();
-            for (std::size_t slot = 0; slot < info.slots.size(); ++slot) {
-                const ModelSlotInfo& source = info.slots[slot];
+            for (std::size_t slot = 0; slot < info.materialSlots.size(); ++slot) {
+                const ModelSlotInfo& source = info.materialSlots[slot];
                 const std::string name = UniqueName(SafeFileName(source.name, std::format("Slot {}", slot)),
                                                     ".material-instance.json", names);
                 std::optional<AssetReference> albedo = source.texture ? textures[*source.texture] : std::nullopt;
@@ -352,7 +352,7 @@ bool InspectModel(const fs::path& model, ModelInfo& info, std::string& error) {
             if (added) result.textures.push_back(DescribeTexture(*scene, model, slot.texture.path, slot.name, names));
             described.texture = it->second;
         }
-        result.slots.push_back(std::move(described));
+        result.materialSlots.push_back(std::move(described));
     }
     for (unsigned i = 0; i < scene->mNumMeshes; ++i) {
         if (!detail::IsTriangleMesh(scene->mMeshes[i])) continue;
