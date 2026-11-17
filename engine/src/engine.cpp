@@ -1011,12 +1011,13 @@ bool Engine::EditEntityMaterial(entt::entity entity, const std::function<void(Ma
                                 std::string& error) {
     auto* renderer = impl_->scene.TryGetComponent<MeshRenderer>(entity);
     auto* rendering = GetSubsystem<RenderingSubsystem>();
-    if (!renderer || !rendering || !impl_->sceneAssets->Peek(renderer->materialInstance)) {
+    const auto primary = renderer ? PrimaryMaterial(*impl_->sceneAssets, *renderer) : entt::resource<MaterialInstanceAsset>{};
+    if (!renderer || !rendering || !primary) {
         error = "entity has no ready scene material instance";
         return false;
     }
     auto& resources = rendering->GetResourceManager();
-    const auto base = impl_->sceneAssets->Peek(renderer->materialInstance)->instance;
+    const auto base = primary->instance;
     const auto override = GetEntityMaterialOverride(entity);
     const auto* source = resources.TryGetMaterialInstance(override ? override : base);
     if (!source) { error = "material instance is no longer available"; return false; }

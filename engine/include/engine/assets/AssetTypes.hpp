@@ -2,9 +2,11 @@
 
 #include <SimpleMath.h>
 #include <memory>
+#include <string>
 #include <vector>
 #include <cstdint>
 #include <engine/assets/AssetCatalog.hpp>
+#include <engine/assets/AssetHandle.hpp>
 
 #include <engine/rendering/resources/RenderedMesh.hpp>
 #include <engine/rendering/resources/ShaderContext.hpp>
@@ -31,8 +33,20 @@ struct MeshGeometry {
     std::vector<uint32_t> indices;
 };
 
-struct MeshAsset {
+/// One draw of a mesh asset: the triangles of one material slot.
+struct MeshSection {
     MeshHandle mesh;
+    std::uint32_t materialSlot = 0;
+};
+
+struct MaterialInstanceAsset;
+
+struct MeshAsset {
+    std::vector<MeshSection> sections;
+    std::vector<std::string> materialSlots; // names, indexed by MeshSection::materialSlot
+    // Per slot: the default from the mesh's metadata, else the engine default instance.
+    // Requested with the mesh, not awaited: a section waits for its own material.
+    std::vector<AssetHandle<MaterialInstanceAsset>> materials;
     Aabb bounds;
     std::shared_ptr<const MeshGeometry> geometry;
 };

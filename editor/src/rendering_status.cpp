@@ -101,7 +101,8 @@ std::vector<RenderingStatus::Request> RenderingStatus::requests() {
             : QStringLiteral("Unassigned renderer asset");
         if (reference.id.IsValid()) label += QStringLiteral(" [UUID %1]").arg(text(reference.id.ToString()));
         if (reference.id.IsValid() && !entry) label += QStringLiteral(" — UUID is not resolved in the catalog");
-        result.push_back({key, assets.GetState(handle), name, identity, label});
+        if (std::ranges::none_of(result, [&](const auto& request) { return request.identity == identity; }))
+            result.push_back({key, assets.GetState(handle), name, identity, label});
     };
     const auto renderer = [&](auto entity, const auto& component) {
         using Mesh = std::decay_t<decltype(component.mesh)>;
@@ -110,8 +111,42 @@ std::vector<RenderingStatus::Request> RenderingStatus::requests() {
         add(owner, component.mesh, component.meshReference,
             skinned ? engine::AssetKind::SkinnedMesh : engine::AssetKind::Mesh,
             skinned ? engine::CatalogAssetKind::SkinnedMesh : engine::CatalogAssetKind::Mesh);
-        add(owner, component.materialInstance, component.materialReference,
-            engine::AssetKind::MaterialInstance, engine::CatalogAssetKind::MaterialInstance);
+        const auto material = [&](auto handle, const auto& reference) {
+            add(owner, handle, reference, engine::AssetKind::MaterialInstance, engine::CatalogAssetKind::MaterialInstance);
+        };
+        if constexpr (skinned) {
+            material(component.materialInstance, component.materialReference);
+        } else if (const auto mesh = assets.Peek(component.mesh)) {
+            auto meshReference = component.meshReference;
+            if (!meshReference.id.IsValid()) {
+                if (const auto recovered = assets.ReferenceFor(component.mesh)) meshReference = *recovered;
+            }
+            const auto* entry = assets.GetCatalog().Find(meshReference.id, engine::CatalogAssetKind::Mesh);
+            for (const auto& section : mesh->sections) {
+                const auto slot = section.materialSlot;
+                // Keep this selection identical to SectionMaterial, including named
+                // but failed overrides: they must not fall through to a default.
+                if (slot < component.slotMaterials.size() && engine::HasOwnMaterial(component.slotMaterials[slot])) {
+                    const auto& override = component.slotMaterials[slot];
+                    material(override.materialInstance, override.materialReference);
+                } else if (engine::HasOwnMaterial(component)) {
+                    material(component.materialInstance, component.materialReference);
+                } else {
+                    const auto handle = slot < mesh->materials.size() ? mesh->materials[slot]
+                        : engine::AssetHandle<engine::MaterialInstanceAsset>{};
+                    // A failed request can retire before we inspect it. Recover its
+                    // authored label from the mesh metadata, without requesting it again.
+                    auto reference = assets.ReferenceFor(handle).value_or(engine::AssetReference{});
+                    if (!reference.id.IsValid() && entry && slot < entry->metadata.materials.size() &&
+                        entry->metadata.materials[slot]) reference = *entry->metadata.materials[slot];
+                    material(handle, reference);
+                }
+            }
+        } else if (engine::HasOwnMaterial(component)) {
+            // Until the mesh is ready its used slots/defaults are unknown. The
+            // renderer-wide request is still useful, but an empty override is normal.
+            material(component.materialInstance, component.materialReference);
+        }
     };
     engine_.GetScene().ForEach<engine::MeshRenderer>(renderer);
     engine_.GetScene().ForEach<engine::SkinnedMeshRenderer>(renderer);

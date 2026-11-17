@@ -7,6 +7,7 @@
 
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/MaterialDefinition.hpp>
+#include <engine/assets/ModelImport.hpp>
 
 #include "asset_operations.hpp"
 
@@ -67,7 +68,30 @@ private:
     QPushButton* ok_ = nullptr;
 };
 
-/// A model file to import, with its texture and an optional material instance (ModelImport).
+/// A model's material slots and what they get: its textures, and a material instance each.
+/// Import Model and Extract Materials both show it.
+class ModelMaterialsForm : public QWidget {
+    Q_OBJECT
+
+public:
+    ModelMaterialsForm(const engine::AssetCatalog& catalog, const QString& model, QWidget* parent = nullptr);
+
+    [[nodiscard]] engine::ModelMaterialSettings settings() const;
+    /// Why it can't go ahead as it stands; empty if it can.
+    [[nodiscard]] QString problem() const;
+
+signals:
+    void changed();
+
+private:
+    QString error_;  // from reading the model
+    QCheckBox* extract_ = nullptr;
+    QGroupBox* instances_ = nullptr;
+    editor::AssetPicker* material_ = nullptr;
+    QLineEdit* fallback_ = nullptr;
+};
+
+/// A model file to import into a folder of its own, with its materials (ModelImport).
 class ImportModelDialog : public NewAssetDialog {
     Q_OBJECT
 
@@ -83,9 +107,23 @@ protected:
 private:
     QString source_;
     QCheckBox* center_ = nullptr;
-    QLineEdit* texture_ = nullptr;
-    QGroupBox* instance_ = nullptr;
-    editor::AssetPicker* material_ = nullptr;
+    ModelMaterialsForm* materials_ = nullptr;
+};
+
+/// Textures and material instances for a model already in the project (AssetOperations::extractMaterials).
+class ExtractMaterialsDialog : public NewAssetDialog {
+    Q_OBJECT
+
+public:
+    ExtractMaterialsDialog(const engine::AssetCatalog& catalog, const QString& model, QWidget* parent);
+
+    [[nodiscard]] engine::ModelMaterialSettings result() const;
+
+protected:
+    [[nodiscard]] QString problem() const override;
+
+private:
+    ModelMaterialsForm* materials_ = nullptr;
 };
 
 /// A material instance: a base material and the parameters it overrides.

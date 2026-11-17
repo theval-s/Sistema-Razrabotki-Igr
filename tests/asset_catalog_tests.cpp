@@ -38,6 +38,33 @@ TEST(AssetCatalog, ReferencesAndMetadataValidateWithoutChangingOutput) {
     EXPECT_TRUE(loaded.centerOnLoad);
 }
 
+TEST(AssetCatalog, MeshMetadataKeepsDefaultMaterialPerSlot) {
+    const engine::AssetReference gold{engine::NewUuid(), "game/models/token/materials/Gold.material-instance.json"};
+    engine::AssetMetadata meta{engine::NewUuid(), engine::CatalogAssetKind::Mesh, false, {gold, std::nullopt}};
+    std::string json, error;
+    ASSERT_TRUE(engine::SerializeAssetMetadata(meta, json, error)) << error;
+    engine::AssetMetadata loaded;
+    ASSERT_TRUE(engine::ParseAssetMetadata(json, loaded, error)) << error;
+    ASSERT_EQ(loaded.materials.size(), 2u);
+    EXPECT_EQ(loaded.materials[0], gold);
+    EXPECT_FALSE(loaded.materials[1]);
+
+    // Metas from before material slots keep their exact text.
+    meta.materials.clear();
+    ASSERT_TRUE(engine::SerializeAssetMetadata(meta, json, error)) << error;
+    EXPECT_EQ(json.find("materials"), std::string::npos);
+
+    const std::string id = engine::NewUuid();
+    for (const std::string invalid : {
+             R"({"version":1,"id":")" + id + R"(","kind":"texture","materials":[]})",
+             R"({"version":1,"id":")" + id + R"(","kind":"mesh","materials":{}})",
+             R"({"version":1,"id":")" + id + R"(","kind":"mesh","materials":["game/a.material-instance.json"]})",
+             R"({"version":1,"id":")" + id + R"(","kind":"mesh","materials":[{"id":"broken","path":"game/a"}]})"}) {
+        SCOPED_TRACE(invalid);
+        EXPECT_FALSE(engine::ParseAssetMetadata(invalid, loaded, error));
+    }
+}
+
 TEST(AssetCatalog, UiAssetsGenerateMetadataAndRoundTripThroughCatalog) {
     Fixture fixture;
     using engine::CatalogAssetKind;

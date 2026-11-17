@@ -171,7 +171,7 @@ void buildTags(PropertyForm& form, editor::EditorContext& context, const entt::e
     });
 }
 
-/// The asset a MeshRenderer slot uses: the authored one, which a save writes, or else the loaded one.
+/// The asset a renderer field uses: the authored one, which a save writes, or else the loaded one.
 template <class Asset>
 std::optional<engine::AssetReference> usedAsset(const engine::AssetSystem& assets,
                                                 const engine::AssetReference& authored,
@@ -182,34 +182,38 @@ std::optional<engine::AssetReference> usedAsset(const engine::AssetSystem& asset
     return assets.ReferenceFor(handle);
 }
 
-/// A picker for one renderer asset slot: `reference` and `handle` are its members,
-/// `request` what loads a chosen asset into the scene's registry.
-template <class Component, class Asset>
-void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt::entity entity, const QString& label,
-                  const engine::CatalogAssetKind kind, engine::AssetReference Component::*reference,
-                  engine::AssetHandle<Asset> Component::*handle,
-                  engine::AssetHandle<Asset> (engine::AssetSystem::*request)(const engine::AssetReference&)) {
+/// A picker for one renderer asset field. `get` returns its authored reference and loaded handle,
+/// `set` stores a choice, and `request` loads a chosen asset into the scene's registry. A non-empty
+/// `none` names an entry that leaves the field empty; `change` is the undo step's text.
+template <class Component, class Asset, class Get, class Set>
+void addAssetPicker(PropertyForm& form, editor::EditorContext& context, const entt::entity entity, const QString& label,
+                    const QString& change, const engine::CatalogAssetKind kind, Get get, Set set,
+                    engine::AssetHandle<Asset> (engine::AssetSystem::*request)(const engine::AssetReference&),
+                    const QString& none = {}) {
     engine::Scene& scene = context.scene();
     engine::Engine& engine = context.engine();
-    auto* picker = new editor::AssetPicker(engine.GetSceneAssets().GetCatalog(), kind);
+    auto* picker = new editor::AssetPicker(engine.GetSceneAssets().GetCatalog(), kind, none);
     picker->setMinimumContentsLength(12);  // the dock is narrow; the popup shows whole paths
 
     // Only the user's choices get here: refresh picks quietly.
     QObject::connect(picker, &QComboBox::currentIndexChanged, picker,
-                     [&context, &scene, &engine, entity, label, picker, kind, reference, handle, request] {
+                     [&context, &scene, &engine, entity, change, picker, kind, get, set, request, none] {
                          const auto* renderer = std::as_const(scene).TryGetComponent<Component>(entity);
                          const std::optional<engine::AssetReference> chosen = picker->reference();
-                         if (renderer == nullptr || !chosen || chosen->id == (renderer->*reference).id) {
+                         const bool cleared = !chosen && !none.isEmpty() && picker->currentIndex() == 0;
+                         if (renderer == nullptr || (!chosen && !cleared)) {
                              return;
                          }
-                         context.history().edit(QObject::tr("Change %1").arg(label), [&] {
+                         const auto [reference, handle] = get(*renderer);
+                         if (chosen ? chosen->id == reference.id : !reference.id.IsValid() && !handle) {
+                             return;
+                         }
+                         context.history().edit(change, [&] {
                              // Asynchronous, like adding the component: the entity isn't drawn until it's loaded.
-                             const auto loaded = (engine.GetSceneAssets().*request)(*chosen);
+                             const auto loaded = chosen ? (engine.GetSceneAssets().*request)(*chosen)
+                                                        : engine::AssetHandle<Asset>{};
                              scene.Modify<Component>(entity, [&](Component& changed) {
-                                 changed.*handle = loaded;
-                                 changed.*reference = *chosen;
-                                 if constexpr (std::is_same_v<Component, engine::SkinnedMeshRenderer>)
-                                     changed.posedBounds.reset();
+                                 set(changed, loaded, chosen.value_or(engine::AssetReference{}));
                              });
                              if (kind == engine::CatalogAssetKind::MaterialInstance) {
                                  engine.ClearEntityMaterialOverride(entity);
@@ -217,15 +221,15 @@ void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt
                          });
                      });
 
-    // What the picker last showed, so it's only touched when the slot changes elsewhere.
+    // What the picker last showed, so it's only touched when the field changes elsewhere.
     auto shown = std::make_shared<std::string>();
-    form.addRow(label, picker, [&scene, &engine, entity, picker, reference, handle, shown] {
+    form.addRow(label, picker, [&scene, &engine, entity, picker, get, shown, none] {
         const auto* renderer = scene.TryGetComponent<Component>(entity);
         if (renderer == nullptr || picker->hasFocus() || picker->lineEdit()->hasFocus() || picker->view()->isVisible()) {
             return;
         }
-        const std::optional<engine::AssetReference> used =
-            usedAsset(engine.GetSceneAssets(), renderer->*reference, renderer->*handle);
+        const auto [reference, handle] = get(*renderer);
+        const std::optional<engine::AssetReference> used = usedAsset(engine.GetSceneAssets(), reference, handle);
         std::string key = used ? used->id.ToString() + '\n' + used->path : std::string("none");
         if (key == *shown) {
             return;
@@ -241,10 +245,122 @@ void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt
                 return;
             }
         }
-        picker->setCurrentIndex(-1);
+        picker->setCurrentIndex(!used && !none.isEmpty() ? 0 : -1);
         picker->lineEdit()->setPlaceholderText(
             used ? QObject::tr("%1 (missing)").arg(QString::fromStdString(used->path.empty() ? used->id.ToString() : used->path))
                  : QObject::tr("None"));
+    });
+}
+
+/// addAssetPicker() for an asset whose `reference` and `handle` are members of the component.
+template <class Component, class Asset>
+void addRendererAsset(PropertyForm& form, editor::EditorContext& context, const entt::entity entity,
+                      const QString& label, const engine::CatalogAssetKind kind,
+                      engine::AssetReference Component::*reference, engine::AssetHandle<Asset> Component::*handle,
+                      engine::AssetHandle<Asset> (engine::AssetSystem::*request)(const engine::AssetReference&),
+                      const QString& none = {}) {
+    addAssetPicker<Component, Asset>(
+        form, context, entity, label, QObject::tr("Change %1").arg(label), kind,
+        [reference, handle](const Component& renderer) { return std::pair{renderer.*reference, renderer.*handle}; },
+        [reference, handle](Component& renderer, const engine::AssetHandle<Asset> loaded,
+                            const engine::AssetReference& chosen) {
+            renderer.*handle = loaded;
+            renderer.*reference = chosen;
+            if constexpr (std::is_same_v<Component, engine::SkinnedMeshRenderer>) renderer.posedBounds.reset();
+            if constexpr (std::is_same_v<Asset, engine::MeshAsset>) renderer.slotMaterials.clear();  // the old mesh's slots
+        },
+        request, none);
+}
+
+/// A material's file name without its extension, for short labels.
+QString materialName(const std::optional<engine::AssetReference>& material) {
+    if (!material) return QObject::tr("none");
+    QString name = QString::fromStdString(material->path).section(QLatin1Char('/'), -1);
+    if (const QLatin1String extension(".material-instance.json"); name.endsWith(extension)) name.chop(extension.size());
+    return name.isEmpty() ? QString::fromStdString(material->id.ToString()) : name;
+}
+
+/// The Mesh Renderer's material slots, a picker each, whose empty entry names what the slot falls
+/// back to. Hidden for a mesh with one slot and no slot material: Material does the same there.
+void addSlotMaterials(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
+    // A heading of its own across the form, with the rows below it, indented.
+    auto* panel = new QWidget;
+    auto* section = new QVBoxLayout(panel);
+    section->setContentsMargins(0, 0, 0, 0);
+    section->addWidget(new QLabel(QObject::tr("Material slots:")));
+    auto* rows = new QVBoxLayout;
+    rows->setContentsMargins(panel->style()->pixelMetric(QStyle::PM_LayoutLeftMargin), 0, 0, 0);
+    section->addLayout(rows);
+    // The rows' form and the labels it was built with; built again when they change.
+    struct Shown {
+        PropertyForm* form = nullptr;
+        QStringList labels;
+    };
+    auto shown = std::make_shared<Shown>();
+    form.addRow(panel, [&context, entity, panel, rows, shown] {
+        const auto* renderer = context.scene().TryGetComponent<engine::MeshRenderer>(entity);
+        if (renderer == nullptr) {
+            return;
+        }
+        engine::AssetSystem& assets = context.engine().GetSceneAssets();
+        const auto mesh = assets.Peek(renderer->mesh);
+        const std::size_t named = mesh ? mesh->materialSlots.size() : 0;
+        std::size_t count = named;  // and the materials of slots the mesh doesn't have, so they can be cleared
+        for (std::size_t slot = named; slot < renderer->slotMaterials.size(); ++slot) {
+            if (engine::HasOwnMaterial(renderer->slotMaterials[slot])) count = slot + 1;
+        }
+        const bool any = std::ranges::any_of(renderer->slotMaterials,
+                                             [](const engine::SlotMaterial& slot) { return engine::HasOwnMaterial(slot); });
+        panel->setVisible(named > 1 || any);
+
+        QStringList labels;  // each slot's name, then each slot's empty entry
+        for (std::size_t slot = 0; slot < count; ++slot) {
+            const QString name = slot < named ? QString::fromStdString(mesh->materialSlots[slot]) : QString();
+            labels << (!name.isEmpty() ? name
+                       : slot < named || !mesh ? QObject::tr("Slot %1").arg(slot)
+                                               : QObject::tr("Slot %1 (not in the mesh)").arg(slot));
+        }
+        for (std::size_t slot = 0; slot < count; ++slot) {
+            if (engine::HasOwnMaterial(*renderer)) {
+                labels << QObject::tr("(Material: %1)")
+                              .arg(materialName(usedAsset(assets, renderer->materialReference, renderer->materialInstance)));
+            } else if (mesh && slot < mesh->materials.size()) {
+                labels << QObject::tr("(Default: %1)").arg(materialName(assets.ReferenceFor(mesh->materials[slot])));
+            } else {
+                labels << QObject::tr("(None)");
+            }
+        }
+        if (shown->form == nullptr || labels != shown->labels) {
+            if (shown->form != nullptr) {
+                shown->form->hide();
+                shown->form->deleteLater();
+            }
+            auto* slot_form = new PropertyForm;
+            for (std::size_t slot = 0; slot < count; ++slot) {
+                const QString& name = labels[static_cast<qsizetype>(slot)];
+                addAssetPicker<engine::MeshRenderer, engine::MaterialInstanceAsset>(
+                    *slot_form, context, entity, name, QObject::tr("Change %1 Material").arg(name),
+                    engine::CatalogAssetKind::MaterialInstance,
+                    [slot](const engine::MeshRenderer& component) {
+                        return slot < component.slotMaterials.size()
+                                   ? std::pair{component.slotMaterials[slot].materialReference,
+                                               component.slotMaterials[slot].materialInstance}
+                                   : std::pair<engine::AssetReference, engine::AssetHandle<engine::MaterialInstanceAsset>>{};
+                    },
+                    [slot](engine::MeshRenderer& changed, const engine::AssetHandle<engine::MaterialInstanceAsset> loaded,
+                           const engine::AssetReference& chosen) {
+                        if (changed.slotMaterials.size() <= slot) changed.slotMaterials.resize(slot + 1);
+                        changed.slotMaterials[slot] = {loaded, chosen};
+                        while (!changed.slotMaterials.empty() && !engine::HasOwnMaterial(changed.slotMaterials.back())) {
+                            changed.slotMaterials.pop_back();
+                        }
+                    },
+                    &engine::AssetSystem::RequestMaterialInstance, labels[static_cast<qsizetype>(count + slot)]);
+            }
+            rows->addWidget(slot_form);
+            *shown = {slot_form, std::move(labels)};
+        }
+        shown->form->refresh();
     });
 }
 
@@ -287,11 +403,12 @@ void buildNavigationSource(PropertyForm& form, editor::EditorContext& context, e
 }
 
 void buildMeshRenderer(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
-    addAssetSlot(form, context, entity, QObject::tr("Mesh"), engine::CatalogAssetKind::Mesh,
-                 &engine::MeshRenderer::meshReference, &engine::MeshRenderer::mesh, &engine::AssetSystem::RequestMesh);
-    addAssetSlot(form, context, entity, QObject::tr("Material"), engine::CatalogAssetKind::MaterialInstance,
-                 &engine::MeshRenderer::materialReference, &engine::MeshRenderer::materialInstance,
-                 &engine::AssetSystem::RequestMaterialInstance);
+    addRendererAsset(form, context, entity, QObject::tr("Mesh"), engine::CatalogAssetKind::Mesh,
+                     &engine::MeshRenderer::meshReference, &engine::MeshRenderer::mesh, &engine::AssetSystem::RequestMesh);
+    addRendererAsset(form, context, entity, QObject::tr("Material"), engine::CatalogAssetKind::MaterialInstance,
+                     &engine::MeshRenderer::materialReference, &engine::MeshRenderer::materialInstance,
+                     &engine::AssetSystem::RequestMaterialInstance, QObject::tr("(Mesh materials)"));
+    addSlotMaterials(form, context, entity);
 }
 
 template<class Definition, class Parse>
@@ -381,9 +498,9 @@ void buildSkinnedMeshRenderer(PropertyForm& form, editor::EditorContext& context
             }
         }
     });
-    addAssetSlot(form, context, entity, QObject::tr("Material"), engine::CatalogAssetKind::MaterialInstance,
-                  &engine::SkinnedMeshRenderer::materialReference, &engine::SkinnedMeshRenderer::materialInstance,
-                  &engine::AssetSystem::RequestMaterialInstance);
+    addRendererAsset(form, context, entity, QObject::tr("Material"), engine::CatalogAssetKind::MaterialInstance,
+                     &engine::SkinnedMeshRenderer::materialReference, &engine::SkinnedMeshRenderer::materialInstance,
+                     &engine::AssetSystem::RequestMaterialInstance);
     auto* diagnostic = new QLabel;
     diagnostic->setWordWrap(true);
     form.addRow(QObject::tr("Rig compatibility"), diagnostic, [&context, entity, diagnostic] {
@@ -1251,7 +1368,7 @@ void addLuaAssetPicker(PropertyForm& form, editor::EditorContext& context, entt:
     auto& scene = context.scene();
     auto& catalog = context.engine().GetAssets().GetCatalog();
     auto* picker = new editor::AssetPicker(catalog, kind, QObject::tr("None"));
-    picker->setMinimumContentsLength(12);  // as in addAssetSlot: a wider row widens every component's form
+    picker->setMinimumContentsLength(12);  // as in addAssetPicker: a wider row widens every component's form
     QObject::connect(picker, &QComboBox::currentIndexChanged, picker,
                      [&context, &scene, entity, picker, reference, editLabel](const int index) {
         const auto* component = std::as_const(scene).TryGetComponent<Component>(entity);
@@ -1443,12 +1560,7 @@ void addMeshRenderer(editor::EditorContext& context, const entt::entity entity) 
     } else {
         renderer.mesh = assets.RequestMesh(engine::BuiltinAssets::CubeMesh);
     }
-    if (const engine::CatalogEntry* material = catalog.FindPath(engine::BuiltinAssets::DefaultMaterialInstance)) {
-        renderer.materialReference = {material->metadata.id, material->path};
-        renderer.materialInstance = assets.RequestMaterialInstance(renderer.materialReference);
-    } else {
-        renderer.materialInstance = assets.RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance);
-    }
+    // No material of its own: the mesh's slots bring theirs.
     context.scene().AddComponent<engine::MeshRenderer>(entity, std::move(renderer));
 }
 

@@ -239,6 +239,11 @@ int addToScene(editor::EditorContext& context, const QStringList& paths, const s
                 }
             }
             scene.AddComponent<engine::Animator>(entity, std::move(animator));
+        } else if (!mesh.metadata.materials.empty()) {
+            // Imported with its materials: every slot draws with its own.
+            scene.AddComponent<engine::MeshRenderer>(entity, assets.RequestMesh(mesh_reference),
+                                                     engine::AssetHandle<engine::MaterialInstanceAsset>{},
+                                                     mesh_reference, engine::AssetReference{});
         } else {
             scene.AddComponent<engine::MeshRenderer>(entity, assets.RequestMesh(mesh_reference),
                                                      assets.RequestMaterialInstance(material_reference), mesh_reference,

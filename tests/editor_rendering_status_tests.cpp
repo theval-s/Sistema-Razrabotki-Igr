@@ -358,6 +358,195 @@ TEST(EditorRenderingStatus, RealSceneAssetPendingFailureRetryAndRepairFollowCurr
     EXPECT_FALSE(healthy.detail.contains(QStringLiteral("Failed / unavailable")));
 }
 
+TEST(EditorRenderingStatus, PendingStaticMeshDoesNotInventMissingDefaultsOrAssumeUsedSlots) {
+    AssetStatusFixture fixture;
+    ASSERT_TRUE(fixture.directory.isValid());
+    engine::Engine engine({.applicationName = "Pending slots fixture", .taskThreads = 2});
+    editor::RenderingStatus status(engine);
+    ASSERT_TRUE(engine.Initialize());
+    auto& scene = engine.GetScene();
+    engine::MeshRenderer renderer;
+    renderer.mesh = engine.GetSceneAssets().RequestMesh("game/pending.obj");
+    renderer.slotMaterials.resize(4);
+    renderer.slotMaterials[3].materialInstance = {99, 1};
+    renderer.slotMaterials[3].materialReference.path = "game/unknown-used-slot.material-instance.json";
+    const auto entity = scene.CreateEntity("Pending mesh");
+    scene.AddComponent<engine::MeshRenderer>(entity, renderer);
+    const auto pending = status.describe(Ready, false, false, 0);
+    EXPECT_FALSE(pending.warning);
+    EXPECT_EQ(pending.summary, QStringLiteral("Preparing 1 scene renderer asset references"));
+    EXPECT_FALSE(pending.detail.contains(QStringLiteral("Unassigned")));
+    EXPECT_FALSE(pending.detail.contains(QStringLiteral("unknown-used-slot")));
+
+    scene.Modify<engine::MeshRenderer>(entity, [](auto& component) {
+        component.materialInstance = {98, 2};
+        component.materialReference.path = "game/pending-wide.material-instance.json";
+    });
+    const auto wide = status.describe(Ready, false, false, 0);
+    EXPECT_TRUE(wide.warning);
+    EXPECT_TRUE(wide.summary.contains(QStringLiteral("1 scene renderer asset references failed")));
+    EXPECT_TRUE(wide.summary.contains(QStringLiteral("Preparing 1 scene renderer asset references")));
+    EXPECT_TRUE(wide.detail.contains(QStringLiteral("pending-wide")));
+    EXPECT_FALSE(wide.detail.contains(QStringLiteral("unknown-used-slot")));
+}
+
+TEST(EditorRenderingStatus, SkinnedRendererStillRequiresItsSingleMaterial) {
+    engine::Engine engine;
+    editor::RenderingStatus status(engine);
+    engine::SkinnedMeshRenderer renderer;
+    renderer.mesh = {70, 1};
+    renderer.meshReference.path = "game/character.skinnedmesh";
+    engine.GetScene().AddComponent<engine::SkinnedMeshRenderer>(engine.GetScene().CreateEntity("Skinned"), renderer);
+    const auto result = status.describe(Ready, false, false, 0);
+    EXPECT_TRUE(result.warning);
+    EXPECT_EQ(result.summary, QStringLiteral("2 scene renderer asset references failed / unavailable"));
+    EXPECT_TRUE(result.detail.contains(QStringLiteral("Unassigned renderer asset")));
+}
+
+TEST(EditorRenderingStatus, StaticSectionsUseEffectiveSlotsAndPruneOverriddenFailures) {
+    AssetStatusFixture fixture;
+    ASSERT_TRUE(fixture.directory.isValid());
+    struct NativeWindow {
+        HWND value = CreateWindowExW(0, L"STATIC", L"Section material status", WS_OVERLAPPEDWINDOW,
+            0, 0, 64, 64, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        ~NativeWindow() { if (value) DestroyWindow(value); }
+    } window;
+    ASSERT_NE(window.value, nullptr);
+    {
+        engine::RenderingContext probe;
+        try {
+            if (!probe.Initialize({window.value, 64, 64}, false)) GTEST_SKIP() << "Native D3D11 unavailable";
+        } catch (const engine::RenderingException& error) {
+            GTEST_SKIP() << "Native D3D11 unavailable: " << error.what();
+        }
+    }
+    engine::Engine engine({.applicationName = "Section material status fixture", .surface = {window.value, 64, 64},
+                           .taskThreads = 2, .graphicsDebugLayer = false});
+    ASSERT_NE(engine.AddSubsystem<engine::RenderingSubsystem>(), nullptr);
+    editor::RenderingStatus status(engine);
+    ASSERT_TRUE(engine.Initialize());
+    auto& assets = engine.GetSceneAssets();
+    const auto mesh = assets.LoadMesh(engine::BuiltinAssets::CubeMesh);
+    ASSERT_TRUE(mesh);
+    ASSERT_FALSE(mesh->sections.empty());
+    ASSERT_TRUE(assets.LoadMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance));
+    const auto healthy = assets.RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance);
+    ASSERT_EQ(assets.GetState(healthy), engine::AssetState::Ready);
+    // Use real uploaded geometry, varying only public CPU slot metadata. Restore
+    // it before shutdown so duplicated sections never duplicate GPU destruction.
+    struct RestoreMesh {
+        engine::MeshAsset& target;
+        engine::MeshAsset original;
+        ~RestoreMesh() { target = std::move(original); }
+    } restore{*mesh, *mesh};
+    const auto geometry = mesh->sections.front().mesh;
+    mesh->sections = {{geometry, 0}, {geometry, 1}, {geometry, 0}};
+    mesh->materialSlots = {"First", "Second", "Unused"};
+    mesh->materials = {healthy, healthy, {90, 1}};
+    auto& scene = engine.GetScene();
+    const auto entity = scene.CreateEntity("Sectioned mesh");
+    engine::MeshRenderer renderer;
+    renderer.mesh = assets.RequestMesh(engine::BuiltinAssets::CubeMesh);
+    renderer.slotMaterials.resize(3);
+    renderer.slotMaterials[2] = {{91, 1}, {{}, "game/unused-slot.material-instance.json"}};
+    // Path hints alone do not opt into an override (the SectionMaterial predicate).
+    renderer.materialReference.path = "game/path-only-wide.material-instance.json";
+    renderer.slotMaterials[0].materialReference.path = "game/path-only-slot.material-instance.json";
+    scene.AddComponent<engine::MeshRenderer>(entity, renderer);
+    auto result = status.describe(Ready, false, false, 3);
+    EXPECT_FALSE(result.warning);
+    EXPECT_TRUE(result.summary.isEmpty());
+    EXPECT_FALSE(result.detail.contains(QStringLiteral("Unassigned")));
+    EXPECT_FALSE(result.detail.contains(QStringLiteral("unused-slot")));
+
+    const auto pendingMaterial = assets.RequestMaterialInstance("game/pending-slot.material-instance.json");
+    ASSERT_TRUE(pendingMaterial);
+    ASSERT_EQ(assets.GetState(pendingMaterial), engine::AssetState::Loading);
+    scene.Modify<engine::MeshRenderer>(entity, [&](auto& component) {
+        component.slotMaterials[0] = {pendingMaterial, {{}, "game/pending-slot.material-instance.json"}};
+    });
+    result = status.describe(Ready, false, false, 3);
+    EXPECT_FALSE(result.warning);
+    EXPECT_EQ(result.summary, QStringLiteral("Preparing 1 scene renderer asset references"));
+    EXPECT_TRUE(result.detail.contains(QStringLiteral("Preparing: game/pending-slot.material-instance.json")));
+    scene.Modify<engine::MeshRenderer>(entity, [](auto& component) { component.slotMaterials[0] = {}; });
+
+    // A failed default is effective once per entity, even for repeated sections.
+    const engine::AssetHandle<engine::MaterialInstanceAsset> broken{92, 3};
+    mesh->materials[0] = broken;
+    const auto publish = [&](const engine::AssetSystem* source, std::uint32_t generation, const char* cause) {
+        engine.GetEvents().trigger(engine::AssetFailedEvent{0, "game/default-slot.material-instance.json",
+            engine::AssetKind::MaterialInstance, cause, source, broken.slot, generation});
+    };
+    publish(&engine.GetAssets(), broken.generation, "wrong source cause");
+    publish(&assets, broken.generation + 1, "wrong generation cause");
+    publish(&assets, broken.generation, "effective default cause");
+    result = status.describe(Ready, false, false, 3);
+    EXPECT_EQ(result.summary, QStringLiteral("1 scene renderer asset references failed / unavailable"));
+    EXPECT_EQ(result.detail.count(QStringLiteral("effective default cause")), 1);
+    EXPECT_FALSE(result.detail.contains(QStringLiteral("wrong source cause")));
+    EXPECT_FALSE(result.detail.contains(QStringLiteral("wrong generation cause")));
+
+    // A healthy renderer-wide override hides the default, but a named failed
+    // slot still wins over that override and must not silently fall through.
+    scene.Modify<engine::MeshRenderer>(entity, [&](auto& component) {
+        component.materialInstance = healthy;
+        component.materialReference = {};
+        component.slotMaterials[0] = {{93, 4}, {{}, "game/own-slot.material-instance.json"}};
+    });
+    engine.GetEvents().trigger(engine::AssetFailedEvent{0, "game/own-slot.material-instance.json",
+        engine::AssetKind::MaterialInstance, "effective own slot cause", &assets, 93, 4});
+    result = status.describe(Ready, false, false, 3);
+    EXPECT_EQ(result.summary, QStringLiteral("1 scene renderer asset references failed / unavailable"));
+    EXPECT_EQ(result.detail.count(QStringLiteral("effective own slot cause")), 1);
+    EXPECT_FALSE(result.detail.contains(QStringLiteral("effective default cause")));
+    EXPECT_FALSE(result.detail.contains(QStringLiteral("unused-slot")));
+
+    scene.Modify<engine::MeshRenderer>(entity, [](auto& component) { component.slotMaterials[0] = {}; });
+    EXPECT_FALSE(status.describe(Ready, false, false, 3).warning);
+    // Re-selecting the same retired attempt cannot resurrect its pruned detail.
+    scene.Modify<engine::MeshRenderer>(entity, [](auto& component) {
+        component.slotMaterials[0] = {{93, 4}, {{}, "game/own-slot.material-instance.json"}};
+    });
+    EXPECT_FALSE(status.describe(Ready, false, false, 3).detail.contains(QStringLiteral("effective own slot cause")));
+
+    // Both used slots override the failed wide request; unused slot overrides
+    // and failed defaults are equally irrelevant to this entity.
+    scene.Modify<engine::MeshRenderer>(entity, [&](auto& component) {
+        component.materialInstance = {94, 1};
+        component.materialReference.path = "game/overridden-wide.material-instance.json";
+        component.slotMaterials[0] = {healthy, {}};
+        component.slotMaterials[1] = {healthy, {}};
+    });
+    result = status.describe(Ready, false, false, 3);
+    EXPECT_FALSE(result.warning);
+    EXPECT_TRUE(result.summary.isEmpty());
+    EXPECT_FALSE(result.detail.contains(QStringLiteral("overridden-wide")));
+
+    scene.Modify<engine::MeshRenderer>(entity, [](auto& component) {
+        component.slotMaterials[0] = {};
+        component.slotMaterials[1] = {};
+    });
+    result = status.describe(Ready, false, false, 3);
+    EXPECT_EQ(result.summary, QStringLiteral("1 scene renderer asset references failed / unavailable"));
+    EXPECT_EQ(result.detail.count(QStringLiteral("Failed / unavailable:")), 1);
+    EXPECT_TRUE(result.detail.contains(QStringLiteral("overridden-wide")));
+    EXPECT_FALSE(result.detail.contains(QStringLiteral("effective default cause")));
+
+    // UUID-only overrides also block defaults, even without a request handle.
+    scene.Modify<engine::MeshRenderer>(entity, [&](auto& component) {
+        component.slotMaterials[0] = {healthy, {}};
+        component.slotMaterials[1] = {{}, {engine::AssetUuid("22222222-2222-4222-8222-222222222222"),
+            "game/unresolved-slot.material-instance.json"}};
+    });
+    result = status.describe(Ready, false, false, 3);
+    EXPECT_TRUE(result.warning);
+    EXPECT_EQ(result.summary, QStringLiteral("1 scene renderer asset references failed / unavailable"));
+    EXPECT_TRUE(result.detail.contains(QStringLiteral("UUID is not resolved in the catalog")));
+    scene.RemoveComponent<engine::MeshRenderer>(entity);
+    EXPECT_FALSE(status.describe(Ready, false, false, 0).warning);
+}
+
 TEST(EditorRenderingStatus, LogNavigationDrainsStartupErrorAndRemovesAllHidingFilters) {
     QSettings().clear();
     editor::ShortcutRegistry shortcuts;

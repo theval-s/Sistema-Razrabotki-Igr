@@ -122,6 +122,8 @@ if(SRI_BUILD_EDITOR)
         ../editor/modules/content/rig_dialog.hpp
         ../editor/modules/content/rig_workflow.cpp
         ../editor/modules/content/rig_workflow.hpp
+        ../editor/modules/content/thumbnail_cache.cpp
+        ../editor/modules/content/thumbnail_cache.hpp
     )
     target_include_directories(content_browser_drop_tests PRIVATE ../editor/modules/content)
     target_link_libraries(content_browser_drop_tests PRIVATE editor_core GTest::gtest
@@ -490,6 +492,17 @@ add_executable(material_assets_tests material_assets_tests.cpp)
 target_link_libraries(material_assets_tests PRIVATE Engine::Engine GTest::gtest user32)
 set_project_warnings(material_assets_tests)
 set_target_properties(material_assets_tests PROPERTIES FOLDER tests)
+
+add_executable(model_import_tests model_import_tests.cpp)
+target_link_libraries(model_import_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
+set_project_warnings(model_import_tests)
+set_target_properties(model_import_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET model_import_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:model_import_tests> $<TARGET_FILE_DIR:model_import_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME model_import_tests COMMAND model_import_tests)
 
 # CPU import tests use the static engine without exporting internal importers.
 add_executable(mesh_assets_tests mesh_assets_tests.cpp)

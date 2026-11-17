@@ -130,16 +130,55 @@ TEST_F(RenderingResourceWarpFailures, MeshImporterRollsBackVertexBufferWhenIndex
     CpuPayload cpu;
     cpu.kind = CpuPayload::Kind::Mesh;
     cpu.mesh.vertices.resize(3);
+    cpu.mesh.sections.push_back({.vertexCount = 3});
     // Empty indices fail only after the vertex buffer has been registered.
     GpuPayload gpu;
     std::string error;
     EXPECT_FALSE(AssimpMeshImporter{}.UploadGpu({.resources = &manager}, cpu, gpu, error));
-    EXPECT_FALSE(gpu.mesh);
+    EXPECT_TRUE(gpu.meshSections.empty());
     EXPECT_NE(error.find("CreateBuffer"), std::string::npos);
     const auto buffer = manager.CreateVertexBuffer<ugly_utils::VertData>(cpu.mesh.vertices);
     EXPECT_EQ(buffer.id, 0u);
     EXPECT_NE(buffer.generation, 0);
     EXPECT_TRUE(manager.DestroyBuffer(buffer));
+}
+
+TEST_F(RenderingResourceWarpFailures, MeshImporterRollsBackEarlierSectionAndCurrentBuffersBeforeRetry) {
+    CpuPayload cpu;
+    cpu.kind = CpuPayload::Kind::Mesh;
+    cpu.mesh.vertices.resize(6);
+    cpu.mesh.indices = {0, 1, 2};
+    cpu.mesh.sections = {
+        {.vertexCount = 3, .indexCount = 3, .materialSlot = 0},
+        {.firstVertex = 3, .vertexCount = 3, .firstIndex = 3, .materialSlot = 1}
+    };
+    // The first section registers a mesh and two buffers. The second registers
+    // its vertex buffer, then its empty index buffer fails native creation.
+    GpuPayload gpu;
+    std::string error;
+    EXPECT_FALSE(AssimpMeshImporter{}.UploadGpu({.resources = &manager}, cpu, gpu, error));
+    EXPECT_TRUE(gpu.meshSections.empty());
+    EXPECT_NE(error.find("CreateBuffer"), std::string::npos) << error;
+    EXPECT_NE(error.find("Native error:"), std::string::npos) << error;
+    // Fresh-manager slots identify every acquired object. These removals must
+    // already have happened, including the buffers owned by the first mesh.
+    EXPECT_FALSE(manager.DestroyMesh(MeshHandle{0, 0}));
+    for (uint32_t id = 0; id < 3; ++id)
+        EXPECT_FALSE(manager.DestroyBuffer(BufferHandle{id, 0})) << "buffer " << id;
+
+    cpu.mesh.indices.insert(cpu.mesh.indices.end(), {3, 4, 5});
+    cpu.mesh.sections[1].indexCount = 3;
+    ASSERT_TRUE(AssimpMeshImporter{}.UploadGpu({.resources = &manager}, cpu, gpu, error)) << error;
+    ASSERT_EQ(gpu.meshSections.size(), 2u);
+    EXPECT_EQ(gpu.meshSections[0].materialSlot, 0u);
+    EXPECT_EQ(gpu.meshSections[1].materialSlot, 1u);
+    EXPECT_EQ(gpu.meshSections[0].mesh.id, 0u);
+    EXPECT_NE(gpu.meshSections[0].mesh.generation, 0);
+    EXPECT_FALSE(manager.DestroyMesh(MeshHandle{0, 0})); // A retired handle cannot remove the retry.
+    for (const auto& section : gpu.meshSections) {
+        EXPECT_TRUE(manager.DestroyMesh(section.mesh));
+        EXPECT_FALSE(manager.DestroyMesh(section.mesh));
+    }
 }
 
 TEST_F(RenderingResourceWarpFailures, MaterialImporterRollsBackEarlierVariantOnLaterDeviceFailure) {

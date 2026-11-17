@@ -42,6 +42,7 @@ void CopyFileAsset(const std::filesystem::path& from, const std::filesystem::pat
     AssetMetadata original;
     if (std::string ignored; ReadAssetMetadata(from, original, ignored)) {
         metadata.centerOnLoad = original.centerOnLoad;
+        metadata.materials = original.materials;
     }
     if (std::string error; !WriteAssetMetadata(to, metadata, error)) throw std::runtime_error(error);
 }

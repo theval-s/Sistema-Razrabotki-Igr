@@ -524,7 +524,7 @@ fields are errors. There remains **one Script component per object**.
 | `DirectionalLight` | `color` (Vector3 RGB), `intensity` (number), all nonnegative. |
 | `PointLight` | DirectionalLight fields plus positive `range`. |
 | `SpotLight` | PointLight fields plus radian `innerHalfAngle`, `outerHalfAngle`; `0 <= inner <= outer < pi/2`, outer positive. |
-| `MeshRenderer` | `mesh`, `materialInstance` (asset UUID strings on read; catalogued UUID or logical path on write). |
+| `MeshRenderer` | `mesh`, `materialInstance`, `slotMaterials` (asset UUID strings on read; catalogued UUID or logical path on write). An empty `materialInstance` draws each material slot with the mesh's own material. `slotMaterials` is an array with one entry per material slot, from slot 0; a non-empty entry draws that slot instead of `materialInstance`, and an empty one leaves it alone. Omitting `slotMaterials` on write keeps the current ones. |
 | `RigidBody` | `motionType` (`"Static"`, `"Dynamic"`, `"Kinematic"`), positive `mass`, nonnegative `friction`, `restitution` in [0, 1]. |
 | `Collider` | `shape` (`"Cube"`, `"Box"`, `"Sphere"`, `"Capsule"`, `"ConvexMesh"`, `"TriangleMesh"`), `center` (Vector3), positive `halfExtents` (Vector3), positive `radius`, nonnegative `halfHeight`, `showDebug`, `isTrigger` (booleans). |
 | `Script` | `script` (asset UUID/logical path), `enabled` (boolean), `properties` (string-keyed string/finite-number/boolean overrides). A supplied properties table replaces the override map. |
@@ -542,7 +542,9 @@ otherwise valid authored component combinations; see [physics.md](physics.md).
 `target:GetMaterialParameters()` returns `{specularColor = Vector3, shininess = number}`.
 `target:SetMaterialParameters({specularColor = ..., shininess = ...})` patches an
 entity-local material override, using nonnegative values. It does not modify shared
-assets. Get requires a MeshRenderer and ready rendering/material resources.
+assets. Get requires a MeshRenderer and ready rendering/material resources. On a renderer
+without its own material instance both start from the mesh's first slot material, and the
+override then covers every slot.
 
 ### Game UI
 

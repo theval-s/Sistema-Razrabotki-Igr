@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <format>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -13,6 +14,8 @@
 #include <engine/core/PathUtils.hpp>
 #include "../rendering/RenderingFailureUtils.hpp"
 
+#include "ModelSlots.hpp"
+
 namespace engine {
 namespace {
 
@@ -20,8 +23,8 @@ using DirectX::SimpleMath::Vector2;
 using DirectX::SimpleMath::Vector3;
 using DirectX::SimpleMath::Vector4;
 
-// VertData is a flat triangle list with one UV set, so: triangulate, bake the node
-// transforms into the geometry, keep only mesh primitives, and make sure every vertex
+// VertData has one UV set (each slot picks the one its texture samples), so: triangulate, bake
+// the node transforms into the geometry, keep only mesh primitives, and make sure every vertex
 // has a normal (GenSmoothNormals only writes the vertices that came without one).
 //
 // FlipUVs and FlipWindingOrder are not cosmetic, they are what the old hand-written parser
@@ -29,8 +32,7 @@ using DirectX::SimpleMath::Vector4;
 // the first row as V=0, and the parser emitted every fan triangle as (i, 0, i+1), i.e. with
 // the opposite winding to the file. Assimp hands the file's own conventions over unless
 // asked, which rendered every texture upside-down and every surface back-to-front.
-constexpr unsigned int ImportFlags = aiProcess_Triangulate | aiProcess_PreTransformVertices |
-                                     aiProcess_GenSmoothNormals | aiProcess_SortByPType |
+constexpr unsigned int ImportFlags = detail::StaticMeshStructureFlags | aiProcess_GenSmoothNormals |
                                      aiProcess_FlipUVs | aiProcess_FlipWindingOrder |
                                      static_cast<unsigned int>(aiProcess_GenBoundingBoxes);
 
@@ -67,49 +69,65 @@ bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/
         return false;
     }
 
+    // One section per material slot, its vertices contiguous, so each uploads as its own buffers.
+    const detail::ModelSlots model = detail::CollectModelSlots(*scene);
     MeshCpu mesh;
-    bool hasUVs = false;
-    for (const aiMesh* source : std::span(scene->mMeshes, scene->mNumMeshes)) {
-        if (source == nullptr || !source->HasPositions() || !source->HasFaces() ||
-            (source->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) == 0) {
-            continue;
-        }
-        const uint32_t baseVertex = static_cast<uint32_t>(mesh.vertices.size());
-        const aiAABB& box = source->mAABB;
-        const Aabb bounds{Vector3{box.mMin.x, box.mMin.y, box.mMin.z},
-                          Vector3{box.mMax.x, box.mMax.y, box.mMax.z}};
-        if (mesh.vertices.empty()) {
-            mesh.bounds = bounds;
-        } else {
-            mesh.bounds.min = Vector3::Min(mesh.bounds.min, bounds.min);
-            mesh.bounds.max = Vector3::Max(mesh.bounds.max, bounds.max);
-        }
-        hasUVs = hasUVs || source->HasTextureCoords(0);
-        for (uint32_t index = 0; index < source->mNumVertices; ++index) {
-            const aiVector3D& position = source->mVertices[index];
-            const aiVector3D normal = source->HasNormals() ? source->mNormals[index] : aiVector3D{0.0f, 1.0f, 0.0f};
-            const aiVector3D uv = source->HasTextureCoords(0) ? source->mTextureCoords[0][index]
-                                                              : aiVector3D{0.0f, 0.0f, 0.0f};
-            mesh.vertices.push_back(ugly_utils::VertData{
-                .pos = Vector4{position.x, position.y, position.z, 1.0f},
-                .norm = Vector3{normal.x, normal.y, normal.z},
-                .uv = Vector2{uv.x, uv.y}
-            });
-        }
-        for (uint32_t face = 0; face < source->mNumFaces; ++face) {
-            const aiFace& source_face = source->mFaces[face];
-            for (uint32_t index = 0; index < source_face.mNumIndices; ++index) {
-                mesh.indices.push_back(baseVertex + source_face.mIndices[index]);
+    for (uint32_t slot = 0; slot < model.slots.size(); ++slot) {
+        MeshSectionCpu section;
+        section.firstVertex = static_cast<uint32_t>(mesh.vertices.size());
+        section.firstIndex = static_cast<uint32_t>(mesh.indices.size());
+        section.materialSlot = slot;
+        bool missingUvs = false;
+        for (const aiMesh* source : std::span(scene->mMeshes, scene->mNumMeshes)) {
+            if (!detail::IsTriangleMesh(source) || source->mMaterialIndex >= model.slotOfMaterial.size() ||
+                model.slotOfMaterial[source->mMaterialIndex] != static_cast<int>(slot)) {
+                continue;
+            }
+            const uint32_t baseVertex = static_cast<uint32_t>(mesh.vertices.size());
+            const aiAABB& box = source->mAABB;
+            const Aabb bounds{Vector3{box.mMin.x, box.mMin.y, box.mMin.z},
+                              Vector3{box.mMax.x, box.mMax.y, box.mMax.z}};
+            if (mesh.vertices.empty()) {
+                mesh.bounds = bounds;
+            } else {
+                mesh.bounds.min = Vector3::Min(mesh.bounds.min, bounds.min);
+                mesh.bounds.max = Vector3::Max(mesh.bounds.max, bounds.max);
+            }
+            const int channel = detail::UvChannelFor(*source, model.slots[slot].texture.uvChannel);
+            missingUvs = missingUvs || channel < 0;
+            for (uint32_t index = 0; index < source->mNumVertices; ++index) {
+                const aiVector3D& position = source->mVertices[index];
+                const aiVector3D normal = source->HasNormals() ? source->mNormals[index] : aiVector3D{0.0f, 1.0f, 0.0f};
+                const aiVector3D uv = channel >= 0 ? source->mTextureCoords[channel][index] : aiVector3D{};
+                mesh.vertices.push_back(ugly_utils::VertData{
+                    .pos = Vector4{position.x, position.y, position.z, 1.0f},
+                    .norm = Vector3{normal.x, normal.y, normal.z},
+                    .uv = Vector2{uv.x, uv.y}
+                });
+            }
+            for (uint32_t face = 0; face < source->mNumFaces; ++face) {
+                const aiFace& source_face = source->mFaces[face];
+                for (uint32_t index = 0; index < source_face.mNumIndices; ++index) {
+                    mesh.indices.push_back(baseVertex + source_face.mIndices[index]);
+                }
             }
         }
+        section.vertexCount = static_cast<uint32_t>(mesh.vertices.size()) - section.firstVertex;
+        section.indexCount = static_cast<uint32_t>(mesh.indices.size()) - section.firstIndex;
+        if (missingUvs) {
+            log::Assets().warn("'{}': material slot '{}' has no UVs, its textures will not map",
+                               ToUtf8(path), model.slots[slot].name);
+        }
+        if (model.slots[slot].texture.transformed) {
+            log::Assets().warn("'{}': material slot '{}' has a texture transform, which is ignored", ToUtf8(path),
+                               model.slots[slot].name);
+        }
+        mesh.sections.push_back(section);
+        mesh.materialSlots.push_back(model.slots[slot].name);
     }
 
     if (mesh.vertices.empty() || mesh.indices.empty()) {
         error = std::format("Assimp read '{}' but it contains no triangles", ToUtf8(path));
-        return false;
-    }
-    if (!hasUVs) {
-        error = std::format("'{}' has no UV channel, the renderer needs one", ToUtf8(path));
         return false;
     }
     if (desc.centerOnLoad) {
@@ -149,19 +167,43 @@ bool AssimpMeshImporter::UploadGpu(const UploadTransfer& transfer, const CpuPayl
         return false;
     }
 
+    std::vector<MeshSection> sections;
     BufferHandle vertexBuffer, indexBuffer;
+    MeshHandle pendingMesh;
+    const auto rollback = [&] {
+        if (pendingMesh) transfer.resources->DestroyMesh(pendingMesh);
+        if (indexBuffer) transfer.resources->DestroyBuffer(indexBuffer);
+        if (vertexBuffer) transfer.resources->DestroyBuffer(vertexBuffer);
+        for (const MeshSection& section : sections) transfer.resources->DestroyMesh(section.mesh);
+    };
     try {
-        vertexBuffer = transfer.resources->CreateVertexBuffer<ugly_utils::VertData>(payload.mesh.vertices);
-        indexBuffer = transfer.resources->CreateIndexBuffer<uint32_t>(payload.mesh.indices);
+        sections.reserve(payload.mesh.sections.size());
+        for (const MeshSectionCpu& section : payload.mesh.sections) {
+            const std::span vertices(payload.mesh.vertices.data() + section.firstVertex, section.vertexCount);
+            std::vector<uint32_t> indices(payload.mesh.indices.begin() + section.firstIndex,
+                                          payload.mesh.indices.begin() + section.firstIndex + section.indexCount);
+            for (uint32_t& index : indices) index -= section.firstVertex;
 
-        VertexLayout layout;
-        layout.Add("POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0);
-        layout.Add("NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 16);
-        layout.Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 16 + 12);
+            vertexBuffer = transfer.resources->CreateVertexBuffer<ugly_utils::VertData>(vertices);
+            indexBuffer = transfer.resources->CreateIndexBuffer<uint32_t>(indices);
+            if (!vertexBuffer || !indexBuffer)
+                throw std::runtime_error("AssimpMeshImporter: buffer creation failed");
 
-        result.mesh = transfer.resources->CreateMesh(
-            vertexBuffer, indexBuffer, std::move(layout),
-            static_cast<uint32_t>(payload.mesh.indices.size()));
+            VertexLayout layout;
+            layout.Add("POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0);
+            layout.Add("NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 16);
+            layout.Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 16 + 12);
+            pendingMesh = transfer.resources->CreateMesh(vertexBuffer, indexBuffer, std::move(layout),
+                                                        section.indexCount);
+            if (!pendingMesh)
+                throw std::runtime_error("AssimpMeshImporter: mesh registration failed");
+            // The registered mesh now owns its buffers; rollback must destroy it only once.
+            vertexBuffer = {};
+            indexBuffer = {};
+            sections.push_back({pendingMesh, section.materialSlot});
+            pendingMesh = {};
+        }
+        result.meshSections = std::move(sections);
         return true;
     } catch (const RenderingException& e) {
         error = rendering_failure::Format(e.GetFailure());
@@ -170,8 +212,7 @@ bool AssimpMeshImporter::UploadGpu(const UploadTransfer& transfer, const CpuPayl
     } catch (...) {
         error = "AssimpMeshImporter: unknown upload failure";
     }
-    transfer.resources->DestroyBuffer(indexBuffer);
-    transfer.resources->DestroyBuffer(vertexBuffer);
+    rollback();
     return false;
 }
 

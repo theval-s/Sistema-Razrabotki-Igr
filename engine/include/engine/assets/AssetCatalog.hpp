@@ -27,7 +27,12 @@ struct AssetMetadata {
     AssetUuid id;
     CatalogAssetKind kind = CatalogAssetKind::Mesh;
     bool centerOnLoad = false; // mesh import setting
+    // Mesh: the default material instance of each material slot; nothing for the engine default.
+    std::vector<std::optional<AssetReference>> materials;
 };
+
+// Upper bound on a mesh's material slots in its metadata.
+inline constexpr std::size_t MaxMeshMaterialSlots = 1024;
 
 struct CatalogEntry {
     AssetMetadata metadata;

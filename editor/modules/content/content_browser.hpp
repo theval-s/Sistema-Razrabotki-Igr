@@ -111,6 +111,8 @@ private:
     QString importAnimatedRig(const QString& source = {}, const QString& folder = {});
     void reimportAnimatedRig(const QString& path);
     void duplicateAnimatedRig(const QString& path);
+    /// Shows the Extract Materials dialog for a model in the project.
+    void extractMaterials(const QString& model);
     /// Picks files to import.
     void importAssets();
     void newMaterial();
@@ -167,6 +169,7 @@ private:
     QAction* reimport_rig_ = nullptr;
     QAction* duplicate_rig_ = nullptr;
     QAction* instance_from_texture_ = nullptr;
+    QAction* extract_materials_ = nullptr;
 };
 
 }  // namespace content

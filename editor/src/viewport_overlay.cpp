@@ -223,12 +223,13 @@ void ViewportOverlaySubsystem::LateUpdate(const engine::FrameContext&) {
         if (!scene.IsValid(entity)) continue;
         drawLights(world.debugDraw, scene, entity);
         if (const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(entity)) {
-            const auto mesh = assets.Peek(renderer->mesh);
-            const auto material = assets.Peek(renderer->materialInstance);
-            if (mesh && material) {
+            if (const auto mesh = assets.Peek(renderer->mesh)) {
                 const auto override = GetEngine().GetEntityMaterialOverride(entity);
-                world.selectedSceneItems.push_back({scene.GetWorldMatrix(entity), mesh->mesh,
-                                                    override ? override : material->instance});
+                for (const auto& section : mesh->sections) {
+                    if (const auto material = engine::SectionMaterial(assets, *renderer, *mesh, section))
+                        world.selectedSceneItems.push_back({scene.GetWorldMatrix(entity), section.mesh,
+                                                            override ? override : material->instance});
+                }
             }
         }
         if (const auto* renderer = scene.TryGetComponent<engine::SkinnedMeshRenderer>(entity)) {

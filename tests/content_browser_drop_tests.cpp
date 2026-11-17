@@ -1,6 +1,9 @@
 #include "content_browser.hpp"
+#include "asset_dialogs.hpp"
 #include "asset_filter_model.hpp"
 #include "asset_operations.hpp"
+#include "gltf_fixture.hpp"
+#include "thumbnail_cache.hpp"
 
 #include <editor/editor_context.hpp>
 #include <editor/paths.hpp>
@@ -8,6 +11,8 @@
 #include <engine/ai/BehaviorTreeSource.hpp>
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
+#include <engine/assets/AssetSystem.hpp>
+#include <engine/assets/MaterialDefinition.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/Uuid.hpp>
 #include <engine/engine.hpp>
@@ -20,6 +25,9 @@
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QFile>
+#include <QFileSystemModel>
+#include <QIcon>
+#include <QImage>
 #include <QListView>
 #include <QMainWindow>
 #include <QMimeData>
@@ -28,8 +36,13 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QToolButton>
+#include <QTreeWidget>
 #include <QUrl>
 #include <gtest/gtest.h>
+
+#include <filesystem>
+#include <format>
+#include <string>
 
 namespace {
 
@@ -172,6 +185,144 @@ TEST_F(ContentBrowserDrop, NewBehaviorTreeComesWithAnActionToRun) {
     engine::AssetCatalog catalog;
     ASSERT_TRUE(catalog.Scan(project.ContentDir(), engine_root, error)) << error;
     EXPECT_TRUE(engine::ai::ValidateTreeSource(tree, catalog, error)) << error;
+}
+
+TEST_F(ContentBrowserDrop, ThumbnailsAreReadInTheBackgroundOncePerChange) {
+    const QString folder = content::cleanPath(editor::toQString(project.ContentDir()));
+    const QString brick = folder + "/brick.png";
+    QImage image(512, 256, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    ASSERT_TRUE(image.save(brick));
+    const QString broken = folder + "/broken.png";
+    QFile file(broken);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("not an image");
+    file.close();
+
+    content::ThumbnailCache cache(64);
+    QSignalSpy ready(&cache, &content::ThumbnailCache::ready);
+    const QDateTime modified = QFileInfo(brick).lastModified();
+    EXPECT_TRUE(cache.icon(brick, modified).isNull());
+    ASSERT_TRUE(ready.wait());
+    const QIcon icon = cache.icon(brick, modified);
+    ASSERT_FALSE(icon.isNull());
+    EXPECT_EQ(icon.availableSizes().value(0), QSize(64, 64));
+    const QImage preview = icon.pixmap(64, 64).toImage();
+    EXPECT_EQ(preview.pixelColor(32, 32), QColor(Qt::red));
+    EXPECT_EQ(preview.pixelColor(32, 8).alpha(), 0) << "letterboxed";
+    EXPECT_EQ(cache.imageSize(brick), QSize(512, 256));
+
+    // What can't be read has no preview, and isn't read again.
+    EXPECT_TRUE(cache.icon(broken, modified).isNull());
+    ASSERT_TRUE(ready.wait());
+    EXPECT_TRUE(cache.icon(broken, modified).isNull());
+    EXPECT_FALSE(cache.imageSize(broken).isValid());
+    EXPECT_FALSE(ready.wait(200));
+
+    // A changed file is read again.
+    EXPECT_TRUE(cache.icon(brick, modified.addSecs(1)).isNull());
+    ASSERT_TRUE(ready.wait());
+    EXPECT_FALSE(cache.icon(brick, modified.addSecs(1)).isNull());
+}
+
+TEST_F(ContentBrowserDrop, TexturesShowTheirPreviewAndSize) {
+    const QString folder = content::cleanPath(editor::toQString(project.ContentDir()));
+    QImage image(512, 256, QImage::Format_RGB32);
+    image.fill(Qt::blue);
+    ASSERT_TRUE(image.save(folder + "/tile.png"));
+
+    QFileSystemModel files;
+    files.setRootPath(folder);
+    content::AssetFilterModel model(files, content::AssetFilterModel::Mode::Contents);
+    model.setFolder(files.index(folder));
+    const auto tile = [&] {
+        const QModelIndex parent = model.mapFromSource(files.index(folder));
+        for (int row = 0; row < model.rowCount(parent); ++row) {
+            if (const QModelIndex index = model.index(row, 0, parent); index.data().toString() == "tile.png") return index;
+        }
+        return QModelIndex();
+    };
+    ASSERT_TRUE(QTest::qWaitFor([&] { return tile().isValid(); }));
+    const auto preview_size = [&] { return tile().data(Qt::DecorationRole).value<QIcon>().availableSizes().value(0); };
+    EXPECT_NE(preview_size(), QSize(192, 192)) << "the kind's icon until the image is read";
+    ASSERT_TRUE(QTest::qWaitFor([&] { return preview_size() == QSize(192, 192); }));
+    EXPECT_EQ(tile().data(Qt::ToolTipRole).toString(), QString("tile.png\n512 %1 256").arg(QChar(0x00d7)));
+}
+
+TEST_F(ContentBrowserDrop, ImportedModelGetsAMaterialPerSlot) {
+    test::GltfFixture model;
+    const int gold = model.AddImageBytes("Gold", "image/png", std::string("\x89PNG\r\n\x1a\n", 8));
+    model.AddMaterial("Gold", std::format(R"("pbrMetallicRoughness":{{"baseColorTexture":{{"index":{}}}}})", gold));
+    model.AddMaterial("Gem");
+    model.AddPrimitive({{0, 0, 0, 1, 0, 0, 0, 1, 0}, {{0, 0, 1, 0, 0, 1}}, 0});
+    model.AddPrimitive({{0, 0, 1, 1, 0, 1, 0, 1, 1}, {{0, 0, 1, 0, 0, 1}}, 1});
+    const QString source = directory.filePath("token.glb");
+    model.WriteGlb(editor::toPath(source));
+    const QString content = content::cleanPath(editor::toQString(project.ContentDir()));
+    std::string error;
+    engine::AssetCatalog catalog;
+    ASSERT_TRUE(catalog.Scan(project.ContentDir(), engine::AssetPathResolver::GetRoot() / "engine", error)) << error;
+
+    content::ImportModelDialog dialog(catalog, source, content, &window);
+    auto* slots_list = dialog.findChild<QTreeWidget*>();
+    ASSERT_NE(slots_list, nullptr);
+    ASSERT_EQ(slots_list->topLevelItemCount(), 2);
+    EXPECT_EQ(slots_list->topLevelItem(0)->text(0), "Gold");
+    EXPECT_EQ(slots_list->topLevelItem(0)->text(1), "Gold.png");
+    EXPECT_EQ(slots_list->topLevelItem(1)->text(1), "None");
+    const content::ModelImport import = dialog.result();
+    EXPECT_EQ(import.name, "token");
+    ASSERT_TRUE(import.materials.baseMaterial);
+    EXPECT_EQ(import.materials.baseMaterial->path, "engine/primitives/default.material.json");
+    EXPECT_TRUE(import.materials.fallbackTexture.empty()) << "the model has a texture of its own";
+
+    content::AssetOperations operations(context, &window);
+    const QString folder = operations.importModel(import, content);
+    ASSERT_EQ(folder, content + "/token");
+    engine::AssetMetadata mesh;
+    ASSERT_TRUE(engine::ReadAssetMetadata(editor::toPath(folder + "/model.glb"), mesh, error)) << error;
+    ASSERT_EQ(mesh.materials.size(), 2u);
+    EXPECT_EQ(mesh.materials[0]->path, "game/token/materials/Gold.material-instance.json");
+    EXPECT_TRUE(QFile::exists(folder + "/textures/Gold.png"));
+    EXPECT_NE(context.engine().GetSceneAssets().GetCatalog().Find(mesh.materials[1]->id,
+                                                                  engine::CatalogAssetKind::MaterialInstance),
+              nullptr) << "rescanned";
+}
+
+TEST_F(ContentBrowserDrop, ExtractMaterialsGivesALooseModelItsOwn) {
+    test::GltfFixture model;
+    model.AddMaterial("Stone");
+    model.AddPrimitive({{0, 0, 0, 1, 0, 0, 0, 1, 0}, {{0, 0, 1, 0, 0, 1}}, 0});
+    const std::filesystem::path statues = project.ContentDir() / "statues";
+    std::filesystem::create_directories(statues);
+    model.WriteGlb(statues / "Lion.glb");
+    const QByteArray paint("not decoded");
+    QFile image(editor::toQString(statues / "Lion.png"));
+    ASSERT_TRUE(image.open(QIODevice::WriteOnly));
+    ASSERT_EQ(image.write(paint), paint.size());
+    image.close();
+    std::string error;
+    ASSERT_TRUE(engine::WriteAssetMetadata(statues / "Lion.glb", {engine::NewUuid(), engine::CatalogAssetKind::Mesh},
+                                           error)) << error;
+    ASSERT_TRUE(engine::WriteAssetMetadata(statues / "Lion.png",
+                                           {engine::NewUuid(), engine::CatalogAssetKind::Texture}, error)) << error;
+    engine::AssetCatalog catalog;
+    ASSERT_TRUE(catalog.Scan(project.ContentDir(), engine::AssetPathResolver::GetRoot() / "engine", error)) << error;
+
+    const QString file = editor::toQString(statues / "Lion.glb");
+    content::ExtractMaterialsDialog dialog(catalog, file, &window);
+    const engine::ModelMaterialSettings settings = dialog.result();
+    // No texture of its own, so the image beside it is offered.
+    EXPECT_EQ(settings.fallbackTexture, statues / "Lion.png");
+    content::AssetOperations operations(context, &window);
+    ASSERT_TRUE(operations.extractMaterials(file, settings));
+
+    engine::MaterialInstanceDefinition stone;
+    std::string text;
+    ASSERT_TRUE(engine::ReadTextFile(statues / "Lion/materials/Stone.material-instance.json", text, error)) << error;
+    ASSERT_TRUE(engine::ParseMaterialInstanceDefinition(text, stone, error)) << error;
+    EXPECT_EQ(stone.parameters.albedoTexture, "game/statues/Lion.png") << "used where it is";
+    EXPECT_FALSE(std::filesystem::exists(statues / "Lion/textures"));
 }
 
 }  // namespace

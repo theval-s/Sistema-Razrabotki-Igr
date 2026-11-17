@@ -14,4 +14,6 @@ sri_add_editor_module(editor_module_content
     rig_dialog.hpp
     rig_workflow.cpp
     rig_workflow.hpp
+    thumbnail_cache.cpp
+    thumbnail_cache.hpp
 )
