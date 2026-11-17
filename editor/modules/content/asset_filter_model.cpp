@@ -9,6 +9,7 @@
 #include <editor/paths.hpp>
 
 #include "asset_operations.hpp"
+#include "thumbnail_cache.hpp"
 
 namespace content {
 
@@ -27,9 +28,21 @@ AssetFilterModel::AssetFilterModel(QFileSystemModel& files, const Mode mode, QOb
     setSourceModel(&files);
     setDynamicSortFilter(true);
     sort(0);
+    if (mode == Mode::Contents) {
+        thumbnails_ = new ThumbnailCache(192, this);
+        connect(thumbnails_, &ThumbnailCache::ready, this, [this](const QString& path) {
+            const QModelIndex index = mapFromSource(files_.index(path));
+            if (index.isValid()) {
+                emit dataChanged(index, index, {Qt::DecorationRole, Qt::ToolTipRole});
+            }
+        });
+    }
 }
 
 void AssetFilterModel::setFolder(const QModelIndex& folder) {
+    if (thumbnails_ != nullptr) {
+        thumbnails_->cancelPending();
+    }
     beginFilterChange();
     folder_ = folder;
     endFilterChange(Direction::Rows);
@@ -69,12 +82,26 @@ QStringList AssetFilterModel::droppedPaths(const QMimeData* data) {
 
 QVariant AssetFilterModel::data(const QModelIndex& index, const int role) const {
     if (role == Qt::DecorationRole && index.column() == 0) {
-        if (const auto kind = kindOf(files_, mapToSource(index))) {
+        const QModelIndex source = mapToSource(index);
+        if (const auto kind = kindOf(files_, source)) {
+            if (*kind == engine::CatalogAssetKind::Texture && thumbnails_ != nullptr) {
+                if (QIcon preview = thumbnails_->icon(files_.filePath(source), files_.lastModified(source));
+                    !preview.isNull()) {
+                    return preview;
+                }
+            }
             return editor::assetIcon(*kind);
         }
     }
     if (role == Qt::ToolTipRole && index.column() == 0) {
-        return files_.fileName(mapToSource(index));  // icon views elide long names
+        const QModelIndex source = mapToSource(index);
+        QString tip = files_.fileName(source);  // icon views elide long names
+        if (thumbnails_ != nullptr) {
+            if (const QSize size = thumbnails_->imageSize(files_.filePath(source)); size.isValid()) {
+                tip += QStringLiteral("\n%1 \u00d7 %2").arg(size.width()).arg(size.height());
+            }
+        }
+        return tip;
     }
     return QSortFilterProxyModel::data(index, role);
 }

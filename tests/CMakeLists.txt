@@ -101,6 +101,8 @@ if(SRI_BUILD_EDITOR)
         ../editor/modules/content/asset_dialogs.cpp
         ../editor/modules/content/asset_dialogs.hpp
         ../editor/modules/content/scene_placement.cpp
+        ../editor/modules/content/thumbnail_cache.cpp
+        ../editor/modules/content/thumbnail_cache.hpp
     )
     target_include_directories(content_browser_drop_tests PRIVATE ../editor/modules/content)
     target_link_libraries(content_browser_drop_tests PRIVATE editor_core GTest::gtest

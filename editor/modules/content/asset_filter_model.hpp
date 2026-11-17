@@ -15,7 +15,9 @@ class QMimeData;
 
 namespace content {
 
-/// To not show .meta, folders first, asset icons by kind, and filtered by name and kind.
+class ThumbnailCache;
+
+/// To not show .meta, folders first, asset icons by kind (previews for textures), and filtered by name and kind.
 ///
 /// Renames and drops = signals, not QFileSystemModel, because we need .meta files :(
 /// Drags carry their own MIME type, not file URLs, so no drag out, but yes drag in
@@ -74,6 +76,7 @@ private:
     std::optional<engine::CatalogAssetKind> kind_;
     QCollator collator_;
     bool writable_ = false;
+    ThumbnailCache* thumbnails_ = nullptr;  // Contents mode only
 };
 
 }  // namespace content

@@ -3,6 +3,7 @@
 #include "asset_filter_model.hpp"
 #include "asset_operations.hpp"
 #include "gltf_fixture.hpp"
+#include "thumbnail_cache.hpp"
 
 #include <editor/editor_context.hpp>
 #include <editor/paths.hpp>
@@ -24,6 +25,9 @@
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QFile>
+#include <QFileSystemModel>
+#include <QIcon>
+#include <QImage>
 #include <QListView>
 #include <QMainWindow>
 #include <QMimeData>
@@ -181,6 +185,68 @@ TEST_F(ContentBrowserDrop, NewBehaviorTreeComesWithAnActionToRun) {
     engine::AssetCatalog catalog;
     ASSERT_TRUE(catalog.Scan(project.ContentDir(), engine_root, error)) << error;
     EXPECT_TRUE(engine::ai::ValidateTreeSource(tree, catalog, error)) << error;
+}
+
+TEST_F(ContentBrowserDrop, ThumbnailsAreReadInTheBackgroundOncePerChange) {
+    const QString folder = content::cleanPath(editor::toQString(project.ContentDir()));
+    const QString brick = folder + "/brick.png";
+    QImage image(512, 256, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    ASSERT_TRUE(image.save(brick));
+    const QString broken = folder + "/broken.png";
+    QFile file(broken);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("not an image");
+    file.close();
+
+    content::ThumbnailCache cache(64);
+    QSignalSpy ready(&cache, &content::ThumbnailCache::ready);
+    const QDateTime modified = QFileInfo(brick).lastModified();
+    EXPECT_TRUE(cache.icon(brick, modified).isNull());
+    ASSERT_TRUE(ready.wait());
+    const QIcon icon = cache.icon(brick, modified);
+    ASSERT_FALSE(icon.isNull());
+    EXPECT_EQ(icon.availableSizes().value(0), QSize(64, 64));
+    const QImage preview = icon.pixmap(64, 64).toImage();
+    EXPECT_EQ(preview.pixelColor(32, 32), QColor(Qt::red));
+    EXPECT_EQ(preview.pixelColor(32, 8).alpha(), 0) << "letterboxed";
+    EXPECT_EQ(cache.imageSize(brick), QSize(512, 256));
+
+    // What can't be read has no preview, and isn't read again.
+    EXPECT_TRUE(cache.icon(broken, modified).isNull());
+    ASSERT_TRUE(ready.wait());
+    EXPECT_TRUE(cache.icon(broken, modified).isNull());
+    EXPECT_FALSE(cache.imageSize(broken).isValid());
+    EXPECT_FALSE(ready.wait(200));
+
+    // A changed file is read again.
+    EXPECT_TRUE(cache.icon(brick, modified.addSecs(1)).isNull());
+    ASSERT_TRUE(ready.wait());
+    EXPECT_FALSE(cache.icon(brick, modified.addSecs(1)).isNull());
+}
+
+TEST_F(ContentBrowserDrop, TexturesShowTheirPreviewAndSize) {
+    const QString folder = content::cleanPath(editor::toQString(project.ContentDir()));
+    QImage image(512, 256, QImage::Format_RGB32);
+    image.fill(Qt::blue);
+    ASSERT_TRUE(image.save(folder + "/tile.png"));
+
+    QFileSystemModel files;
+    files.setRootPath(folder);
+    content::AssetFilterModel model(files, content::AssetFilterModel::Mode::Contents);
+    model.setFolder(files.index(folder));
+    const auto tile = [&] {
+        const QModelIndex parent = model.mapFromSource(files.index(folder));
+        for (int row = 0; row < model.rowCount(parent); ++row) {
+            if (const QModelIndex index = model.index(row, 0, parent); index.data().toString() == "tile.png") return index;
+        }
+        return QModelIndex();
+    };
+    ASSERT_TRUE(QTest::qWaitFor([&] { return tile().isValid(); }));
+    const auto preview_size = [&] { return tile().data(Qt::DecorationRole).value<QIcon>().availableSizes().value(0); };
+    EXPECT_NE(preview_size(), QSize(192, 192)) << "the kind's icon until the image is read";
+    ASSERT_TRUE(QTest::qWaitFor([&] { return preview_size() == QSize(192, 192); }));
+    EXPECT_EQ(tile().data(Qt::ToolTipRole).toString(), QString("tile.png\n512 %1 256").arg(QChar(0x00d7)));
 }
 
 TEST_F(ContentBrowserDrop, ImportedModelGetsAMaterialPerSlot) {
