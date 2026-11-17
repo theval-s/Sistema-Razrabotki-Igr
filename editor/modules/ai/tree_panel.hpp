@@ -1,9 +1,12 @@
 #pragma once
 
+#include <QPointer>
 #include <QWidget>
 
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <string>
 
 #include "tree_graph.hpp"
 
@@ -17,39 +20,79 @@ class BasicGraphicsScene;
 class GraphicsView;
 }  // namespace QtNodes
 
-namespace editor {
-class EditorContext;
+namespace engine {
+class AssetCatalog;
 }
 
 namespace behavior {
 
-/// Shows one .bt.lua tree as a graph, with the selected node's details beside it, and reloads
-/// it whenever the file changes. Viewing only for now.
+/// Edits one .bt.lua tree as a graph, with the selected node's details beside it. Saving rewrites
+/// the file in the editor's own layout. When the file changes on disk, the panel reloads it.
 class TreePanel : public QWidget {
     Q_OBJECT
 
 public:
-    explicit TreePanel(editor::EditorContext& context, QWidget* parent = nullptr);
+    /// Finds scripts in `catalog`, which must outlive the panel.
+    explicit TreePanel(const engine::AssetCatalog& catalog, QWidget* parent = nullptr);
     ~TreePanel() override;
 
-    /// Shows the tree in `source`. One that can't be read leaves the panel saying why.
+    /// Shows the tree in `source`, after offering to save the open one. One that can't be read
+    /// leaves the panel saying why.
     void open(const std::filesystem::path& source);
+    /// Offers to save unsaved changes. False if the user cancelled.
+    bool maybeSave(QWidget* parent);
+    /// Writes the tree to its file, after a warning if that loses text the editor didn't write.
+    bool save();
+
+protected:
+    bool event(QEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
 
 private:
+    /// Reads the file again, dropping unsaved changes.
     void reload();
+    /// Reloads a file that changed on disk, after asking if that loses unsaved changes.
+    void fileChanged();
+    /// Editors that save by replacing the file drop it from the watcher.
+    void watch();
+    /// The title, problems and actions, after any change.
+    void updateState();
     void fit();
+    void arrange();
+    /// Rebuilds the details once control returns to the event loop, so a field can ask for it.
+    void scheduleDetails();
     void showDetails();
+    void showEditError(const QString& error);
+    void showMenu(const QPoint& position);
     void openScript(TreeGraph::NodeId id);
+    /// Runs `change` as one undoable step; it returns false if it changed nothing.
+    bool edit(const QString& text, const std::function<bool()>& change);
+    void addNode(engine::ai::NodeKind kind, QPointF position);
+    void addChild(TreeGraph::NodeId parent, engine::ai::NodeKind kind);
+    [[nodiscard]] TreeGraph::NodeId selectedNode() const;
+    void select(TreeGraph::NodeId id);
 
-    editor::EditorContext& context_;
+    const engine::AssetCatalog& catalog_;
     std::filesystem::path source_;
+    std::string disk_;      // the file as last read or saved
+    std::string baseline_;  // the graph as last read or saved, written out: an edited one differs
+    QString load_error_;
+    bool dirty_ = false;
+    bool asking_ = false;
+    bool details_pending_ = false;
     TreeGraph graph_;
     std::unique_ptr<QtNodes::BasicGraphicsScene> scene_;  // after graph_, which it draws
     QtNodes::GraphicsView* view_ = nullptr;
     QLabel* title_ = nullptr;
     QLabel* problems_ = nullptr;
     QFormLayout* details_ = nullptr;
+    TreeGraph::NodeId details_node_ = QtNodes::InvalidNodeId;
+    QPointer<QLabel> edit_error_;
+    QPointer<QLabel> node_problems_;
     QFileSystemWatcher* watcher_ = nullptr;
+    QAction* save_ = nullptr;
+    QAction* undo_ = nullptr;
+    QAction* redo_ = nullptr;
     QAction* reload_ = nullptr;
     QAction* arrange_ = nullptr;
     QAction* fit_ = nullptr;

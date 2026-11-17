@@ -203,6 +203,21 @@ bool EditorContext::openAsset(const std::filesystem::path& source) {
     return true;
 }
 
+void EditorContext::setUnsavedCheck(const QString& id, UnsavedCheck check) {
+    if (check) {
+        unsaved_checks_[id] = std::move(check);
+    } else {
+        unsaved_checks_.erase(id);
+    }
+}
+
+bool EditorContext::maybeSaveAll(QWidget* parent) {
+    if (!sceneDocument().maybeSave(parent)) {
+        return false;
+    }
+    return std::ranges::all_of(unsaved_checks_, [parent](const auto& entry) { return entry.second(parent); });
+}
+
 void EditorContext::placeNewPanels() {
     const auto placed = [](const Panel& panel) { return panel.dock != nullptr && panel.dock->dockAreaWidget() != nullptr; };
     for (const Panel& panel : panels_) {

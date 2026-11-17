@@ -210,7 +210,7 @@ namespace {
                     QObject::tr("The project has no startup scene. Set one first."));
                 return;
             }
-            if (!context_->sceneDocument().maybeSave(window)) return;  // sri-build reads files from disk
+            if (!context_->maybeSaveAll(window)) return;  // sri-build reads files from disk
 
             BuildDialog dialog(project, loadSettings(project), window);
             if (dialog.exec() != QDialog::Accepted) return;

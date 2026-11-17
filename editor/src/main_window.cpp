@@ -173,7 +173,7 @@ MainWindow::~MainWindow() {
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     context_->playSession().stop();
-    if (!context_->sceneDocument().maybeSave(this)) {
+    if (!context_->maybeSaveAll(this)) {
         relaunch_project_.clear();
         event->ignore();
         return;

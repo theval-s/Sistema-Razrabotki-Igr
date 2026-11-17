@@ -1,5 +1,7 @@
 sri_add_editor_module(editor_module_ai
     ai_module.cpp
+    parameter_editor.cpp
+    parameter_editor.hpp
     tree_graph.cpp
     tree_graph.hpp
     tree_panel.cpp

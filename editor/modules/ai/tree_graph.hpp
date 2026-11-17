@@ -4,7 +4,9 @@
 #include <QSize>
 #include <QStringList>
 
+#include <array>
 #include <map>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -22,8 +24,17 @@ class AbstractNodeGeometry;
 
 namespace behavior {
 
+/// Every kind of node, in menu order.
+inline constexpr std::array NodeKinds{engine::ai::NodeKind::Sequence, engine::ai::NodeKind::Selector,
+                                      engine::ai::NodeKind::Condition, engine::ai::NodeKind::Action};
+
+/// Conditions and actions run a script and have no children.
+[[nodiscard]] constexpr bool isLeaf(const engine::ai::NodeKind kind) {
+    return kind == engine::ai::NodeKind::Condition || kind == engine::ai::NodeKind::Action;
+}
+
 /// A .bt.lua tree as a QtNodes graph, drawn top-down: each composite's out port connects to its
-/// children, numbered in the order they run. Read-only for now; nodes can only be moved.
+/// children, which run left to right. Every change re-checks the tree as the runtime would load it.
 class TreeGraph final : public QtNodes::AbstractGraphModel {
     Q_OBJECT
 
@@ -32,21 +43,54 @@ public:
     using ConnectionId = QtNodes::ConnectionId;
 
     struct Node {
-        engine::ai::NodeSource source;  // `children` as the file lists them, drawn or not
-        std::vector<NodeId> children;   // the drawn ones, in run order
+        engine::ai::NodeSource source;  // its `children` stay empty: see below
+        std::vector<NodeId> children;   // in run order, which is left to right
         NodeId parent = QtNodes::InvalidNodeId;
         QString script;                 // the script's catalog path; empty when it isn't found
-        QStringList problems;           // what would stop the tree from running
+        QStringList fileProblems;       // file contents the graph can't show; the next save drops them
+        QStringList problems;           // all of them, as shown
         QPointF position;
         QSize size;
     };
 
-    /// Replaces the graph with `tree`, checked as the runtime would load it. Problems that belong
-    /// to no node, such as a missing root, go to `problems`.
-    void load(const engine::ai::TreeSource& tree, const engine::AssetCatalog& catalog, QStringList& problems);
+    /// Everything undo needs to bring the graph back.
+    struct Snapshot {
+        std::map<NodeId, Node> nodes;
+        NodeId root = QtNodes::InvalidNodeId;
+        std::string rootName;
+        NodeId next = 0;
+    };
+
+    /// Replaces the graph with `tree`, whose scripts are looked up in `catalog`.
+    void load(const engine::ai::TreeSource& tree, const engine::AssetCatalog& catalog);
+    /// The tree as the graph shows it, for saving.
+    [[nodiscard]] engine::ai::TreeSource tree() const;
+    /// Problems that belong to no node, such as a missing root.
+    [[nodiscard]] const QStringList& problems() const { return problems_; }
+    /// A graph that isn't editable refuses every change but moving nodes, such as when its file can't be read.
+    void setEditable(bool editable) { editable_ = editable; }
+    [[nodiscard]] bool editable() const { return editable_; }
     /// Places the trees top-down, sized by `geometry`: the root's first, then any unreachable ones.
     void arrange(QtNodes::AbstractNodeGeometry& geometry);
     [[nodiscard]] const Node* node(NodeId id) const;
+    [[nodiscard]] NodeId root() const { return root_; }
+
+    // Edits for the panel, which records them for undo.
+    /// A new node with an unused ID, unconnected; the first in an empty graph becomes the root.
+    NodeId create(engine::ai::NodeKind kind, QPointF position);
+    bool rename(NodeId id, const std::string& name, QString& error);
+    /// Leaves lose their script when they become composites; composites must have no children to become leaves.
+    bool setKind(NodeId id, engine::ai::NodeKind kind, QString& error);
+    bool setScript(NodeId id, const std::string& script);
+    bool setParameters(NodeId id, engine::ScriptPropertyMap parameters);
+    /// Only a node that runs under no other can be the root.
+    bool setRoot(NodeId id);
+    /// After a save, the file holds what the graph shows.
+    void clearFileProblems();
+    [[nodiscard]] Snapshot snapshot() const;
+    void restore(Snapshot snapshot);
+    /// Whether QtNodes can paste `json`: it drops in each node, then each link, and fails on a link we refuse.
+    [[nodiscard]] bool pastable(const QJsonObject& json) const;
 
     using AbstractGraphModel::nodeData;  // and its typed overloads
     using AbstractGraphModel::portData;
@@ -57,8 +101,10 @@ public:
                                                  QtNodes::PortIndex index) const override;
     bool connectionExists(ConnectionId connection) const override;
     NodeId addNode(QString type) override;
+    /// From a composite to a node that has no parent and doesn't run the composite itself.
     bool connectionPossible(ConnectionId connection) const override;
     bool detachPossible(ConnectionId connection) const override;
+    /// Also restores links that make a cycle, which undo can bring back from a file that had one.
     void addConnection(ConnectionId connection) override;
     bool nodeExists(NodeId id) const override;
     QVariant nodeData(NodeId id, QtNodes::NodeRole role) const override;
@@ -69,11 +115,28 @@ public:
                      QtNodes::PortRole role) override;
     bool deleteConnection(ConnectionId connection) override;
     bool deleteNode(NodeId id) override;
+    /// For QtNodes' undo, copy and paste.
+    QJsonObject saveNode(NodeId id) const override;
+    void loadNode(const QJsonObject& json) override;
+
+Q_SIGNALS:
+    /// The tree, or what's wrong with it, may have changed.
+    void changed();
 
 private:
-    std::map<NodeId, Node> nodes_;
+    /// Works out every problem again and repaints the nodes whose problems changed.
+    void check();
+    /// Orders `parent`'s children by position, left to right.
+    void sortChildren(NodeId parent);
+    [[nodiscard]] std::string unusedId(const std::string& base) const;
+
+    const engine::AssetCatalog* catalog_ = nullptr;
+    std::map<NodeId, Node> nodes_;  // by ID, which is file order: new nodes go last
     NodeId root_ = QtNodes::InvalidNodeId;
+    std::string rootName_;          // what to save while there's no root node
     NodeId next_ = 0;
+    QStringList problems_;
+    bool editable_ = false;
 };
 
 }  // namespace behavior

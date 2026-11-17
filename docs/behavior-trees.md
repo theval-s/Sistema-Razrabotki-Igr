@@ -78,6 +78,37 @@ terminal root result remains visible until the next scheduled update, when the
 tree starts from its root. `OnExit` runs once for each entered action with
 `Success`, `Failure`, `Cancelled`, or `Faulted`.
 
+## Edit a tree in the editor
+
+Double-click a `.bt.lua` asset in **Content** to open it in the **Behavior Tree**
+panel. On an entity's **Behavior Tree** component, **Show Tree Graph** opens its tree.
+The graph runs from the top down, and each composite numbers its children in run
+order. Colors show node kinds. A red border marks a node that would stop the tree
+from loading. Hover over the node or select it to see why.
+
+- Right-click empty space to add a node. The first node of an empty tree becomes its root.
+- Right-click a node to add a child to it, make it the root, or delete it.
+- Drag from a composite's lower port to another node's upper port to run that node
+  under it. Each node runs under one parent. Drag a link's lower end away to remove it.
+- Children run from left to right. Drag a child sideways to change the order.
+  **Arrange** lays the tree out again.
+- The side panel edits the selected node's ID, kind, script and parameters.
+  Double-click an action or condition to open its script.
+- With the graph focused, Ctrl+C, Ctrl+V and Ctrl+D copy, paste and duplicate nodes
+  with the links between them. Delete removes them, and Ctrl+Z undoes graph edits.
+
+**Save** (Ctrl+S in the panel) rewrites the whole file in the editor's own layout.
+Comments and formatting are lost, so the panel asks first if the file wasn't
+written by the editor. Links that the graph can't show, such as a child that names
+a missing node, appear as problems and are dropped on save. A tree with problems
+can be saved, but it won't load until you fix them.
+
+The panel's title shows `*` while there are unsaved changes. The editor offers to
+save them before it closes, before a build, and before you open another tree.
+Play runs the saved file. When the file changes on disk, the panel reloads it,
+and asks first if you have unsaved changes. A file that isn't a valid tree can't
+be edited in the graph. Fix it with **Open Lua Source**.
+
 ## Attach and control agents
 
 In the editor, select an entity and choose **Add Component → Behavior Tree**.
@@ -85,8 +116,8 @@ Select the `.bt.lua` asset in **Tree**. Use **Enabled** to start or stop the
 tree and **Apply Parameters** to apply the entity's JSON overrides. For the
 pulse demo, enter `{"pulseEnabled": true, "seconds": 1}`. Save the scene to
 keep the attachment and its settings. To create a Lua definition with metadata,
-use **New → Behavior Tree** in the content browser and update the starter
-action's script path before Play.
+use **New → Behavior Tree** in the content browser. Before Play, open the new
+tree and choose the starter action's script.
 
 From a gameplay script, attach the same tree to two scene entities.
 

@@ -112,6 +112,12 @@ public:
     void setAssetEditor(engine::CatalogAssetKind kind, AssetEditor open);
     /// Opens `source` in the editor set for its kind. False when there is none.
     bool openAsset(const std::filesystem::path& source);
+    /// Offers to save what `id` has open, before the editor closes or a build reads files from disk.
+    /// False if the user cancelled. An empty function removes it; a module removes its own in shutdown().
+    using UnsavedCheck = std::function<bool(QWidget* parent)>;
+    void setUnsavedCheck(const QString& id, UnsavedCheck check);
+    /// Offers to save the scene, then everything with an unsaved check. False if the user cancelled.
+    bool maybeSaveAll(QWidget* parent);
 
     /// Call after restoring a saved layout: docks the panels it didn't know about (e.g. from
     /// a newly added module) at their default area. ADS leaves those hidden and unplaced.
@@ -131,6 +137,7 @@ private:
     ViewportToolBar& tool_bar_;
     std::vector<Panel> panels_;
     std::map<engine::CatalogAssetKind, AssetEditor> asset_editors_;
+    std::map<QString, UnsavedCheck> unsaved_checks_;
     std::unique_ptr<ShortcutRegistry> shortcuts_;
     std::unique_ptr<SceneEvents> scene_events_;  // before everything that follows the scene
     Selection selection_;
