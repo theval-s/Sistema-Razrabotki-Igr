@@ -373,6 +373,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/rendering/RenderComponents.hpp
     include/engine/rendering/RenderExtractionSubsystem.hpp
     include/engine/assets/AssetCommon.hpp
+    include/engine/assets/AssetCooking.hpp
     include/engine/assets/AssetAuthoring.hpp
     include/engine/assets/RigAuthoring.hpp
     include/engine/assets/AssetCatalog.hpp
@@ -417,6 +418,7 @@ set(ENGINE_CORE_SOURCES
     src/assets/AssetAuthoring.cpp
     src/assets/RigAuthoring.cpp
     src/assets/AssetCatalog.cpp
+    src/assets/AssetCooking.cpp
     src/assets/AssetSystem.cpp
     src/assets/AssimpMeshImporter.cpp
     src/assets/ModelSlots.cpp

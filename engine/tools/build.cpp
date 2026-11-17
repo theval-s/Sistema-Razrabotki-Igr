@@ -5,6 +5,7 @@
 
 #include <engine/ai/BehaviorTreeSource.hpp>
 #include <engine/assets/AssetCatalog.hpp>
+#include <engine/assets/AssetCooking.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
 #include <engine/core/FileSystem.hpp>
@@ -15,10 +16,13 @@
 #include <engine/project/RuntimeSettings.hpp>
 #include <engine/scene/SceneDocument.hpp>
 
+#include <array>
 #include <charconv>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -33,6 +37,19 @@ namespace {
     constexpr const wchar_t* BuildStampName = L".sri-build";
     constexpr std::string_view BuildStampText =
         "Made by sri-build. The next build deletes and replaces this whole folder.\n";
+
+    using Payloads = std::unordered_map<engine::AssetUuid, engine::CpuPayload, engine::AssetUuidHash>;
+
+    struct CookedFile {
+        fs::path target; // relative to the output folder
+        std::vector<std::uint8_t> bytes;
+    };
+
+    struct Cooked {
+        std::vector<CookedFile> files;
+        std::set<fs::path> sources; // replaced by a cooked file, so not copied
+        std::string manifest;
+    };
 
     struct Options {
         fs::path project;
@@ -207,14 +224,21 @@ namespace {
         return IsSameOrInside(first, second) || IsSameOrInside(second, first);
     }
 
+    // The engine/ and game/ roots a build ships; engine/ is the one beside sri-build.
+    std::array<std::pair<fs::path, const wchar_t*>, 2> ContentRoots(const engine::Project& project) {
+        return {{{engine::AssetPathResolver::GetRoot() / L"engine", L"engine"}, {project.ContentDir(), L"game"}}};
+    }
+
+    // Skeletal payloads are kept from validation so the cook does not read their sources again.
     bool Validate(
         const engine::Project& project,
+        engine::AssetCatalog& catalog,
+        Payloads& payloads,
         std::vector<std::string>& errors,
         std::vector<std::string>& warnings
     ) {
         engine::AssetPathResolver::SetGameRoot(project.ContentDir());
 
-        engine::AssetCatalog catalog;
         std::string error;
 
         const fs::path engineRoot =
@@ -253,6 +277,7 @@ namespace {
                     assetKind == engine::AssetKind::AnimationClip ? payload.animationClip.skeletonSignature :
                     payload.skinnedMesh.skeletonSignature;
                 signatures.emplace(entry->metadata.id, signature);
+                payloads.emplace(entry->metadata.id, std::move(payload));
             }
         };
         validateSkeletal(engine::CatalogAssetKind::Skeleton, engine::AssetKind::Skeleton, skeletons);
@@ -390,9 +415,70 @@ namespace {
         return errors.empty();
     }
 
+    std::optional<engine::AssetKind> CookedKind(const fs::path& file) {
+        switch (engine::CatalogKindForFile(file).value_or(engine::CatalogAssetKind::Scene)) {
+        case engine::CatalogAssetKind::Mesh: return engine::AssetKind::Mesh;
+        case engine::CatalogAssetKind::Skeleton: return engine::AssetKind::Skeleton;
+        case engine::CatalogAssetKind::AnimationClip: return engine::AssetKind::AnimationClip;
+        case engine::CatalogAssetKind::SkinnedMesh: return engine::AssetKind::SkinnedMesh;
+        default: return std::nullopt;
+        }
+    }
+
+    // In memory, so a failure leaves the previous output untouched.
+    bool Cook(
+        const engine::Project& project,
+        const engine::AssetCatalog& catalog,
+        Payloads& payloads,
+        Cooked& cooked,
+        std::vector<std::string>& errors
+    ) {
+        for (const auto& [root, prefix] : ContentRoots(project)) {
+            if (!fs::is_directory(root)) continue;
+            for (const auto& item : fs::recursive_directory_iterator(root)) {
+                const auto kind = item.is_regular_file() ? CookedKind(item.path()) : std::nullopt;
+                if (!kind) continue;
+                const fs::path relative = fs::path(prefix) / item.path().lexically_relative(root);
+                const std::string name = engine::ToGenericUtf8(relative);
+                engine::CpuPayload payload;
+                std::string error;
+                const auto* entry = catalog.FindPath(name);
+                if (const auto found = entry ? payloads.find(entry->metadata.id) : payloads.end();
+                    found != payloads.end()) {
+                    payload = std::move(found->second);
+                    payloads.erase(found);
+                } else {
+                    engine::AssetDesc desc;
+                    desc.name = name;
+                    desc.path = item.path();
+                    desc.catalog = &catalog;
+                    const bool read = *kind == engine::AssetKind::Mesh
+                        ? engine::AssimpMeshImporter{}.ReadCpu(desc, nullptr, payload, error)
+                        : engine::SkeletalAssetImporter{*kind}.ReadCpu(desc, nullptr, payload, error);
+                    if (!read) {
+                        errors.push_back(name + ": " + error);
+                        continue;
+                    }
+                }
+                CookedFile file{engine::CookedPath(relative), {}};
+                if (!engine::SerializeCooked(*kind, payload, file.bytes, error)) {
+                    errors.push_back(name + ": cannot cook: " + error);
+                    continue;
+                }
+                cooked.files.push_back(std::move(file));
+                cooked.sources.insert(item.path());
+            }
+        }
+        if (std::string error; !catalog.SerializeManifest(cooked.manifest, error)) {
+            errors.push_back("asset manifest: " + error);
+        }
+        return errors.empty();
+    }
+
     bool Stage(
         const Options& options,
         const engine::Project& project,
+        const Cooked& cooked,
         std::string& error
     ) {
 
@@ -466,19 +552,38 @@ namespace {
             return false;
         }
 
-        fs::copy(
-            options.runtime,
-            options.out,
-            fs::copy_options::recursive |
-            fs::copy_options::overwrite_existing
-        );
+        // The template's engine/ holds sources; the cooked one below replaces it.
+        for (const auto& item : fs::directory_iterator(options.runtime)) {
+            if (item.path().filename() == L"engine") continue;
+            fs::copy(item.path(), options.out / item.path().filename(),
+                     fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+        }
 
         fs::rename(
             options.out / L"sri_runtime.exe",
             options.out / (projectName.native() + L".exe")
         );
 
-        fs::copy(project.ContentDir(), options.out / L"game", fs::copy_options::recursive);
+        // .meta files are replaced by the manifest, cooked sources by their cooked files.
+        for (const auto& [root, prefix] : ContentRoots(project)) {
+            if (!fs::is_directory(root)) continue;
+            for (const auto& item : fs::recursive_directory_iterator(root)) {
+                if (!item.is_regular_file() || item.path().extension() == L".meta" ||
+                    cooked.sources.contains(item.path())) {
+                    continue;
+                }
+                const fs::path target = options.out / prefix / item.path().lexically_relative(root);
+                fs::create_directories(target.parent_path());
+                fs::copy_file(item.path(), target);
+            }
+        }
+        for (const auto& file : cooked.files) {
+            const fs::path target = options.out / file.target;
+            fs::create_directories(target.parent_path());
+            const std::string_view bytes(reinterpret_cast<const char*>(file.bytes.data()), file.bytes.size());
+            if (!engine::WriteFileAtomic(target, bytes, error)) return false;
+        }
+        if (!engine::WriteFileAtomic(options.out / L"manifest.json", cooked.manifest, error)) return false;
         fs::copy_file(project.file, options.out / L"game.sriproject");
 
         return true;
@@ -525,8 +630,10 @@ int wmain(int argc, wchar_t* argv[]) {
 
         std::vector<std::string> errors;
         std::vector<std::string> warnings;
+        engine::AssetCatalog catalog;
+        Payloads payloads;
 
-        if (!Validate(*project, errors, warnings)) {
+        if (!Validate(*project, catalog, payloads, errors, warnings)) {
             for (const auto& warning : warnings) {
                 Warning(warning);
             }
@@ -544,7 +651,17 @@ int wmain(int argc, wchar_t* argv[]) {
 
         Info("Project validation passed");
 
-        if (!Stage(options, *project, error)) {
+        Cooked cooked;
+        if (!Cook(*project, catalog, payloads, cooked, errors)) {
+            for (const auto& cookError : errors) {
+                Error(cookError);
+            }
+            return 1;
+        }
+
+        Info("Cooked " + std::to_string(cooked.files.size()) + " assets");
+
+        if (!Stage(options, *project, cooked, error)) {
             Error(error);
             return 1;
         }

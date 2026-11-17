@@ -132,6 +132,11 @@ int WINAPI wWinMain(
             return Fail(error);
         }
 
+        // sri-build output is cooked; a folder without the manifest still runs from sources.
+        if (const fs::path manifest = exeDir / L"manifest.json"; fs::is_regular_file(manifest)) {
+            engine::AssetPathResolver::SetManifest(manifest);
+        }
+
         engine::RuntimeSettings settings;
 
         const fs::path settingsPath = exeDir / engine::RuntimeSettings::FileName;

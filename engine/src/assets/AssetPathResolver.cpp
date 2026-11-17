@@ -9,6 +9,7 @@
 #include <cwchar>
 #include <utility>
 
+#include <engine/assets/AssetCooking.hpp>
 #include <engine/core/ResourceID.hpp>
 #include <engine/core/PathUtils.hpp>
 
@@ -41,6 +42,11 @@ std::filesystem::path ExecutableDirectory() {
 std::filesystem::path& GameRootOverride() {
     static std::filesystem::path root;
     return root;
+}
+
+std::filesystem::path& Manifest() {
+    static std::filesystem::path manifest;
+    return manifest;
 }
 
 bool HasExtension(const std::filesystem::path& path, const wchar_t* extension) {
@@ -76,7 +82,8 @@ std::filesystem::path AssetPathResolver::ResolveMesh(const AssetDesc& desc) {
     }
     for (const wchar_t* extension : ModelExtensions) {
         std::filesystem::path candidate = path / (std::wstring(L"model") + extension);
-        if (std::filesystem::exists(candidate)) {
+        // A cooked build has no model sources, only their cooked files.
+        if (std::filesystem::exists(IsCooked() ? CookedPath(candidate) : candidate)) {
             return candidate;
         }
     }
@@ -138,6 +145,14 @@ void AssetPathResolver::SetGameRoot(std::filesystem::path directory) {
 std::filesystem::path AssetPathResolver::GetGameRoot() {
     const std::filesystem::path& root = GameRootOverride();
     return root.empty() ? GetRoot() / "game" : root;
+}
+
+void AssetPathResolver::SetManifest(std::filesystem::path manifest) {
+    Manifest() = std::move(manifest);
+}
+
+std::filesystem::path AssetPathResolver::GetManifest() {
+    return Manifest();
 }
 
 std::filesystem::path AssetPathResolver::ToAbsolute(const std::filesystem::path& path) {

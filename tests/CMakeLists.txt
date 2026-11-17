@@ -504,6 +504,19 @@ add_custom_command(TARGET model_import_tests POST_BUILD
 )
 add_test(NAME model_import_tests COMMAND model_import_tests)
 
+add_executable(asset_cooking_tests asset_cooking_tests.cpp)
+target_link_libraries(asset_cooking_tests PRIVATE Engine::EngineStatic GTest::gtest_main ozz_animation)
+target_include_directories(asset_cooking_tests PRIVATE ../engine/src)
+target_compile_definitions(asset_cooking_tests PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+set_project_warnings(asset_cooking_tests)
+set_target_properties(asset_cooking_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET asset_cooking_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:asset_cooking_tests> $<TARGET_FILE_DIR:asset_cooking_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME asset_cooking_tests COMMAND asset_cooking_tests)
+
 # CPU import tests use the static engine without exporting internal importers.
 add_executable(mesh_assets_tests mesh_assets_tests.cpp)
 target_link_libraries(mesh_assets_tests PRIVATE Engine::EngineStatic GTest::gtest_main)

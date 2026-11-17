@@ -3,7 +3,11 @@
 #endif
 #include <Windows.h>
 
+#include <engine/assets/AssetCatalog.hpp>
+#include <engine/assets/AssetCooking.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
+#include <engine/assets/AssetSystem.hpp>
+#include <engine/engine.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/project/Project.hpp>
 
@@ -148,13 +152,40 @@ TEST(AnimationBuild, ValidatesBeforeReplacingStagedOutput) {
     ASSERT_TRUE(validExit.has_value());
     ASSERT_EQ(*validExit, 0u);
     const fs::path stagedBot = output / L"game" / L"models" / L"TestBot";
-    for (const auto* name : {"model.glb", "model.glb.meta", "model.skeleton.json", "model.skeleton.json.meta",
-                             "model.skinned-mesh.json", "model.skinned-mesh.json.meta", "idle.animation.json",
-                             "idle.animation.json.meta", "walk.animation.json", "walk.animation.json.meta"}) {
-        EXPECT_TRUE(fs::is_regular_file(stagedBot / name)) << name;
+    for (const auto* name : {"model.glb", "model.skeleton.json", "model.skinned-mesh.json", "idle.animation.json",
+                             "walk.animation.json"}) {
+        EXPECT_TRUE(fs::is_regular_file(engine::CookedPath(stagedBot / name))) << name;
+        EXPECT_FALSE(fs::exists(stagedBot / name)) << name;
     }
     EXPECT_TRUE(fs::is_regular_file(output / L"game" / L"scenes" / L"animation.scene.json"));
-    EXPECT_TRUE(fs::is_regular_file(output / L"game" / L"scenes" / L"animation.scene.json.meta"));
+    EXPECT_TRUE(fs::is_regular_file(output / L"manifest.json"));
+    EXPECT_TRUE(fs::is_regular_file(engine::CookedPath(output / L"engine" / L"primitives" / L"cube" / L"model.obj")));
+    for (const auto& item : fs::recursive_directory_iterator(output)) {
+        EXPECT_NE(item.path().extension(), L".meta") << item.path();
+    }
+
+    {
+        // The cooked build runs without any source or .meta file.
+        engine::AssetPathResolver::SetManifest(output / L"manifest.json");
+        engine::AssetPathResolver::SetGameRoot(output / L"game");
+        struct Restore {
+            ~Restore() {
+                engine::AssetPathResolver::SetManifest({});
+                engine::AssetPathResolver::SetGameRoot({});
+            }
+        } restore;
+        engine::Engine host{engine::EngineConfig{.taskThreads = 1}};
+        ASSERT_TRUE(host.Initialize());
+        auto& assets = host.GetSceneAssets();
+        EXPECT_TRUE(assets.GetCatalogError().empty()) << assets.GetCatalogError();
+        EXPECT_NE(assets.GetCatalog().FindPath("game/models/TestBot/model.glb"), nullptr);
+        const auto skeleton = assets.LoadSkeleton("game/models/TestBot/model.skeleton.json");
+        const auto walk = assets.LoadAnimationClip("game/models/TestBot/walk.animation.json");
+        ASSERT_TRUE(skeleton);
+        ASSERT_TRUE(walk);
+        EXPECT_EQ(walk->skeletonSignature, skeleton->signature);
+        host.Shutdown();
+    }
 
     const fs::path marker = output / L"preserve-marker.txt";
     ASSERT_TRUE(engine::WriteFileAtomic(marker, "preserve this output", error)) << error;

@@ -73,6 +73,13 @@ public:
     [[nodiscard]] std::vector<const CatalogEntry*> List(CatalogAssetKind kind) const;
     [[nodiscard]] std::size_t Size() const noexcept { return entries_.size(); }
 
+    /// What a cooked build ships in place of .meta files: every entry's path and metadata.
+    [[nodiscard]] bool SerializeManifest(std::string& json, std::string& error) const;
+    /// Replaces the entries with a manifest's. Sources resolve under the two roots and are not
+    /// checked: a cooked build has no model sources. On failure the previous entries remain.
+    [[nodiscard]] bool LoadManifest(std::string_view json, const std::filesystem::path& gameRoot,
+                                    const std::filesystem::path& engineRoot, std::string& error);
+
 private:
     std::unordered_map<AssetUuid, CatalogEntry, AssetUuidHash> entries_;
     std::unordered_map<std::string, AssetUuid> paths_;
