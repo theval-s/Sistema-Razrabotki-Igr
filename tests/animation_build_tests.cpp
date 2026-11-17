@@ -8,7 +8,9 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/engine.hpp>
+#include <engine/rendering/EngineShaders.hpp>
 #include <engine/core/FileSystem.hpp>
+#include <engine/core/PathUtils.hpp>
 #include <engine/project/Project.hpp>
 
 #include <gtest/gtest.h>
@@ -162,6 +164,19 @@ TEST(AnimationBuild, ValidatesBeforeReplacingStagedOutput) {
     EXPECT_TRUE(fs::is_regular_file(engine::CookedPath(output / L"engine" / L"primitives" / L"cube" / L"model.obj")));
     for (const auto& item : fs::recursive_directory_iterator(output)) {
         EXPECT_NE(item.path().extension(), L".meta") << item.path();
+        EXPECT_NE(item.path().extension(), L".hlsl") << item.path();
+    }
+    {
+        std::vector<std::uint8_t> bytes;
+        ASSERT_TRUE(engine::ReadBinaryFile(output / engine::ShaderLibraryName, bytes, error)) << error;
+        engine::ShaderLibrary library;
+        ASSERT_TRUE(library.Deserialize(bytes, error)) << error;
+        for (std::size_t i = 0; i < static_cast<std::size_t>(engine::EngineShader::Count); ++i) {
+            const auto& variant = engine::GetEngineShader(static_cast<engine::EngineShader>(i));
+            const auto file = engine::AssetPathResolver::ResolveShader({.path = engine::AssetPathResolver::DefaultPath(
+                engine::ToUtf8(variant.file), engine::AssetKind::Shader)});
+            EXPECT_NE(library.Find(engine::ShaderLibrary::Key(file, variant.stage, variant.options)), nullptr) << i;
+        }
     }
 
     {

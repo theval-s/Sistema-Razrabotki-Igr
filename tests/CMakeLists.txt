@@ -490,6 +490,7 @@ add_custom_command(TARGET scene_document_tests POST_BUILD
 
 add_executable(material_assets_tests material_assets_tests.cpp)
 target_link_libraries(material_assets_tests PRIVATE Engine::Engine GTest::gtest user32)
+target_compile_definitions(material_assets_tests PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
 set_project_warnings(material_assets_tests)
 set_target_properties(material_assets_tests PROPERTIES FOLDER tests)
 

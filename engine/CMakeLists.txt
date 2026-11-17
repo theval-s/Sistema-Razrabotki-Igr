@@ -62,6 +62,7 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/core/Utf.hpp
     include/engine/engine.hpp
     include/engine/rendering/DebugDraw.hpp
+    include/engine/rendering/EngineShaders.hpp
     include/engine/rendering/FPSCamera.hpp
     include/engine/rendering/GraphicalState.hpp
     include/engine/rendering/MaterialDrawList.hpp
@@ -121,6 +122,7 @@ set(ENGINE_SOURCES
     src/core/Utf.cpp
     src/engine.cpp
     src/rendering/DebugDraw.cpp
+    src/rendering/EngineShaders.cpp
     src/rendering/FPSCamera.cpp
     src/rendering/GraphicalState.cpp
     src/rendering/passes/GBufferPass.cpp

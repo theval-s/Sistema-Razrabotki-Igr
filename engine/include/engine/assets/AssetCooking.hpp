@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
@@ -11,6 +13,7 @@
 
 namespace engine {
 
+class AssetCatalog;
 struct CpuPayload;
 
 /// Bumped whenever a cooked layout changes; builds from another version are rejected.
@@ -29,5 +32,32 @@ inline constexpr std::uint32_t CookedFormatVersion = 1;
 /// Checks the header, version and hash before decoding. On failure `payload` is unchanged.
 [[nodiscard]] ENGINE_API bool DeserializeCooked(AssetKind kind, std::span<const std::uint8_t> bytes,
                                                 CpuPayload& payload, std::string& error);
+
+/// Precompiled bytecode of every shader variant a cooked build uses, written beside its manifest.
+class ENGINE_API ShaderLibrary {
+public:
+    /// Logical file name, stage, entry point and defines; define order does not matter.
+    [[nodiscard]] static std::string Key(const std::filesystem::path& file, ShaderType stage,
+                                         const ShaderCompileOptions& options);
+    void Add(std::string key, std::vector<std::uint8_t> bytecode);
+    [[nodiscard]] const std::vector<std::uint8_t>* Find(const std::string& key) const;
+    [[nodiscard]] std::size_t Size() const noexcept { return shaders_.size(); }
+    [[nodiscard]] bool Serialize(std::vector<std::uint8_t>& bytes, std::string& error) const;
+    /// On failure the library is unchanged.
+    [[nodiscard]] bool Deserialize(std::span<const std::uint8_t> bytes, std::string& error);
+
+private:
+    std::map<std::string, std::vector<std::uint8_t>> shaders_; // sorted, so builds are reproducible
+};
+
+inline constexpr const wchar_t* ShaderLibraryName = L"shaders.cooked";
+
+/// The library beside the active manifest, loaded once per manifest. Null in source mode or
+/// when it cannot be read (`error` says why). Thread-safe.
+[[nodiscard]] ENGINE_API std::shared_ptr<const ShaderLibrary> CookedShaderLibrary(std::string& error);
+
+/// Precompiles the engine's render pass variants and every hook of the catalog's materials.
+[[nodiscard]] ENGINE_API bool CookShaderLibrary(const AssetCatalog& catalog, ShaderLibrary& library,
+                                                std::vector<std::string>& errors);
 
 } // namespace engine

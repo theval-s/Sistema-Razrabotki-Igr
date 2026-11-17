@@ -4,6 +4,7 @@
 #endif
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -34,6 +35,13 @@ struct ShaderCompileOptions {
     /// Empty selects VSMain, PSMain or GSMain for the requested stage.
     std::string entryPoint;
     std::vector<ShaderDefine> defines;
+};
+
+/// One compile of a shader file: the unit a cooked build's shader library stores.
+struct ShaderVariant {
+    std::filesystem::path file;
+    ShaderType stage = ShaderType::Vertex;
+    ShaderCompileOptions options;
 };
 
 ENGINE_API const char* GetEntryPoint(ShaderType type);
@@ -80,13 +88,19 @@ struct ENGINE_API ShaderContext {
                                                         const std::filesystem::path& fileName, ShaderType shaderType,
                                                         const ShaderCompileOptions& options = {});
 
-    /// D3DCompile + reflection only; runs on any thread.
+    /// D3DCompile + reflection only; runs on any thread. A cooked build reads the bytecode from
+    /// its shader library instead and never opens the file.
     static CompiledShader CompileCpu(const std::filesystem::path& fileName, ShaderType shaderType,
                                                     const ShaderCompileOptions& options = {});
     /// Compiles generated HLSL; virtualPath supplies its include location and diagnostic name.
     static CompiledShader CompileSource(std::string_view source,
                                                        const std::filesystem::path& virtualPath, ShaderType shaderType,
                                                        const ShaderCompileOptions& options = {});
+    /// Optimized bytecode without debug info, for the shader library of a cooked build.
+    static std::optional<std::vector<std::uint8_t>> CompileForShipping(const std::filesystem::path& fileName,
+                                                                      ShaderType shaderType,
+                                                                      const ShaderCompileOptions& options,
+                                                                      std::string& error);
     /// Create*Shader and input-layout registration; main thread.
     static ShaderContext FinalizeOnDevice(const CompiledShader& compiled, ID3D11Device* device,
                                                           InputLayoutCache& layoutCache);

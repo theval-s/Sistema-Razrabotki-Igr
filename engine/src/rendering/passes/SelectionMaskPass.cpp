@@ -14,13 +14,10 @@ void CreateMask(RenderingResourceManager& manager, RenderingResources& resources
 }
 
 void SelectionMaskPass::Initialize(RenderingResourceManager& manager, RenderingContext& context, RenderingResources& resources) try {
-    defaultVS_ = manager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
-                                       {.defines = {{"MATERIAL_GBUFFER_VS"}}});
-    skinnedDefaultVS_ = manager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
-        {.defines = {{"MATERIAL_GBUFFER_VS"}, {"ENGINE_SKINNED", "1"}}});
-    visiblePS_ = manager.CompileShader(L"engine/SelectionMask.hlsl", ShaderType::Pixel);
-    occludedPS_ = manager.CompileShader(L"engine/SelectionMask.hlsl", ShaderType::Pixel,
-                                        {.defines = {{"OCCLUDED"}}});
+    defaultVS_ = manager.CompileShader(EngineShader::GBufferVS);
+    skinnedDefaultVS_ = manager.CompileShader(EngineShader::SkinnedGBufferVS);
+    visiblePS_ = manager.CompileShader(EngineShader::SelectionVisiblePS);
+    occludedPS_ = manager.CompileShader(EngineShader::SelectionOccludedPS);
     CreateMask(manager, resources);
 } catch (...) {
     Destroy(manager, context, resources);

@@ -1,9 +1,12 @@
 #include <engine/assets/AssetCooking.hpp>
 
+#include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
+#include <engine/assets/MaterialDefinition.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
+#include <engine/rendering/EngineShaders.hpp>
 #include "../animation/AnimationData.hpp"
 #include "MeshFinish.hpp"
 
@@ -12,10 +15,12 @@
 #include <ozz/base/io/archive.h>
 #include <ozz/base/io/stream.h>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -275,6 +280,39 @@ SkinnedMeshCpu ReadSkinnedMesh(Reader& in) {
     return mesh;
 }
 
+void WriteHeader(std::vector<std::uint8_t>& result, AssetKind kind, const std::vector<std::uint8_t>& body) {
+    result.clear();
+    result.reserve(HeaderSize + body.size());
+    Writer header(result);
+    header.Value(Magic);
+    header.Value(CookedFormatVersion);
+    header.Value(static_cast<std::uint32_t>(kind));
+    header.Value(static_cast<std::uint64_t>(body.size()));
+    header.Value(Hash(body));
+    result.insert(result.end(), body.begin(), body.end());
+}
+
+std::span<const std::uint8_t> ReadHeader(std::span<const std::uint8_t> bytes, AssetKind kind) {
+    Require(bytes.size() >= HeaderSize, "not a cooked asset (too short)");
+    Reader header(bytes.first(HeaderSize));
+    Require(header.Value<std::array<char, 8>>() == Magic, "not a cooked asset");
+    Require(header.Value<std::uint32_t>() == CookedFormatVersion,
+            "cooked by a different engine version; build the game again");
+    Require(header.Value<std::uint32_t>() == static_cast<std::uint32_t>(kind), "cooked asset has the wrong kind");
+    const auto size = header.Value<std::uint64_t>();
+    const auto hash = header.Value<std::uint64_t>();
+    const auto body = bytes.subspan(HeaderSize);
+    Require(size == body.size(), "cooked asset is truncated");
+    Require(hash == Hash(body), "cooked asset is damaged (hash mismatch)");
+    return body;
+}
+
+void KeyPart(std::string& key, std::string_view part) {
+    key += std::to_string(part.size());
+    key += ':';
+    key += part;
+}
+
 CpuPayload::Kind PayloadKind(AssetKind kind) {
     switch (kind) {
     case AssetKind::Mesh: return CpuPayload::Kind::Mesh;
@@ -312,14 +350,7 @@ bool SerializeCooked(AssetKind kind, const CpuPayload& payload, std::vector<std:
         default: WriteSkinnedMesh(out, payload.skinnedMesh); break;
         }
         std::vector<std::uint8_t> result;
-        result.reserve(HeaderSize + body.size());
-        Writer header(result);
-        header.Value(Magic);
-        header.Value(CookedFormatVersion);
-        header.Value(static_cast<std::uint32_t>(kind));
-        header.Value(static_cast<std::uint64_t>(body.size()));
-        header.Value(Hash(body));
-        result.insert(result.end(), body.begin(), body.end());
+        WriteHeader(result, kind, body);
         bytes = std::move(result);
         error.clear();
         return true;
@@ -332,19 +363,7 @@ bool SerializeCooked(AssetKind kind, const CpuPayload& payload, std::vector<std:
 bool DeserializeCooked(AssetKind kind, std::span<const std::uint8_t> bytes, CpuPayload& payload,
                        std::string& error) {
     try {
-        Require(bytes.size() >= HeaderSize, "not a cooked asset (too short)");
-        Reader header(bytes.first(HeaderSize));
-        Require(header.Value<std::array<char, 8>>() == Magic, "not a cooked asset");
-        Require(header.Value<std::uint32_t>() == CookedFormatVersion,
-                "cooked by a different engine version; build the game again");
-        Require(header.Value<std::uint32_t>() == static_cast<std::uint32_t>(kind), "cooked asset has the wrong kind");
-        const auto size = header.Value<std::uint64_t>();
-        const auto hash = header.Value<std::uint64_t>();
-        const auto body = bytes.subspan(HeaderSize);
-        Require(size == body.size(), "cooked asset is truncated");
-        Require(hash == Hash(body), "cooked asset is damaged (hash mismatch)");
-
-        Reader in(body);
+        Reader in(ReadHeader(bytes, kind));
         CpuPayload decoded;
         decoded.kind = PayloadKind(kind);
         switch (kind) {
@@ -361,6 +380,126 @@ bool DeserializeCooked(AssetKind kind, std::span<const std::uint8_t> bytes, CpuP
         error = e.what();
         return false;
     }
+}
+
+std::string ShaderLibrary::Key(const std::filesystem::path& file, ShaderType stage,
+                               const ShaderCompileOptions& options) {
+    const auto absolute = AssetPathResolver::ToAbsolute(file);
+    const auto name = AssetPathResolver::ToName(absolute);
+    auto defines = options.defines;
+    std::ranges::sort(defines, {}, &ShaderDefine::name);
+    std::string key;
+    KeyPart(key, name.empty() ? ToGenericUtf8(absolute) : name);
+    KeyPart(key, GetDX11Target(stage));
+    KeyPart(key, options.entryPoint.empty() ? GetEntryPoint(stage) : options.entryPoint);
+    for (const auto& define : defines) {
+        KeyPart(key, define.name);
+        KeyPart(key, define.value);
+    }
+    return key;
+}
+
+void ShaderLibrary::Add(std::string key, std::vector<std::uint8_t> bytecode) {
+    shaders_.insert_or_assign(std::move(key), std::move(bytecode));
+}
+
+const std::vector<std::uint8_t>* ShaderLibrary::Find(const std::string& key) const {
+    const auto it = shaders_.find(key);
+    return it == shaders_.end() ? nullptr : &it->second;
+}
+
+bool ShaderLibrary::Serialize(std::vector<std::uint8_t>& bytes, std::string& error) const {
+    try {
+        std::vector<std::uint8_t> body;
+        Writer out(body);
+        out.Count(shaders_.size());
+        for (const auto& [key, bytecode] : shaders_) {
+            out.Text(key);
+            out.Array(std::span<const std::uint8_t>(bytecode));
+        }
+        WriteHeader(bytes, AssetKind::Shader, body);
+        error.clear();
+        return true;
+    } catch (const std::exception& e) {
+        error = e.what();
+        return false;
+    }
+}
+
+bool ShaderLibrary::Deserialize(std::span<const std::uint8_t> bytes, std::string& error) {
+    try {
+        Reader in(ReadHeader(bytes, AssetKind::Shader));
+        std::map<std::string, std::vector<std::uint8_t>> shaders;
+        for (auto count = in.Count(2 * sizeof(std::uint32_t)); count != 0; --count) {
+            auto key = in.Text();
+            auto bytecode = in.Array<std::uint8_t>();
+            Require(!bytecode.empty(), "shader library entry has no bytecode");
+            Require(shaders.emplace(std::move(key), std::move(bytecode)).second, "shader library has a duplicate key");
+        }
+        in.End();
+        shaders_ = std::move(shaders);
+        error.clear();
+        return true;
+    } catch (const std::exception& e) {
+        error = e.what();
+        return false;
+    }
+}
+
+std::shared_ptr<const ShaderLibrary> CookedShaderLibrary(std::string& error) {
+    static std::mutex mutex;
+    static std::filesystem::path loadedFor;
+    static std::shared_ptr<const ShaderLibrary> library;
+    static std::string loadError;
+    const auto manifest = AssetPathResolver::GetManifest();
+    if (manifest.empty()) return nullptr;
+    const std::scoped_lock lock(mutex);
+    if (manifest != loadedFor) {
+        loadedFor = manifest;
+        library.reset();
+        std::vector<std::uint8_t> bytes;
+        auto loaded = std::make_shared<ShaderLibrary>();
+        const auto file = manifest.parent_path() / ShaderLibraryName;
+        if (!ReadBinaryFile(file, bytes, loadError) || !loaded->Deserialize(bytes, loadError)) {
+            loadError = ToUtf8(file) + ": " + loadError;
+        } else {
+            library = std::move(loaded);
+        }
+    }
+    error = library ? std::string{} : loadError;
+    return library;
+}
+
+bool CookShaderLibrary(const AssetCatalog& catalog, ShaderLibrary& library, std::vector<std::string>& errors) {
+    const auto add = [&](const ShaderVariant& variant, const std::string& context) {
+        std::string error;
+        auto bytecode = ShaderContext::CompileForShipping(variant.file, variant.stage, variant.options, error);
+        if (!bytecode) {
+            errors.push_back(context + ": " + error);
+            return;
+        }
+        library.Add(ShaderLibrary::Key(variant.file, variant.stage, variant.options), std::move(*bytecode));
+    };
+    for (std::size_t i = 0; i < static_cast<std::size_t>(EngineShader::Count); ++i) {
+        auto variant = GetEngineShader(static_cast<EngineShader>(i));
+        variant.file = AssetPathResolver::ResolveShader({.path = AssetPathResolver::DefaultPath(
+            ToUtf8(variant.file), AssetKind::Shader)});
+        add(variant, "engine render pass");
+    }
+    for (const auto* entry : catalog.List(CatalogAssetKind::Material)) {
+        std::string text, error;
+        MaterialDefinition definition;
+        std::filesystem::path file;
+        if (!ReadTextFile(entry->source, text, error) || !ParseMaterialDefinition(text, definition, error) ||
+            (definition.hooks != MaterialHook::None && !MaterialShaderFile(definition, &catalog, file, error))) {
+            errors.push_back(entry->path + ": " + error);
+            continue;
+        }
+        for (const auto& variant : MaterialShaderVariants(file, definition.hooks)) {
+            if (variant) add(*variant, entry->path);
+        }
+    }
+    return errors.empty();
 }
 
 CookedAssetImporter::CookedAssetImporter(AssetKind kind, std::unique_ptr<IAssetImporter> uploader)

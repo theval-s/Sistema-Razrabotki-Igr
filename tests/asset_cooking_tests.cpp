@@ -197,6 +197,67 @@ TEST_F(AssetCooking, RejectsAMeshWhoseIndicesLeaveTheirSection) {
     EXPECT_NE(error.find("outside its section"), std::string::npos) << error;
 }
 
+struct ManifestScope {
+    explicit ManifestScope(const fs::path& manifest) { AssetPathResolver::SetManifest(manifest); }
+    ~ManifestScope() { AssetPathResolver::SetManifest({}); }
+};
+
+TEST_F(AssetCooking, ShaderLibraryKeysIgnoreDefineOrderAndUseLogicalNames) {
+    const ShaderCompileOptions ab{.defines = {{"A", "1"}, {"B", "2"}}};
+    const ShaderCompileOptions ba{.defines = {{"B", "2"}, {"A", "1"}}};
+    const auto key = ShaderLibrary::Key(root / "shaders/x.hlsl", ShaderType::Pixel, ab);
+    EXPECT_EQ(key, ShaderLibrary::Key(root / "shaders/x.hlsl", ShaderType::Pixel, ba));
+    EXPECT_EQ(key, ShaderLibrary::Key("game/shaders/x.hlsl", ShaderType::Pixel, ab));
+    EXPECT_NE(key, ShaderLibrary::Key(root / "shaders/x.hlsl", ShaderType::Vertex, ab));
+    EXPECT_NE(key, ShaderLibrary::Key(root / "shaders/x.hlsl", ShaderType::Pixel, {.defines = {{"A", "1"}}}));
+    EXPECT_NE(key, ShaderLibrary::Key(root / "shaders/x.hlsl", ShaderType::Pixel, {.entryPoint = "Other", .defines = ab.defines}));
+    EXPECT_NE(key.find("game/shaders/x.hlsl"), std::string::npos) << key;
+}
+
+TEST_F(AssetCooking, ShaderLibraryRoundTripsAndRejectsDamage) {
+    ShaderLibrary library;
+    library.Add("one", {1, 2, 3});
+    library.Add("two", {4});
+    std::vector<std::uint8_t> bytes;
+    ASSERT_TRUE(library.Serialize(bytes, error)) << error;
+    ShaderLibrary loaded;
+    ASSERT_TRUE(loaded.Deserialize(bytes, error)) << error;
+    ASSERT_EQ(loaded.Size(), 2u);
+    ASSERT_NE(loaded.Find("one"), nullptr);
+    EXPECT_EQ(*loaded.Find("one"), (std::vector<std::uint8_t>{1, 2, 3}));
+    EXPECT_EQ(loaded.Find("three"), nullptr);
+    bytes.back() ^= 1;
+    EXPECT_FALSE(loaded.Deserialize(bytes, error));
+    EXPECT_EQ(loaded.Size(), 2u);
+}
+
+TEST_F(AssetCooking, CookedBuildReadsShadersFromTheLibraryOnly) {
+    const auto file = root / "shaders" / "tiny.hlsl";
+    fs::create_directories(file.parent_path());
+    ASSERT_TRUE(WriteFileAtomic(file, "float4 VSMain(float4 p : POSITION) : SV_Position { return p * SCALE; }\n",
+                                error)) << error;
+    const ShaderCompileOptions options{.defines = {{"SCALE", "2"}}};
+    const auto bytecode = ShaderContext::CompileForShipping(file, ShaderType::Vertex, options, error);
+    ASSERT_TRUE(bytecode) << error;
+    ShaderLibrary library;
+    library.Add(ShaderLibrary::Key(file, ShaderType::Vertex, options), *bytecode);
+    std::vector<std::uint8_t> bytes;
+    ASSERT_TRUE(library.Serialize(bytes, error)) << error;
+    const auto cooked = root / "cooked";
+    fs::create_directories(cooked);
+    ASSERT_TRUE(WriteFileAtomic(cooked / ShaderLibraryName,
+                                std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), error));
+    fs::remove(file); // a cooked build has no HLSL
+
+    ManifestScope manifest(cooked / "manifest.json");
+    const auto compiled = ShaderContext::CompileCpu(file, ShaderType::Vertex, options);
+    ASSERT_TRUE(compiled.reflection);
+    EXPECT_EQ(compiled.desc.InputParameters, 1u);
+    EXPECT_EQ(compiled.blob->GetBufferSize(), bytecode->size());
+    EXPECT_THROW((void)ShaderContext::CompileCpu(file, ShaderType::Vertex, {.defines = {{"SCALE", "3"}}}),
+                 RenderingException);
+}
+
 TEST_F(AssetCooking, ManifestRestoresTheCatalogUnderNewRoots) {
     std::string manifest;
     ASSERT_TRUE(catalog.SerializeManifest(manifest, error)) << error;

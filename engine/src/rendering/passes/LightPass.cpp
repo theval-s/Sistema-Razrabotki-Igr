@@ -26,11 +26,9 @@ void UpdateLight(RenderingContext& context, RenderingResources& resources,
 }
 
 void LightPass::Initialize(RenderingResourceManager& resourceManager, RenderingContext& context, RenderingResources& resources) try {
-    vertexShader_ = resourceManager.CompileShader(L"engine/LightPass.hlsl", ShaderType::Vertex);
-    ShaderCompileOptions pixelOptions;
-    pixelOptions.defines = {{"PCF_RADIUS", "1"}, {"SHADOW_MAP_SIZE", std::to_string(ShadowMapSize)}};
-    pixelShader_ = resourceManager.CompileShader(L"engine/LightPass.hlsl", ShaderType::Pixel, pixelOptions);
-    dirLightVertexShader_ = resourceManager.CompileShader(L"engine/DirectionalLightVS.hlsl", ShaderType::Vertex);
+    vertexShader_ = resourceManager.CompileShader(EngineShader::LightVS);
+    pixelShader_ = resourceManager.CompileShader(EngineShader::LightPS);
+    dirLightVertexShader_ = resourceManager.CompileShader(EngineShader::DirectionalLightVS);
     lightSphere_ = ugly_utils::FromRawMesh(resourceManager, ugly_utils::CreateSphere(1.0f));
     // One shared bounding box; each spot light scales it to its cone bounds.
     spotLightBB_ = ugly_utils::FromRawMesh(resourceManager, ugly_utils::CreateCube(1.0f, 1.0f, 1.0f));

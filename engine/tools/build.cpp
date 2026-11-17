@@ -49,6 +49,7 @@ namespace {
         std::vector<CookedFile> files;
         std::set<fs::path> sources; // replaced by a cooked file, so not copied
         std::string manifest;
+        std::vector<std::uint8_t> shaders;
     };
 
     struct Options {
@@ -472,6 +473,12 @@ namespace {
         if (std::string error; !catalog.SerializeManifest(cooked.manifest, error)) {
             errors.push_back("asset manifest: " + error);
         }
+        engine::ShaderLibrary shaders;
+        if (engine::CookShaderLibrary(catalog, shaders, errors)) {
+            if (std::string error; !shaders.Serialize(cooked.shaders, error)) {
+                errors.push_back("shader library: " + error);
+            }
+        }
         return errors.empty();
     }
 
@@ -564,11 +571,13 @@ namespace {
             options.out / (projectName.native() + L".exe")
         );
 
-        // .meta files are replaced by the manifest, cooked sources by their cooked files.
+        // .meta files are replaced by the manifest, cooked sources by their cooked files and HLSL
+        // by the shader library.
         for (const auto& [root, prefix] : ContentRoots(project)) {
             if (!fs::is_directory(root)) continue;
             for (const auto& item : fs::recursive_directory_iterator(root)) {
                 if (!item.is_regular_file() || item.path().extension() == L".meta" ||
+                    engine::CatalogKindForFile(item.path()) == engine::CatalogAssetKind::Shader ||
                     cooked.sources.contains(item.path())) {
                     continue;
                 }
@@ -584,6 +593,8 @@ namespace {
             if (!engine::WriteFileAtomic(target, bytes, error)) return false;
         }
         if (!engine::WriteFileAtomic(options.out / L"manifest.json", cooked.manifest, error)) return false;
+        const std::string_view shaders(reinterpret_cast<const char*>(cooked.shaders.data()), cooked.shaders.size());
+        if (!engine::WriteFileAtomic(options.out / engine::ShaderLibraryName, shaders, error)) return false;
         fs::copy_file(project.file, options.out / L"game.sriproject");
 
         return true;

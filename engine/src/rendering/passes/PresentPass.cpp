@@ -53,15 +53,13 @@ void PresentPass::Initialize(RenderingResourceManager& resourceManager, Renderin
     try {
         backBufferView_ = CreateBackbufferTexture(resourceManager, context);
         presentBuffer_ = resourceManager.CreateConstantBuffer<PresentBufferData>();
-        vertexShader_ = resourceManager.CompileShader(L"engine/PresentPass.hlsl", ShaderType::Vertex);
-        pixelShader_ = resourceManager.CompileShader(L"engine/PresentPass.hlsl", ShaderType::Pixel);
-        outlinedPixelShader_ = resourceManager.CompileShader(L"engine/PresentPass.hlsl", ShaderType::Pixel,
-                                                            {.defines = {{"SELECTION_OUTLINE"}}});
-        linesVertexShader_ = resourceManager.CompileShader(L"engine/DebugDraw.hlsl", ShaderType::Vertex);
-        screenLinesVertexShader_ = resourceManager.CompileShader(L"engine/DebugDraw.hlsl", ShaderType::Vertex,
-                                                               {.defines = {{"SCREEN_SPACE"}}});
-        linesGeometryShader_ = resourceManager.CompileShader(L"engine/DebugDraw.hlsl", ShaderType::Geometry);
-        linesPixelShader_ = resourceManager.CompileShader(L"engine/DebugDraw.hlsl", ShaderType::Pixel);
+        vertexShader_ = resourceManager.CompileShader(EngineShader::PresentVS);
+        pixelShader_ = resourceManager.CompileShader(EngineShader::PresentPS);
+        outlinedPixelShader_ = resourceManager.CompileShader(EngineShader::OutlinedPresentPS);
+        linesVertexShader_ = resourceManager.CompileShader(EngineShader::LinesVS);
+        screenLinesVertexShader_ = resourceManager.CompileShader(EngineShader::ScreenLinesVS);
+        linesGeometryShader_ = resourceManager.CompileShader(EngineShader::LinesGS);
+        linesPixelShader_ = resourceManager.CompileShader(EngineShader::LinesPS);
     } catch (...) {
         Destroy(resourceManager, context, resources);
         throw;

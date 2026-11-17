@@ -1,3 +1,4 @@
+#include <engine/assets/AssetCooking.hpp>
 #include <engine/assets/AssetEvents.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
@@ -771,6 +772,59 @@ TEST(MeshMaterialSlots, SectionsUseTheirSlotMaterialElseTheRenderersElseTheDefau
     (void)assets.RescanCatalog(error);
     EXPECT_EQ(loaded->materials[0], assets.RequestMaterialInstance(BuiltinAssets::DefaultMaterialInstance));
     EXPECT_EQ(loaded->materials[1], assets.RequestMaterialInstance(redReference));
+    engine.Shutdown();
+}
+
+TEST(MaterialAssetsIntegration, CookedBuildRendersFromThePrecompiledShaderLibrary) {
+    namespace fs = std::filesystem;
+    const fs::path cooked = fs::temp_directory_path() / ("sri-cooked-shaders-" + std::to_string(GetCurrentProcessId()));
+    const fs::path game = cooked / "game";
+    struct Restore {
+        fs::path directory;
+        ~Restore() {
+            AssetPathResolver::SetManifest({});
+            AssetPathResolver::SetGameRoot({});
+            std::error_code ignored;
+            fs::remove_all(directory, ignored);
+        }
+    } restore{cooked};
+    const fs::path example = fs::path(SRI_SOURCE_ROOT) / "example_game";
+    fs::create_directories(game / "materials");
+    fs::create_directories(game / "shaders");
+    for (const auto* name : {"enchanted.material.json", "enchanted.material.json.meta"})
+        fs::copy_file(example / "materials" / name, game / "materials" / name);
+    for (const auto* name : {"EnchantedCube.hlsl", "EnchantedCube.hlsl.meta"})
+        fs::copy_file(example / "shaders" / name, game / "shaders" / name);
+
+    AssetPathResolver::SetGameRoot(game);
+    AssetCatalog catalog;
+    std::string error;
+    ASSERT_TRUE(catalog.Scan(game, AssetPathResolver::GetRoot() / "engine", error)) << error;
+    ShaderLibrary library;
+    std::vector<std::string> errors;
+    ASSERT_TRUE(CookShaderLibrary(catalog, library, errors)) << (errors.empty() ? "" : errors.front());
+    std::vector<std::uint8_t> bytes;
+    std::string manifest;
+    ASSERT_TRUE(library.Serialize(bytes, error)) << error;
+    ASSERT_TRUE(catalog.SerializeManifest(manifest, error)) << error;
+    ASSERT_TRUE(WriteFileAtomic(cooked / ShaderLibraryName,
+                                std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), error));
+    ASSERT_TRUE(WriteFileAtomic(cooked / "manifest.json", manifest, error)) << error;
+    fs::remove(game / "shaders" / "EnchantedCube.hlsl");
+    AssetPathResolver::SetManifest(cooked / "manifest.json");
+
+    Fixture fixture;
+    ASSERT_NE(fixture.window, nullptr);
+    Engine engine({.applicationName = "Cooked shaders", .surface = {fixture.window, 64, 64}, .taskThreads = 2});
+    auto* rendering = engine.AddSubsystem<RenderingSubsystem>();
+    if (!engine.Initialize()) GTEST_SKIP() << "D3D11 hardware/debug layer unavailable";
+    const auto material = engine.GetAssets().LoadMaterial("game/materials/enchanted.material.json");
+    ASSERT_TRUE(material);
+    const auto* loaded = rendering->GetResourceManager().TryGetMaterial(material->material);
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_TRUE(loaded->shaders.gBufferPassVS);
+    EXPECT_TRUE(loaded->shaders.gBufferPassPS);
+    EXPECT_TRUE(loaded->shaders.skinnedShadowPassVS);
     engine.Shutdown();
 }
 
