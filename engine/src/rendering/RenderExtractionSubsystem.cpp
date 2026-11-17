@@ -13,6 +13,21 @@
 
 namespace engine {
 
+entt::resource<MaterialInstanceAsset> SectionMaterial(AssetSystem& assets, const MeshRenderer& renderer,
+                                                      const MeshAsset& mesh, const MeshSection& section) {
+    // A renderer whose own material is missing stays undrawn rather than silently changing look.
+    if (HasOwnMaterial(renderer)) return assets.Peek(renderer.materialInstance);
+    if (section.materialSlot >= mesh.materials.size()) return {};
+    return assets.Peek(mesh.materials[section.materialSlot]);
+}
+
+entt::resource<MaterialInstanceAsset> PrimaryMaterial(AssetSystem& assets, const MeshRenderer& renderer) {
+    if (HasOwnMaterial(renderer)) return assets.Peek(renderer.materialInstance);
+    const auto mesh = assets.Peek(renderer.mesh);
+    if (!mesh || mesh->sections.empty()) return {};
+    return SectionMaterial(assets, renderer, *mesh, mesh->sections.front());
+}
+
 std::string_view RenderExtractionSubsystem::GetName() const { return "RenderExtractionSubsystem"; }
 
 bool RenderExtractionSubsystem::Initialize() {
@@ -38,10 +53,10 @@ void RenderExtractionSubsystem::LateUpdate(const FrameContext&) {
     world.lights.clear();
     scene.ForEach<MeshRenderer>([&](entt::entity entity, const MeshRenderer& renderer) {
         const auto mesh = assets.Peek(renderer.mesh);
-        const auto instance = assets.Peek(renderer.materialInstance);
-        if (mesh && instance) {
-            const auto override = GetEngine().GetEntityMaterialOverride(entity);
-            for (const auto& section : mesh->sections)
+        if (!mesh) return;
+        const auto override = GetEngine().GetEntityMaterialOverride(entity);
+        for (const auto& section : mesh->sections) {
+            if (const auto instance = SectionMaterial(assets, renderer, *mesh, section))
                 world.sceneItems.push_back({scene.GetWorldMatrix(entity), section.mesh,
                     override ? override : instance->instance});
         }

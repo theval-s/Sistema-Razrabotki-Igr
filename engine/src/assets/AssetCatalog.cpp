@@ -95,7 +95,7 @@ AssetReference ReferenceFromJson(const Json& j) {
 
 AssetMetadata MetadataFromJson(const Json& j) {
     if (!j.is_object() || !j.contains("version") || !j.contains("id") || !j.contains("kind") ||
-        j.at("version") != 1 || j.size() > 4)
+        j.at("version") != 1 || j.size() > 5)
         throw std::invalid_argument("metadata needs version 1, id and kind");
     AssetMetadata meta;
     meta.id = AssetUuid(j.at("id").get<std::string>());
@@ -109,10 +109,19 @@ AssetMetadata MetadataFromJson(const Json& j) {
                                   CatalogAssetKind::AnimationClip, CatalogAssetKind::SkinnedMesh, CatalogAssetKind::NavMesh}) {
         if (kind == KindName(candidate)) { meta.kind = candidate; found = true; break; }
     }
-    if (!found || (j.contains("centerOnLoad") && meta.kind != CatalogAssetKind::Mesh))
+    if (!found || ((j.contains("centerOnLoad") || j.contains("materials")) && meta.kind != CatalogAssetKind::Mesh))
         throw std::invalid_argument("unknown metadata kind or import setting on non-mesh");
     if (j.contains("centerOnLoad")) meta.centerOnLoad = j.at("centerOnLoad").get<bool>();
-    if (j.size() != 3 + (j.contains("centerOnLoad") ? 1 : 0))
+    if (j.contains("materials")) {
+        const auto& materials = j.at("materials");
+        if (!materials.is_array() || materials.size() > MaxMeshMaterialSlots)
+            throw std::invalid_argument("materials must be an array of at most 1024 references or nulls");
+        for (const auto& material : materials) {
+            if (material.is_null()) meta.materials.emplace_back();
+            else meta.materials.emplace_back(ReferenceFromJson(material));
+        }
+    }
+    if (j.size() != 3 + (j.contains("centerOnLoad") ? 1 : 0) + (j.contains("materials") ? 1 : 0))
         throw std::invalid_argument("unknown metadata field");
     return meta;
 }
@@ -156,6 +165,15 @@ bool SerializeAssetMetadata(const AssetMetadata& value, std::string& json, std::
     try {
         Json encoded = {{"version", 1}, {"id", value.id.ToString()}, {"kind", KindName(value.kind)}};
         if (value.kind == CatalogAssetKind::Mesh) encoded["centerOnLoad"] = value.centerOnLoad;
+        // Only when set, so metas from before material slots keep their exact format.
+        if (!value.materials.empty()) {
+            Json materials = Json::array();
+            for (const auto& material : value.materials) {
+                materials.push_back(material ? Json{{"id", material->id.ToString()}, {"path", material->path}}
+                                             : Json(nullptr));
+            }
+            encoded["materials"] = std::move(materials);
+        }
         const auto text = encoded.dump(2);
         [[maybe_unused]] const auto checked = MetadataFromJson(Read(text));
         json = text;

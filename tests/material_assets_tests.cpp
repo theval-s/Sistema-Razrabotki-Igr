@@ -8,6 +8,7 @@
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/rendering/RenderExtractionSubsystem.hpp>
 #include <engine/rendering/RenderComponents.hpp>
+#include <engine/scene/Scene.hpp>
 
 #include <chrono>
 #include <filesystem>
@@ -16,6 +17,8 @@
 #include <limits>
 #include <thread>
 #include <vector>
+
+#include "gltf_fixture.hpp"
 
 namespace {
 using namespace engine;
@@ -666,6 +669,78 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("shutdown", MaterialDefinition{}));
     ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("shutdown", MaterialInstanceDefinition{.material = fixture.prefix + "/shutdown"}));
     assets.RequestMaterialInstance(fixture.prefix + "/shutdown");
+    engine.Shutdown();
+}
+
+TEST(MeshMaterialSlots, SectionsUseTheirSlotDefaultUnlessTheRendererHasAMaterial) {
+    Fixture fixture;
+    ASSERT_NE(fixture.window, nullptr) << "could not create hidden D3D test surface";
+    Engine engine({.applicationName = "Mesh slot tests", .surface = {fixture.window, 64, 64}, .taskThreads = 2});
+    auto* rendering = engine.AddSubsystem<RenderingSubsystem>();
+    auto* extraction = engine.AddSubsystem<RenderExtractionSubsystem>();
+    if (!engine.Initialize()) {
+        GTEST_SKIP() << "D3D11 hardware/debug layer unavailable";
+    }
+    auto& assets = engine.GetSceneAssets();
+    const auto* base = assets.GetCatalog().FindPath("engine/primitives/default.material.json");
+    ASSERT_NE(base, nullptr);
+
+    test::GltfFixture model;
+    model.AddMaterial("Red");
+    model.AddMaterial("Blue");
+    model.AddPrimitive({{0, 0, 0, 1, 0, 0, 0, 1, 0}, {{0, 0, 1, 0, 0, 1}}, 0});
+    model.AddPrimitive({{0, 0, 1, 1, 0, 1, 0, 1, 1}, {{0, 0, 1, 0, 0, 1}}, 1});
+    model.WriteGltf(fixture.root / "slots.gltf", "slots.bin");
+    MaterialInstanceDefinition red;
+    red.version = 2;
+    red.materialReference = AssetReference{base->metadata.id, base->path};
+    red.material = base->path;
+    red.parameters.shininess = 3.0f;
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("red", red));
+    const AssetReference redReference{NewUuid(), fixture.prefix + "/red.material-instance.json"};
+    const AssetReference meshReference{NewUuid(), fixture.prefix + "/slots.gltf"};
+    std::string error;
+    ASSERT_TRUE(WriteAssetMetadata(fixture.root / "red.material-instance.json",
+                                   {redReference.id, CatalogAssetKind::MaterialInstance}, error)) << error;
+    ASSERT_TRUE(WriteAssetMetadata(fixture.root / "slots.gltf",
+                                   {meshReference.id, CatalogAssetKind::Mesh, false, {redReference, std::nullopt}}, error))
+        << error;
+    (void)assets.RescanCatalog(error);  // other test leftovers may lack sidecars; ours are what matter
+    ASSERT_NE(assets.GetCatalog().Find(meshReference.id, CatalogAssetKind::Mesh), nullptr) << error;
+
+    Events events;
+    engine.GetEvents().sink<AssetFailedEvent>().connect<&Events::Failed>(events);
+    const auto mesh = assets.RequestMesh(meshReference);
+    ASSERT_NO_FATAL_FAILURE(WaitFor(assets, mesh, events));
+    const auto loaded = assets.Peek(mesh);
+    ASSERT_EQ(loaded->sections.size(), 2u);
+    ASSERT_EQ(loaded->materials.size(), 2u);
+    EXPECT_EQ(loaded->materialSlots, (std::vector<std::string>{"Red", "Blue"}));
+    EXPECT_EQ(loaded->materials[0], assets.RequestMaterialInstance(redReference));
+    EXPECT_EQ(loaded->materials[1], assets.RequestMaterialInstance(BuiltinAssets::DefaultMaterialInstance));
+    ASSERT_NO_FATAL_FAILURE(WaitFor(assets, loaded->materials[0], events));
+    ASSERT_NO_FATAL_FAILURE(WaitFor(assets, loaded->materials[1], events));
+
+    const auto entity = engine.GetScene().CreateEntity("Slots");
+    ASSERT_NE(engine.GetScene().AddComponent<MeshRenderer>(entity, mesh, AssetHandle<MaterialInstanceAsset>{},
+                                                           meshReference, AssetReference{}), nullptr);
+    FrameContext frame;
+    extraction->LateUpdate(frame);
+    const auto& items = rendering->GetWorld().sceneItems;
+    ASSERT_EQ(items.size(), 2u);
+    EXPECT_EQ(items[0].materialInstance, assets.Peek(loaded->materials[0])->instance);
+    EXPECT_EQ(items[1].materialInstance, assets.Peek(loaded->materials[1])->instance);
+    const auto* renderer = engine.GetScene().TryGetComponent<MeshRenderer>(entity);
+    EXPECT_EQ(PrimaryMaterial(assets, *renderer)->instance, items[0].materialInstance);
+
+    // Its own material covers every slot.
+    engine.GetScene().Modify<MeshRenderer>(entity, [&](MeshRenderer& changed) {
+        changed.materialInstance = loaded->materials[1];
+    });
+    extraction->LateUpdate(frame);
+    ASSERT_EQ(items.size(), 2u);
+    EXPECT_EQ(items[0].materialInstance, items[1].materialInstance);
+    EXPECT_EQ(items[0].materialInstance, assets.Peek(loaded->materials[1])->instance);
     engine.Shutdown();
 }
 

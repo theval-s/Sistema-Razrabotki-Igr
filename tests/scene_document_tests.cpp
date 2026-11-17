@@ -3,6 +3,7 @@
 #include <engine/scene/GameDocument.hpp>
 #include <engine/engine.hpp>
 #include <engine/assets/AssetCatalog.hpp>
+#include <engine/rendering/RenderComponents.hpp>
 
 #include <gtest/gtest.h>
 #include <algorithm>
@@ -604,6 +605,43 @@ TEST(SceneDocument, MissingAssetsKeepAuthoredReferencesOnSave) {
     ASSERT_TRUE(engine::CaptureSceneDocument(engine.GetScene(), engine.GetSceneAssets(), saved, error)) << error;
     EXPECT_EQ(saved.entities.at(0).renderer->mesh.id, item.renderer->mesh.id);
     EXPECT_EQ(saved.entities.at(0).renderer->materialInstance.path, item.renderer->materialInstance.path);
+    engine.Shutdown();
+}
+
+TEST(SceneDocument, MeshRendererWithoutMaterialKeepsUsingTheMeshMaterials) {
+    engine::SceneDocument document;
+    engine::SceneEntityDefinition item;
+    item.id = engine::NewUuid();
+    item.name = "Model";
+    item.renderer = engine::SceneEntityDefinition::Mesh{{engine::NewUuid(), "game/models/token/model.glb"}, {}};
+    document.entities.push_back(item);
+    std::string json, error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(document, json, error)) << error;
+    engine::SceneDocument parsed;
+    ASSERT_TRUE(engine::ParseSceneDocument(json, parsed, error)) << error;
+    ASSERT_TRUE(parsed.entities.at(0).renderer);
+    EXPECT_FALSE(parsed.entities[0].renderer->materialInstance.id.IsValid());
+
+    // Skinned renderers still need a material of their own.
+    std::string skinned = json;
+    skinned.replace(skinned.find("\"MeshRenderer\""), 14, "\"SkinnedMeshRenderer\"");
+    EXPECT_FALSE(engine::ParseSceneDocument(skinned, parsed, error));
+    parsed.entities[0].skinnedRenderer = parsed.entities[0].renderer;
+    parsed.entities[0].renderer.reset();
+    EXPECT_FALSE(engine::SerializeSceneDocument(parsed, json, error));
+
+    engine::EngineConfig config;
+    config.taskThreads = 1;
+    engine::Engine engine(config);
+    ASSERT_TRUE(engine.Initialize());
+    engine::PopulateScene(document, engine.GetSceneAssets(), engine.GetScene());
+    const auto entity = engine.GetScene().FindById(item.id.ToString());
+    const auto* renderer = engine.GetScene().TryGetComponent<engine::MeshRenderer>(entity);
+    ASSERT_NE(renderer, nullptr);
+    EXPECT_FALSE(engine::HasOwnMaterial(*renderer));
+    engine::SceneDocument saved;
+    ASSERT_TRUE(engine::CaptureSceneDocument(engine.GetScene(), engine.GetSceneAssets(), saved, error)) << error;
+    EXPECT_EQ(saved.entities.at(0).renderer, item.renderer);
     engine.Shutdown();
 }
 

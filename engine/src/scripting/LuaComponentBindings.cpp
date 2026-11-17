@@ -160,11 +160,14 @@ template<class T> void Codec(Fields& f, T& c, LuaBindingsContext& context) {
     } else if constexpr (std::is_same_v<T, GamePersistence>) {
         f("transform", c.transform); f("controllerState", c.controllerState); f("scriptState", c.scriptState);
     } else if constexpr (std::is_same_v<T, MeshRenderer>) {
-        std::string mesh = c.meshReference.id.ToString(), material = c.materialReference.id.ToString();
+        // An empty material: every slot uses the mesh's default.
+        std::string mesh = c.meshReference.id.ToString();
+        std::string material = c.materialReference.id.IsValid() ? c.materialReference.id.ToString() : std::string{};
         f("mesh", mesh); f("materialInstance", material);
         if (f.read) {
             c.meshReference = Resolve(context, mesh, CatalogAssetKind::Mesh);
-            c.materialReference = Resolve(context, material, CatalogAssetKind::MaterialInstance);
+            c.materialReference = material.empty() ? AssetReference{}
+                                                   : Resolve(context, material, CatalogAssetKind::MaterialInstance);
         }
     } else if constexpr (std::is_same_v<T, ScriptComponent>) {
         std::string script = c.script.id.ToString();
@@ -209,7 +212,9 @@ template<class T> void Commit(const LuaEntityHandle& entity, LuaBindingsContext&
     if (add ? scene.HasComponent<T>(id) : !scene.HasComponent<T>(id)) return;
     if constexpr (std::is_same_v<T, MeshRenderer>) {
         value.mesh = context.engine->GetSceneAssets().RequestMesh(value.meshReference);
-        value.materialInstance = context.engine->GetSceneAssets().RequestMaterialInstance(value.materialReference);
+        value.materialInstance = value.materialReference.id.IsValid()
+            ? context.engine->GetSceneAssets().RequestMaterialInstance(value.materialReference)
+            : AssetHandle<MaterialInstanceAsset>{};
         const auto* previous = scene.TryGetComponent<MeshRenderer>(id);
         if (previous && previous->materialReference.id != value.materialReference.id)
             context.engine->ClearEntityMaterialOverride(id);
@@ -309,7 +314,7 @@ void RegisterComponentBindings(sol::state& lua, LuaBindingsContext& context) {
         auto& resources = rendering->GetResourceManager();
         auto handle = context.engine->GetEntityMaterialOverride(e.Resolve());
         if (!handle) {
-            auto asset = context.engine->GetSceneAssets().Peek(renderer->materialInstance);
+            auto asset = PrimaryMaterial(context.engine->GetSceneAssets(), *renderer);
             Require(bool(asset), "Material instance is not ready");
             handle = asset->instance;
         }

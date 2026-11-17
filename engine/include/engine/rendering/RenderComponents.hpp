@@ -1,5 +1,8 @@
 #pragma once
 
+#include <entt/resource/resource.hpp>
+
+#include <engine/engine_export.hpp>
 #include <engine/assets/AssetHandle.hpp>
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/AssetTypes.hpp>
@@ -11,16 +14,31 @@
 
 namespace engine {
 
+class AssetSystem;
+
 /// Draws a mesh asset with the entity's world matrix. Assets come from
 /// Engine::GetAssets(); until they are loaded the entity is simply not drawn.
+/// Without a material instance each material slot uses the mesh's default (see MeshAsset).
 struct MeshRenderer {
     AssetHandle<MeshAsset> mesh;
-    AssetHandle<MaterialInstanceAsset> materialInstance;
+    AssetHandle<MaterialInstanceAsset> materialInstance; // for every slot; none for the mesh's own
     // Retain authored UUIDs even when an asynchronous request fails and its
     // generational handle retires. Runtime handles are never written to JSON.
     AssetReference meshReference;
     AssetReference materialReference;
 };
+
+/// Whether the renderer names a material of its own, loaded or not.
+[[nodiscard]] inline bool HasOwnMaterial(const MeshRenderer& renderer) {
+    return static_cast<bool>(renderer.materialInstance) || renderer.materialReference.id.IsValid();
+}
+/// What one section draws with: the renderer's material instance, else the mesh's default for
+/// the section's slot. Empty until that material is ready.
+[[nodiscard]] ENGINE_API entt::resource<MaterialInstanceAsset> SectionMaterial(AssetSystem& assets,
+    const MeshRenderer& renderer, const MeshAsset& mesh, const MeshSection& section);
+/// What runtime material edits start from: the renderer's material, else its first section's.
+[[nodiscard]] ENGINE_API entt::resource<MaterialInstanceAsset> PrimaryMaterial(AssetSystem& assets,
+                                                                               const MeshRenderer& renderer);
 
 /// Renders the scene from the entity's world position, looking along its local -Z
 /// (Vector3::Forward); roll is ignored. The first entity with a Camera is the active one.

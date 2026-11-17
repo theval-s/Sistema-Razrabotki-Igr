@@ -63,7 +63,7 @@ std::vector<entt::entity> ViewportPicker::hits(const ViewportView& view, const V
     for (const engine::RayHit& hit : engine::RaycastAll(scene, assets, ray.origin, ray.direction, ray.length)) {
         // The general scene query also returns authored Bounds without a drawable mesh.
         const auto* renderer = scene.TryGetComponent<engine::MeshRenderer>(hit.entity);
-        if (renderer && assets.Peek(renderer->mesh) && assets.Peek(renderer->materialInstance)) {
+        if (renderer && engine::PrimaryMaterial(assets, *renderer)) {
             drawable.push_back(hit.entity);
         } else if (const auto* skinned = scene.TryGetComponent<engine::SkinnedMeshRenderer>(hit.entity);
                    skinned && assets.Peek(skinned->mesh) && assets.Peek(skinned->materialInstance)) {

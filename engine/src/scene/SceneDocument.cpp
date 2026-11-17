@@ -320,8 +320,10 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
     if (components.contains("MeshRenderer")) {
         const auto& renderer = components.at("MeshRenderer");
         Fields(renderer, {"mesh", "materialInstance"});
+        // null: every slot uses the mesh's default material.
+        const auto& material = renderer.at("materialInstance");
         entity.renderer = SceneEntityDefinition::Mesh{Reference(renderer.at("mesh")),
-                                                       Reference(renderer.at("materialInstance"))};
+                                                       material.is_null() ? AssetReference{} : Reference(material)};
     }
     if (components.contains("SkinnedMeshRenderer")) {
         const auto& renderer = components.at("SkinnedMeshRenderer");
@@ -482,7 +484,8 @@ Json Encode(const SceneDocument& document) {
                                             {"scale", Encode(entity.transform.scale)}}}};
         if (entity.renderer)
             components["MeshRenderer"] = {{"mesh", Encode(entity.renderer->mesh)},
-                                          {"materialInstance", Encode(entity.renderer->materialInstance)}};
+                {"materialInstance", entity.renderer->materialInstance.id.IsValid()
+                    ? Encode(entity.renderer->materialInstance) : Json(nullptr)}};
         if (entity.skinnedRenderer)
             components["SkinnedMeshRenderer"] = {{"mesh", Encode(entity.skinnedRenderer->mesh)},
                 {"materialInstance", Encode(entity.skinnedRenderer->materialInstance)}};
@@ -622,12 +625,17 @@ std::optional<SceneEntityDefinition::Mesh> RendererReferences(const Renderer& re
     if (!mesh) mesh = assets.ReferenceFor(renderer.mesh);
     auto material = authored(renderer.materialReference, CatalogAssetKind::MaterialInstance);
     if (!material) material = assets.ReferenceFor(renderer.materialInstance);
+    if constexpr (std::is_same_v<Renderer, MeshRenderer>) {
+        if (!HasOwnMaterial(renderer)) material = AssetReference{}; // the mesh's own materials
+    }
     if (!mesh || !material) return std::nullopt;
     return SceneEntityDefinition::Mesh{*mesh, *material};
 }
 
 MeshRenderer RequestRenderer(const SceneEntityDefinition::Mesh& references, AssetSystem& assets) {
-    return {assets.RequestMesh(references.mesh), assets.RequestMaterialInstance(references.materialInstance),
+    const bool own = references.materialInstance.id.IsValid();
+    return {assets.RequestMesh(references.mesh),
+            own ? assets.RequestMaterialInstance(references.materialInstance) : AssetHandle<MaterialInstanceAsset>{},
             references.mesh, references.materialInstance};
 }
 

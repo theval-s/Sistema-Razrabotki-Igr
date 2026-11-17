@@ -179,6 +179,8 @@ private:
     bool FinishJob(LoadJob& job, uint64_t frameIndex);
     enum class DependencyState { Ready, Waiting, Failed };
     DependencyState ResolveDependencies(LoadJob& job, bool wait);
+    /// A mesh's default material per slot, from its metadata; the engine default where it has none.
+    std::vector<AssetHandle<MaterialInstanceAsset>> RequestSlotMaterials(const AssetDesc& desc, std::size_t slots);
     bool ReloadReady(LoadJob& job, std::string& error);
     template <typename T>
     entt::resource<T> FinishTyped(const LoadJob& job, AssetTable<T>& table, AssetHandle<T> handle, uint64_t frameIndex);

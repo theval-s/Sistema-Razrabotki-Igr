@@ -16,14 +16,17 @@
 #include <engine/core/FrameContext.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/engine.hpp>
+#include <engine/rendering/RenderComponents.hpp>
 
 namespace engine {
 namespace {
 
 template <typename T>
-T MakeValue(const AssetDesc& desc, const CpuPayload& cpu, const GpuPayload& gpu) {
+T MakeValue(const AssetDesc& desc, const LoadJob& job, const GpuPayload& gpu) {
+    const CpuPayload& cpu = job.payload;
     if constexpr (std::is_same_v<T, MeshAsset>) {
-        return MeshAsset{gpu.meshSections, cpu.mesh.materialSlots, cpu.mesh.bounds, cpu.mesh.geometry};
+        return MeshAsset{gpu.meshSections, cpu.mesh.materialSlots, job.meshMaterials, cpu.mesh.bounds,
+                         cpu.mesh.geometry};
     } else if constexpr (std::is_same_v<T, TextureAsset>) {
         return TextureAsset{gpu.texture};
     } else if constexpr (std::is_same_v<T, ShaderAsset>) {
@@ -405,6 +408,22 @@ AssetHandle<MeshAsset> AssetSystem::RequestMesh(const std::string_view name, con
     return Request<MeshAsset>(std::move(desc));
 }
 
+std::vector<AssetHandle<MaterialInstanceAsset>> AssetSystem::RequestSlotMaterials(const AssetDesc& desc,
+                                                                                   const std::size_t slots) {
+    const auto* entry = catalog_.FindPath(AssetPathResolver::ToName(AssetPathResolver::ResolveMesh(desc)));
+    const bool authored = entry != nullptr && entry->metadata.kind == CatalogAssetKind::Mesh;
+    std::vector<AssetHandle<MaterialInstanceAsset>> materials;
+    materials.reserve(slots);
+    for (std::size_t slot = 0; slot < slots; ++slot) {
+        AssetHandle<MaterialInstanceAsset> material;
+        if (authored && slot < entry->metadata.materials.size() && entry->metadata.materials[slot]) {
+            material = RequestMaterialInstance(*entry->metadata.materials[slot]);
+        }
+        materials.push_back(material ? material : RequestMaterialInstance(BuiltinAssets::DefaultMaterialInstance));
+    }
+    return materials;
+}
+
 void AssetSystem::UnloadAll() {
     for (const auto& job : inFlight_) engine_.GetTaskScheduler().WaitforTask(job.get());
     inFlight_.clear(); // do not publish a scene that has already gone away
@@ -621,6 +640,13 @@ bool AssetSystem::FinishJob(LoadJob& job, const uint64_t frameIndex) {
 }
 
 AssetSystem::DependencyState AssetSystem::ResolveDependencies(LoadJob& job, bool wait) {
+    if (job.kind == AssetKind::Mesh) {
+        if (!job.dependenciesRequested) {
+            job.dependenciesRequested = true;
+            job.meshMaterials = RequestSlotMaterials(*job.desc, job.payload.mesh.materialSlots.size());
+        }
+        return DependencyState::Ready;
+    }
     const bool instance = job.kind == AssetKind::MaterialInstance;
     if (!instance && job.kind != AssetKind::Material) return DependencyState::Ready;
     const auto& overrides = instance ? job.payload.materialInstance.parameters : job.payload.material.definition.defaults;
@@ -710,7 +736,7 @@ entt::resource<T> AssetSystem::FinishTyped(const LoadJob& job, AssetTable<T>& ta
     log::Assets().info("'{}' ({}) published on frame {} ({} s after queueing)",
                  job.name, ToString(job.kind), frameIndex, totalSeconds);
 
-    entt::resource<T> value = table.Publish(handle, MakeValue<T>(record->desc, job.payload, gpu));
+    entt::resource<T> value = table.Publish(handle, MakeValue<T>(record->desc, job, gpu));
     engine_.GetEvents().trigger(AssetLoadedEvent{job.id, job.name, job.kind});
     return value;
 }

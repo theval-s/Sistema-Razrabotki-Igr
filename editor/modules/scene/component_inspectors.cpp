@@ -178,31 +178,39 @@ std::optional<engine::AssetReference> usedAsset(const engine::AssetSystem& asset
 }
 
 /// A picker for one renderer asset slot: `reference` and `handle` are its members,
-/// `request` what loads a chosen asset into the scene's registry.
+/// `request` what loads a chosen asset into the scene's registry. A non-empty `none` names
+/// an entry that leaves the slot empty.
 template <class Component, class Asset>
 void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt::entity entity, const QString& label,
                   const engine::CatalogAssetKind kind, engine::AssetReference Component::*reference,
                   engine::AssetHandle<Asset> Component::*handle,
-                  engine::AssetHandle<Asset> (engine::AssetSystem::*request)(const engine::AssetReference&)) {
+                  engine::AssetHandle<Asset> (engine::AssetSystem::*request)(const engine::AssetReference&),
+                  const QString& none = {}) {
     engine::Scene& scene = context.scene();
     engine::Engine& engine = context.engine();
-    auto* picker = new editor::AssetPicker(engine.GetSceneAssets().GetCatalog(), kind);
+    auto* picker = new editor::AssetPicker(engine.GetSceneAssets().GetCatalog(), kind, none);
     picker->setMinimumContentsLength(12);  // the dock is narrow; the popup shows whole paths
 
     // Only the user's choices get here: refresh picks quietly.
     QObject::connect(picker, &QComboBox::currentIndexChanged, picker,
-                     [&context, &scene, &engine, entity, label, picker, kind, reference, handle, request] {
+                     [&context, &scene, &engine, entity, label, picker, kind, reference, handle, request, none] {
                          const auto* renderer = std::as_const(scene).TryGetComponent<Component>(entity);
                          const std::optional<engine::AssetReference> chosen = picker->reference();
-                         if (renderer == nullptr || !chosen || chosen->id == (renderer->*reference).id) {
+                         const bool cleared = !chosen && !none.isEmpty() && picker->currentIndex() == 0;
+                         if (renderer == nullptr || (!chosen && !cleared)) {
+                             return;
+                         }
+                         if (chosen ? chosen->id == (renderer->*reference).id
+                                    : !(renderer->*reference).id.IsValid() && !(renderer->*handle)) {
                              return;
                          }
                          context.history().edit(QObject::tr("Change %1").arg(label), [&] {
                              // Asynchronous, like adding the component: the entity isn't drawn until it's loaded.
-                             const auto loaded = (engine.GetSceneAssets().*request)(*chosen);
+                             const auto loaded = chosen ? (engine.GetSceneAssets().*request)(*chosen)
+                                                        : engine::AssetHandle<Asset>{};
                              scene.Modify<Component>(entity, [&](Component& changed) {
                                  changed.*handle = loaded;
-                                 changed.*reference = *chosen;
+                                 changed.*reference = chosen ? *chosen : engine::AssetReference{};
                                  if constexpr (std::is_same_v<Component, engine::SkinnedMeshRenderer>)
                                      changed.posedBounds.reset();
                              });
@@ -214,7 +222,7 @@ void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt
 
     // What the picker last showed, so it's only touched when the slot changes elsewhere.
     auto shown = std::make_shared<std::string>();
-    form.addRow(label, picker, [&scene, &engine, entity, picker, reference, handle, shown] {
+    form.addRow(label, picker, [&scene, &engine, entity, picker, reference, handle, shown, none] {
         const auto* renderer = scene.TryGetComponent<Component>(entity);
         if (renderer == nullptr || picker->hasFocus() || picker->lineEdit()->hasFocus() || picker->view()->isVisible()) {
             return;
@@ -236,7 +244,7 @@ void addAssetSlot(PropertyForm& form, editor::EditorContext& context, const entt
                 return;
             }
         }
-        picker->setCurrentIndex(-1);
+        picker->setCurrentIndex(!used && !none.isEmpty() ? 0 : -1);
         picker->lineEdit()->setPlaceholderText(
             used ? QObject::tr("%1 (missing)").arg(QString::fromStdString(used->path.empty() ? used->id.ToString() : used->path))
                  : QObject::tr("None"));
@@ -286,7 +294,7 @@ void buildMeshRenderer(PropertyForm& form, editor::EditorContext& context, const
                  &engine::MeshRenderer::meshReference, &engine::MeshRenderer::mesh, &engine::AssetSystem::RequestMesh);
     addAssetSlot(form, context, entity, QObject::tr("Material"), engine::CatalogAssetKind::MaterialInstance,
                  &engine::MeshRenderer::materialReference, &engine::MeshRenderer::materialInstance,
-                 &engine::AssetSystem::RequestMaterialInstance);
+                 &engine::AssetSystem::RequestMaterialInstance, QObject::tr("(Mesh materials)"));
 }
 
 void buildSkinnedMeshRenderer(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
@@ -1176,12 +1184,7 @@ void addMeshRenderer(editor::EditorContext& context, const entt::entity entity) 
     } else {
         renderer.mesh = assets.RequestMesh(engine::BuiltinAssets::CubeMesh);
     }
-    if (const engine::CatalogEntry* material = catalog.FindPath(engine::BuiltinAssets::DefaultMaterialInstance)) {
-        renderer.materialReference = {material->metadata.id, material->path};
-        renderer.materialInstance = assets.RequestMaterialInstance(renderer.materialReference);
-    } else {
-        renderer.materialInstance = assets.RequestMaterialInstance(engine::BuiltinAssets::DefaultMaterialInstance);
-    }
+    // No material of its own: the mesh's slots bring theirs.
     context.scene().AddComponent<engine::MeshRenderer>(entity, std::move(renderer));
 }
 

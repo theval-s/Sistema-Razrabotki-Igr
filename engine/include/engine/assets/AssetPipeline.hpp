@@ -207,6 +207,7 @@ struct LoadJob final : public enki::ITaskSet {
     bool dependenciesRequested = false;
     AssetHandle<MaterialAsset> materialDependency;
     AssetHandle<TextureAsset> textureDependency;
+    std::vector<AssetHandle<MaterialInstanceAsset>> meshMaterials;
     MaterialParameters resolvedParameters;
     MaterialHandle resolvedMaterial;
     std::chrono::steady_clock::time_point queuedAt{};
