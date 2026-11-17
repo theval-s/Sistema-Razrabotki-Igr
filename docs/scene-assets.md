@@ -80,6 +80,18 @@ Store a scene under the game root as `<name>.scene.json` and give it its own
 `"materialInstance": null` draws each material slot with the mesh's own default (see Metadata);
 a material instance draws every slot with that one material. `SkinnedMeshRenderer` always needs one.
 
+A `MeshRenderer` can also give single slots a material of their own with `"slotMaterials"`, a list
+in slot order where `null` leaves a slot alone. A slot's own material comes first, then
+`materialInstance`, then the mesh's default. The field is left out when no slot has one:
+
+~~~json
+"MeshRenderer": {
+  "mesh": { "id": "...", "path": "game/models/lamp.glb" },
+  "materialInstance": null,
+  "slotMaterials": [null, { "id": "...", "path": "game/materials/glass-red.material-instance.json" }]
+}
+~~~
+
 The cube and material UUIDs above match checked-in engine sidecars. Entity UUIDs
 are illustrative and unique within the scene. Parent values refer to entity UUIDs
 within the same file. The codec also supports `Bounds`, `Controller`,

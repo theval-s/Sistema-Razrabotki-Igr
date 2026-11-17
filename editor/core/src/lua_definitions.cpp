@@ -160,6 +160,7 @@ function Quaternion:Compose(other) end
 ---@class MeshRendererSnapshot
 ---@field mesh string Catalogued mesh UUID or logical path (getter returns UUID).
 ---@field materialInstance string Catalogued material-instance UUID or logical path; empty uses the mesh's own materials.
+---@field slotMaterials string[]? One per material slot, like materialInstance; an empty one leaves its slot to materialInstance.
 ---@class RigidBodySnapshot
 ---@field motionType 'Static'|'Dynamic'|'Kinematic'
 ---@field mass number Positive.

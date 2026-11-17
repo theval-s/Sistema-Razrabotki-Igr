@@ -673,7 +673,7 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     engine.Shutdown();
 }
 
-TEST(MeshMaterialSlots, SectionsUseTheirSlotDefaultUnlessTheRendererHasAMaterial) {
+TEST(MeshMaterialSlots, SectionsUseTheirSlotMaterialElseTheRenderersElseTheDefault) {
     Fixture fixture;
     ASSERT_NE(fixture.window, nullptr) << "could not create hidden D3D test surface";
     Engine engine({.applicationName = "Mesh slot tests", .surface = {fixture.window, 64, 64}, .taskThreads = 2});
@@ -742,6 +742,26 @@ TEST(MeshMaterialSlots, SectionsUseTheirSlotDefaultUnlessTheRendererHasAMaterial
     ASSERT_EQ(items.size(), 2u);
     EXPECT_EQ(items[0].materialInstance, items[1].materialInstance);
     EXPECT_EQ(items[0].materialInstance, assets.Peek(loaded->materials[1])->instance);
+
+    // A slot's own material beats the renderer's, for that slot only.
+    engine.GetScene().Modify<MeshRenderer>(entity, [&](MeshRenderer& changed) {
+        changed.slotMaterials = {SlotMaterial{loaded->materials[0], redReference}};
+    });
+    extraction->LateUpdate(frame);
+    ASSERT_EQ(items.size(), 2u);
+    EXPECT_EQ(items[0].materialInstance, assets.Peek(loaded->materials[0])->instance);
+    EXPECT_EQ(items[1].materialInstance, assets.Peek(loaded->materials[1])->instance);
+    renderer = engine.GetScene().TryGetComponent<MeshRenderer>(entity);
+    EXPECT_EQ(PrimaryMaterial(assets, *renderer)->instance, items[0].materialInstance);
+
+    // A slot whose material is missing isn't drawn.
+    engine.GetScene().Modify<MeshRenderer>(entity, [&](MeshRenderer& changed) {
+        changed.slotMaterials.push_back({AssetHandle<MaterialInstanceAsset>{}, AssetReference{NewUuid(), "missing"}});
+    });
+    extraction->LateUpdate(frame);
+    ASSERT_EQ(items.size(), 1u);
+    EXPECT_EQ(items[0].materialInstance, assets.Peek(loaded->materials[0])->instance);
+    engine.GetScene().Modify<MeshRenderer>(entity, [](MeshRenderer& changed) { changed.slotMaterials.clear(); });
 
     // A rescan gives the loaded mesh the materials its edited meta names.
     std::string text;

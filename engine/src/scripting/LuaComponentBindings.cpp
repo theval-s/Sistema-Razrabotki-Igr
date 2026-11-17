@@ -4,6 +4,7 @@
 #include <engine/audio/AudioComponents.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/rendering/RenderingResourceManager.hpp>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <set>
@@ -164,10 +165,36 @@ template<class T> void Codec(Fields& f, T& c, LuaBindingsContext& context) {
         std::string mesh = c.meshReference.id.ToString();
         std::string material = c.materialReference.id.IsValid() ? c.materialReference.id.ToString() : std::string{};
         f("mesh", mesh); f("materialInstance", material);
+        // slotMaterials: one string per slot from 1; an empty one leaves the slot alone.
+        f.names.insert("slotMaterials");
         if (f.read) {
             c.meshReference = Resolve(context, mesh, CatalogAssetKind::Mesh);
             c.materialReference = material.empty() ? AssetReference{}
                                                    : Resolve(context, material, CatalogAssetKind::MaterialInstance);
+            sol::object slots = f.table["slotMaterials"];
+            if (slots.valid() && slots.get_type() != sol::type::nil) {
+                Require(slots.get_type() == sol::type::table, "slotMaterials must be an array of strings");
+                const auto list = slots.as<sol::table>();
+                std::size_t count = 0;
+                for (const auto& entry : list) { (void)entry; ++count; }
+                Require(count == list.size(), "slotMaterials must be an array of strings");
+                std::vector<SlotMaterial> values;
+                for (std::size_t i = 1; i <= count; ++i) {
+                    const sol::object entry = list[i];
+                    Require(entry.get_type() == sol::type::string, "slotMaterials must be an array of strings");
+                    const auto name = entry.as<std::string>();
+                    values.push_back({{}, name.empty() ? AssetReference{}
+                                                       : Resolve(context, name, CatalogAssetKind::MaterialInstance)});
+                }
+                c.slotMaterials = std::move(values);
+            }
+        } else {
+            sol::table slots = sol::state_view(f.table.lua_state()).create_table();
+            for (std::size_t i = 0; i < c.slotMaterials.size(); ++i) {
+                const auto& id = c.slotMaterials[i].materialReference.id;
+                slots[i + 1] = id.IsValid() ? id.ToString() : std::string{};
+            }
+            f.table["slotMaterials"] = slots;
         }
     } else if constexpr (std::is_same_v<T, ScriptComponent>) {
         std::string script = c.script.id.ToString();
@@ -212,11 +239,16 @@ template<class T> void Commit(const LuaEntityHandle& entity, LuaBindingsContext&
     if (add ? scene.HasComponent<T>(id) : !scene.HasComponent<T>(id)) return;
     if constexpr (std::is_same_v<T, MeshRenderer>) {
         value.mesh = context.engine->GetSceneAssets().RequestMesh(value.meshReference);
-        value.materialInstance = value.materialReference.id.IsValid()
-            ? context.engine->GetSceneAssets().RequestMaterialInstance(value.materialReference)
-            : AssetHandle<MaterialInstanceAsset>{};
+        const auto request = [&context](const AssetReference& material) {
+            return material.id.IsValid() ? context.engine->GetSceneAssets().RequestMaterialInstance(material)
+                                         : AssetHandle<MaterialInstanceAsset>{};
+        };
+        value.materialInstance = request(value.materialReference);
+        for (auto& slot : value.slotMaterials) slot.materialInstance = request(slot.materialReference);
+        const auto slotId = [](const SlotMaterial& slot) { return slot.materialReference.id; };
         const auto* previous = scene.TryGetComponent<MeshRenderer>(id);
-        if (previous && previous->materialReference.id != value.materialReference.id)
+        if (previous && (previous->materialReference.id != value.materialReference.id ||
+                         !std::ranges::equal(previous->slotMaterials, value.slotMaterials, {}, slotId, slotId)))
             context.engine->ClearEntityMaterialOverride(id);
     }
     if (add) scene.AddComponent<T>(id, std::move(value));

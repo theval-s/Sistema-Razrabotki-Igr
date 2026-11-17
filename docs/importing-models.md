@@ -41,9 +41,15 @@ mesh's `.meta` names for it, and slots without one with the engine default. Choo
 instance instead draws every slot with that one. Models added to a scene from the Content Browser
 start with **(Mesh materials)** when their mesh has materials of its own.
 
+To change one slot in one scene, use **Material slots** in the Mesh Renderer inspector. It lists
+the mesh's slots by name when the mesh has more than one. A slot's own material comes before the
+renderer's **Material**; its first entry, such as **(Default: Body)** or **(Material: Stone)**,
+shows what the slot draws without one. Choosing another mesh clears the slot materials. To change a
+slot everywhere the mesh is used, edit or replace the instance its `.meta` names instead.
+
 The generated instances are ordinary material instances: edit them in the Content Browser, see
 [material-assets.md](material-assets.md). In Lua, a renderer's `materialInstance` is `""` while it
-uses the mesh materials ([scripting.md](scripting.md)). The `.meta` format is in
+uses the mesh materials, and `slotMaterials` lists its slot materials ([scripting.md](scripting.md)). The `.meta` format is in
 [scene-assets.md](scene-assets.md#metadata).
 
 ## Models already in the project: Extract Materials
@@ -85,3 +91,5 @@ a warning, and its textures won't map.
   material instance at another texture, or import again with an image for the other slots.
 - **The model draws in one material.** Its mesh renderer has a material of its own; choose
   **(Mesh materials)**.
+- **One slot ignores the renderer's Material.** It has a slot material: set it back to its first
+  entry under **Material slots**.

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include <entt/resource/resource.hpp>
 
 #include <engine/engine_export.hpp>
@@ -16,9 +18,16 @@ namespace engine {
 
 class AssetSystem;
 
+/// One material slot's own material on a MeshRenderer. Both empty leave the slot alone.
+struct SlotMaterial {
+    AssetHandle<MaterialInstanceAsset> materialInstance;
+    AssetReference materialReference;
+};
+
 /// Draws a mesh asset with the entity's world matrix. Assets come from
 /// Engine::GetAssets(); until they are loaded the entity is simply not drawn.
-/// Without a material instance each material slot uses the mesh's default (see MeshAsset).
+/// A slot draws with its slot material, else the renderer's material instance, else the
+/// mesh's default for that slot (see MeshAsset).
 struct MeshRenderer {
     AssetHandle<MeshAsset> mesh;
     AssetHandle<MaterialInstanceAsset> materialInstance; // for every slot; none for the mesh's own
@@ -26,17 +35,23 @@ struct MeshRenderer {
     // generational handle retires. Runtime handles are never written to JSON.
     AssetReference meshReference;
     AssetReference materialReference;
+    std::vector<SlotMaterial> slotMaterials; // by material slot; may be shorter than the mesh's
 };
 
 /// Whether the renderer names a material of its own, loaded or not.
 [[nodiscard]] inline bool HasOwnMaterial(const MeshRenderer& renderer) {
     return static_cast<bool>(renderer.materialInstance) || renderer.materialReference.id.IsValid();
 }
-/// What one section draws with: the renderer's material instance, else the mesh's default for
-/// the section's slot. Empty until that material is ready.
+/// Whether the slot names a material, loaded or not.
+[[nodiscard]] inline bool HasOwnMaterial(const SlotMaterial& slot) {
+    return static_cast<bool>(slot.materialInstance) || slot.materialReference.id.IsValid();
+}
+/// What one section draws with: its slot's material, else the renderer's material instance, else
+/// the mesh's default for the slot. Empty until that material is ready.
 [[nodiscard]] ENGINE_API entt::resource<MaterialInstanceAsset> SectionMaterial(AssetSystem& assets,
     const MeshRenderer& renderer, const MeshAsset& mesh, const MeshSection& section);
-/// What runtime material edits start from: the renderer's material, else its first section's.
+/// What runtime material edits start from: the first section's material, else the renderer's
+/// while the mesh loads.
 [[nodiscard]] ENGINE_API entt::resource<MaterialInstanceAsset> PrimaryMaterial(AssetSystem& assets,
                                                                                const MeshRenderer& renderer);
 

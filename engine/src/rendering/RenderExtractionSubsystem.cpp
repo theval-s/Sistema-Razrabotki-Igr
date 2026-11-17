@@ -15,17 +15,20 @@ namespace engine {
 
 entt::resource<MaterialInstanceAsset> SectionMaterial(AssetSystem& assets, const MeshRenderer& renderer,
                                                       const MeshAsset& mesh, const MeshSection& section) {
-    // A renderer whose own material is missing stays undrawn rather than silently changing look.
+    // A material that is named but missing leaves the section undrawn rather than silently changing look.
+    if (section.materialSlot < renderer.slotMaterials.size()) {
+        if (const auto& slot = renderer.slotMaterials[section.materialSlot]; HasOwnMaterial(slot))
+            return assets.Peek(slot.materialInstance);
+    }
     if (HasOwnMaterial(renderer)) return assets.Peek(renderer.materialInstance);
     if (section.materialSlot >= mesh.materials.size()) return {};
     return assets.Peek(mesh.materials[section.materialSlot]);
 }
 
 entt::resource<MaterialInstanceAsset> PrimaryMaterial(AssetSystem& assets, const MeshRenderer& renderer) {
-    if (HasOwnMaterial(renderer)) return assets.Peek(renderer.materialInstance);
-    const auto mesh = assets.Peek(renderer.mesh);
-    if (!mesh || mesh->sections.empty()) return {};
-    return SectionMaterial(assets, renderer, *mesh, mesh->sections.front());
+    if (const auto mesh = assets.Peek(renderer.mesh); mesh && !mesh->sections.empty())
+        return SectionMaterial(assets, renderer, *mesh, mesh->sections.front());
+    return HasOwnMaterial(renderer) ? assets.Peek(renderer.materialInstance) : entt::resource<MaterialInstanceAsset>{};
 }
 
 std::string_view RenderExtractionSubsystem::GetName() const { return "RenderExtractionSubsystem"; }

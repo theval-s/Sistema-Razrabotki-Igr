@@ -37,6 +37,8 @@ struct SceneEntityDefinition {
     struct Mesh {
         AssetReference mesh;
         AssetReference materialInstance;
+        // MeshRenderer only: by slot, an invalid one for none, and never ending in one.
+        std::vector<AssetReference> slotMaterials;
         bool operator==(const Mesh&) const = default;
     };
     std::optional<Mesh> renderer;

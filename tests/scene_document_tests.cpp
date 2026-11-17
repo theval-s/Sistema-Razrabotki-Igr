@@ -645,6 +645,59 @@ TEST(SceneDocument, MeshRendererWithoutMaterialKeepsUsingTheMeshMaterials) {
     engine.Shutdown();
 }
 
+TEST(SceneDocument, MeshRendererSlotMaterialsRoundTrip) {
+    engine::SceneDocument document;
+    engine::SceneEntityDefinition item;
+    item.id = engine::NewUuid();
+    item.name = "Model";
+    const engine::AssetReference glass{engine::NewUuid(), "game/models/token/glass.material-instance.json"};
+    item.renderer = engine::SceneEntityDefinition::Mesh{{engine::NewUuid(), "game/models/token/model.glb"}, {}, {{}, glass}};
+    document.entities.push_back(item);
+    std::string json, error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(document, json, error)) << error;
+    const auto slots = json.find("\"slotMaterials\"");
+    ASSERT_NE(slots, std::string::npos);
+    const auto first = json.find_first_not_of(" \r\n\t", json.find('[', slots) + 1);
+    EXPECT_EQ(json.compare(first, 4, "null"), 0) << json;
+    engine::SceneDocument parsed;
+    ASSERT_TRUE(engine::ParseSceneDocument(json, parsed, error)) << error;
+    EXPECT_EQ(parsed.entities.at(0).renderer, item.renderer);
+
+    // Trailing empty slots are dropped, and renderers without slot materials keep their format.
+    std::string padded = json;
+    padded.insert(padded.find(']', padded.find("\"slotMaterials\"")), ", null");
+    ASSERT_TRUE(engine::ParseSceneDocument(padded, parsed, error)) << error;
+    EXPECT_EQ(parsed.entities.at(0).renderer, item.renderer);
+    engine::SceneDocument plain = document;
+    plain.entities[0].renderer->slotMaterials.clear();
+    std::string plainJson;
+    ASSERT_TRUE(engine::SerializeSceneDocument(plain, plainJson, error)) << error;
+    EXPECT_EQ(plainJson.find("slotMaterials"), std::string::npos);
+    std::string scalar = json;
+    const auto start = scalar.find('[', scalar.find("\"slotMaterials\""));
+    scalar.replace(start, scalar.find(']', start) - start + 1, "null");
+    EXPECT_FALSE(engine::ParseSceneDocument(scalar, parsed, error));
+    plain.entities[0].skinnedRenderer = engine::SceneEntityDefinition::Mesh{item.renderer->mesh, glass, {glass}};
+    plain.entities[0].renderer.reset();
+    EXPECT_FALSE(engine::SerializeSceneDocument(plain, plainJson, error));
+
+    engine::EngineConfig config;
+    config.taskThreads = 1;
+    engine::Engine engine(config);
+    ASSERT_TRUE(engine.Initialize());
+    engine::PopulateScene(document, engine.GetSceneAssets(), engine.GetScene());
+    const auto entity = engine.GetScene().FindById(item.id.ToString());
+    const auto* renderer = engine.GetScene().TryGetComponent<engine::MeshRenderer>(entity);
+    ASSERT_NE(renderer, nullptr);
+    ASSERT_EQ(renderer->slotMaterials.size(), 2u);
+    EXPECT_FALSE(engine::HasOwnMaterial(renderer->slotMaterials[0]));
+    EXPECT_EQ(renderer->slotMaterials[1].materialReference.id, glass.id);
+    engine::SceneDocument saved;
+    ASSERT_TRUE(engine::CaptureSceneDocument(engine.GetScene(), engine.GetSceneAssets(), saved, error)) << error;
+    EXPECT_EQ(saved.entities.at(0).renderer, item.renderer);
+    engine.Shutdown();
+}
+
 TEST(SceneDocument, ExampleGameSceneResolvesAllAssetReferences) {
     const auto root = std::filesystem::path(SRI_SOURCE_ROOT);
     const auto file = root / "example_game/scenes/demo.scene.json";
