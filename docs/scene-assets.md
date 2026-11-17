@@ -24,7 +24,7 @@ A mesh can also name a default material instance for each of its material slots:
 
 A mesh has one material slot per source material that its triangles use, in the model's
 material order. `null`, or a slot past the end of the list, uses the engine default material
-instance. The editor's model import writes this list.
+instance. The editor's model import writes this list, see [importing-models.md](importing-models.md).
 `sri-build` reports slots that name a missing material instance.
 
 The generator preserves
