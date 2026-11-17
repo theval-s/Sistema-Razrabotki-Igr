@@ -12,6 +12,7 @@
 #include <engine/core/DefaultSubsystems.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/Log.hpp>
+#include <engine/core/Pak.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/core/Utf.hpp>
 #include <engine/input/InputSubsystem.hpp>
@@ -126,6 +127,15 @@ int WINAPI wWinMain(
         const fs::path exeDir = engine::AssetPathResolver::GetRoot();
 
         std::string error;
+
+        // A packed build keeps everything but the executables and the settings file in the pack.
+        if (const fs::path pak = exeDir / engine::PakFileName; fs::is_regular_file(pak)) {
+            auto source = engine::PakSource::Load(pak, error);
+            if (!source) {
+                return Fail(error);
+            }
+            engine::content::Mount(exeDir, std::move(source));
+        }
 
         auto project = engine::Project::Load(exeDir / L"game.sriproject", error);
 

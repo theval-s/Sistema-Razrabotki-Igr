@@ -8,7 +8,9 @@
 #include <engine/assets/AssetCooking.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
+#include <engine/core/Content.hpp>
 #include <engine/core/FileSystem.hpp>
+#include <engine/core/Pak.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/core/Utf.hpp>
 #include <engine/navigation/NavigationMesh.hpp>
@@ -56,6 +58,7 @@ namespace {
         fs::path project;
         fs::path out;
         fs::path runtime;
+        bool pack = true;
 
         engine::RuntimeSettings settings;
     };
@@ -105,7 +108,7 @@ namespace {
             << "Usage:\n"
             << "  sri-build --project <file> --out <dir> "
             << "[--runtime <dir>] [--title T] [--width N] [--height N] "
-            << "[--fullscreen] [--capture-mouse]\n";
+            << "[--fullscreen] [--capture-mouse] [--no-pak]\n";
     }
 
     bool ParseOptions(
@@ -187,6 +190,9 @@ namespace {
             }
             else if (argument == L"--capture-mouse") {
                 options.settings.captureMouse = true;
+            }
+            else if (argument == L"--no-pak") {
+                options.pack = false;
             }
             else {
                 error = "Unknown argument: " + engine::ToUtf8(fs::path(argument));
@@ -482,10 +488,21 @@ namespace {
         return errors.empty();
     }
 
+    // Audio streams straight from the pack, and these images are compressed already.
+    bool Compressible(const fs::path& file) {
+        if (engine::CatalogKindForFile(file) == engine::CatalogAssetKind::AudioClip) return false;
+        const auto extension = engine::content::FoldCase(engine::ToUtf8(file.extension()));
+        return extension != ".png" && extension != ".jpg" && extension != ".jpeg";
+    }
+
+    std::vector<std::uint8_t> Bytes(std::string_view text) {
+        return {text.begin(), text.end()};
+    }
+
     bool Stage(
         const Options& options,
         const engine::Project& project,
-        const Cooked& cooked,
+        Cooked cooked,
         std::string& error
     ) {
 
@@ -571,6 +588,28 @@ namespace {
             options.out / (projectName.native() + L".exe")
         );
 
+        // Game content goes into the pack, or beside the executable with --no-pak.
+        engine::PakWriter pak;
+        const auto addFile = [&](const fs::path& relative, const fs::path& source) {
+            if (options.pack) {
+                pak.AddFile(engine::ToGenericUtf8(relative), source, Compressible(source));
+                return;
+            }
+            const fs::path target = options.out / relative;
+            fs::create_directories(target.parent_path());
+            fs::copy_file(source, target);
+        };
+        const auto addBytes = [&](const fs::path& relative, std::vector<std::uint8_t> bytes) {
+            if (options.pack) {
+                pak.AddBytes(engine::ToGenericUtf8(relative), std::move(bytes), true);
+                return true;
+            }
+            const fs::path target = options.out / relative;
+            fs::create_directories(target.parent_path());
+            return engine::WriteFileAtomic(
+                target, std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), error);
+        };
+
         // .meta files are replaced by the manifest, cooked sources by their cooked files and HLSL
         // by the shader library.
         for (const auto& [root, prefix] : ContentRoots(project)) {
@@ -581,22 +620,24 @@ namespace {
                     cooked.sources.contains(item.path())) {
                     continue;
                 }
-                const fs::path target = options.out / prefix / item.path().lexically_relative(root);
-                fs::create_directories(target.parent_path());
-                fs::copy_file(item.path(), target);
+                addFile(prefix / item.path().lexically_relative(root), item.path());
             }
         }
-        for (const auto& file : cooked.files) {
-            const fs::path target = options.out / file.target;
-            fs::create_directories(target.parent_path());
-            const std::string_view bytes(reinterpret_cast<const char*>(file.bytes.data()), file.bytes.size());
-            if (!engine::WriteFileAtomic(target, bytes, error)) return false;
+        for (auto& file : cooked.files) {
+            if (!addBytes(file.target, std::move(file.bytes))) return false;
         }
-        if (!engine::WriteFileAtomic(options.out / L"manifest.json", cooked.manifest, error)) return false;
-        const std::string_view shaders(reinterpret_cast<const char*>(cooked.shaders.data()), cooked.shaders.size());
-        if (!engine::WriteFileAtomic(options.out / engine::ShaderLibraryName, shaders, error)) return false;
-        fs::copy_file(project.file, options.out / L"game.sriproject");
+        if (!addBytes(L"manifest.json", Bytes(cooked.manifest)) ||
+            !addBytes(engine::ShaderLibraryName, std::move(cooked.shaders))) {
+            return false;
+        }
+        addFile(L"game.sriproject", project.file);
 
+        if (options.pack) {
+            const fs::path file = options.out / engine::PakFileName;
+            if (!pak.Write(file, error)) return false;
+            Info("Packed " + std::to_string(pak.Size()) + " files into " + engine::ToUtf8(file.filename()) + " (" +
+                 std::to_string((fs::file_size(file) + 512 * 1024) / (1024 * 1024)) + " MB)");
+        }
         return true;
     }
 
@@ -672,7 +713,7 @@ int wmain(int argc, wchar_t* argv[]) {
 
         Info("Cooked " + std::to_string(cooked.files.size()) + " assets");
 
-        if (!Stage(options, *project, cooked, error)) {
+        if (!Stage(options, *project, std::move(cooked), error)) {
             Error(error);
             return 1;
         }

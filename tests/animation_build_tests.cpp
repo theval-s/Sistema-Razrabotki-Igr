@@ -9,11 +9,16 @@
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/engine.hpp>
 #include <engine/rendering/EngineShaders.hpp>
+#include <engine/core/Content.hpp>
 #include <engine/core/FileSystem.hpp>
+#include <engine/core/Pak.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/project/Project.hpp>
+#include <engine/project/RuntimeSettings.hpp>
 
 #include <gtest/gtest.h>
+
+#include "content_fixture.hpp"
 
 #include <filesystem>
 #include <initializer_list>
@@ -74,9 +79,9 @@ std::wstring QuoteArgument(const std::wstring& argument) {
 }
 
 std::optional<DWORD> RunBuild(const fs::path& tool, const fs::path& project,
-                              const fs::path& output, const fs::path& runtime) {
+                              const fs::path& output, const fs::path& runtime, const std::wstring& extra = {}) {
     std::wstring command = QuoteArgument(tool.native()) + L" --project " + QuoteArgument(project.native()) +
-        L" --out " + QuoteArgument(output.native()) + L" --runtime " + QuoteArgument(runtime.native());
+        L" --out " + QuoteArgument(output.native()) + L" --runtime " + QuoteArgument(runtime.native()) + extra;
     SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
     HANDLE nullDevice = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                     &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -150,23 +155,53 @@ TEST(AnimationBuild, ValidatesBeforeReplacingStagedOutput) {
     const fs::path tool = engine::AssetPathResolver::GetRoot() / L"sri-build.exe";
     ASSERT_TRUE(fs::is_regular_file(tool));
 
+    const std::vector<std::string> botFiles{"model.glb", "model.skeleton.json", "model.skinned-mesh.json",
+                                            "idle.animation.json", "walk.animation.json"};
+
+    // --no-pak keeps the cooked layout loose beside the executable.
+    const fs::path loose = temp.path / L"loose";
+    const auto looseExit = RunBuild(tool, project.file, loose, runtime, L" --no-pak");
+    ASSERT_TRUE(looseExit.has_value());
+    ASSERT_EQ(*looseExit, 0u);
+    EXPECT_FALSE(fs::exists(loose / engine::PakFileName));
+    for (const auto& name : botFiles) {
+        const auto source = loose / L"game" / L"models" / L"TestBot" / engine::FromUtf8(name);
+        EXPECT_TRUE(fs::is_regular_file(engine::CookedPath(source))) << name;
+        EXPECT_FALSE(fs::exists(source)) << name;
+    }
+    EXPECT_TRUE(fs::is_regular_file(loose / L"manifest.json"));
+    EXPECT_TRUE(fs::is_regular_file(loose / engine::ShaderLibraryName));
+
     const auto validExit = RunBuild(tool, project.file, output, runtime);
     ASSERT_TRUE(validExit.has_value());
     ASSERT_EQ(*validExit, 0u);
-    const fs::path stagedBot = output / L"game" / L"models" / L"TestBot";
-    for (const auto* name : {"model.glb", "model.skeleton.json", "model.skinned-mesh.json", "idle.animation.json",
-                             "walk.animation.json"}) {
-        EXPECT_TRUE(fs::is_regular_file(engine::CookedPath(stagedBot / name))) << name;
-        EXPECT_FALSE(fs::exists(stagedBot / name)) << name;
+    // Only the executables, the runtime settings and the pack are left on disk.
+    EXPECT_TRUE(fs::is_regular_file(output / L"AnimationBuildTest.exe"));
+    EXPECT_TRUE(fs::is_regular_file(output / engine::RuntimeSettings::FileName));
+    EXPECT_FALSE(fs::exists(output / L"game"));
+    EXPECT_FALSE(fs::exists(output / L"engine"));
+    EXPECT_FALSE(fs::exists(output / L"manifest.json"));
+    auto pak = engine::PakSource::Load(output / engine::PakFileName, error);
+    ASSERT_TRUE(pak) << error;
+    const auto files = pak->Files();
+    for (const auto& file : files) {
+        EXPECT_FALSE(file.ends_with(".meta")) << file;
+        EXPECT_FALSE(file.ends_with(".hlsl")) << file;
     }
-    EXPECT_TRUE(fs::is_regular_file(output / L"game" / L"scenes" / L"animation.scene.json"));
-    EXPECT_TRUE(fs::is_regular_file(output / L"manifest.json"));
-    EXPECT_TRUE(fs::is_regular_file(engine::CookedPath(output / L"engine" / L"primitives" / L"cube" / L"model.obj")));
-    for (const auto& item : fs::recursive_directory_iterator(output)) {
-        EXPECT_NE(item.path().extension(), L".meta") << item.path();
-        EXPECT_NE(item.path().extension(), L".hlsl") << item.path();
+    for (const auto& name : botFiles) {
+        EXPECT_TRUE(pak->IsFile("game/models/TestBot/" + name + ".cooked")) << name;
+        EXPECT_FALSE(pak->IsFile("game/models/TestBot/" + name)) << name;
     }
+    for (const auto* name : {"game/scenes/animation.scene.json", "manifest.json", "shaders.cooked", "game.sriproject",
+                             "engine/primitives/cube/model.obj.cooked"}) {
+        EXPECT_TRUE(pak->IsFile(name)) << name;
+    }
+
+    MountScope mount(output, std::move(pak));
     {
+        const auto packedProject = engine::Project::Load(output / L"game.sriproject", error);
+        ASSERT_TRUE(packedProject) << error;
+        EXPECT_EQ(packedProject->startupScene, project.startupScene);
         std::vector<std::uint8_t> bytes;
         ASSERT_TRUE(engine::ReadBinaryFile(output / engine::ShaderLibraryName, bytes, error)) << error;
         engine::ShaderLibrary library;
@@ -180,7 +215,7 @@ TEST(AnimationBuild, ValidatesBeforeReplacingStagedOutput) {
     }
 
     {
-        // The cooked build runs without any source or .meta file.
+        // The packed build runs without any source or .meta file.
         engine::AssetPathResolver::SetManifest(output / L"manifest.json");
         engine::AssetPathResolver::SetGameRoot(output / L"game");
         struct Restore {
@@ -201,6 +236,7 @@ TEST(AnimationBuild, ValidatesBeforeReplacingStagedOutput) {
         EXPECT_EQ(walk->skeletonSignature, skeleton->signature);
         host.Shutdown();
     }
+    engine::content::Unmount(output); // let the next build replace the pack
 
     const fs::path marker = output / L"preserve-marker.txt";
     ASSERT_TRUE(engine::WriteFileAtomic(marker, "preserve this output", error)) << error;

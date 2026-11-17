@@ -350,6 +350,7 @@ sri_install_docs(sdk ${CMAKE_INSTALL_DOCDIR} SDK)
 find_package(EnTT CONFIG REQUIRED)
 find_package(enkiTS CONFIG REQUIRED)
 find_package(assimp CONFIG REQUIRED)
+find_package(ZLIB REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(nlohmann_json_schema_validator CONFIG REQUIRED)
 find_package(stduuid CONFIG REQUIRED)
@@ -392,6 +393,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/core/DefaultSubsystems.hpp
     include/engine/core/Content.hpp
     include/engine/core/FileSystem.hpp
+    include/engine/core/Pak.hpp
     include/engine/core/FrameContext.hpp
     include/engine/core/PathUtils.hpp
     include/engine/core/Subsystem.hpp
@@ -435,6 +437,7 @@ set(ENGINE_CORE_SOURCES
     src/core/Content.cpp
     src/core/ContentMounts.hpp
     src/core/FileSystem.cpp
+    src/core/Pak.cpp
     src/core/Subsystem.cpp
     src/physics/PhysicsComponents.cpp
     src/physics/PhysicsSubsystem.cpp
@@ -459,7 +462,7 @@ foreach(engine_target IN ITEMS engine engine_static)
         target_link_libraries(${engine_target} PUBLIC Microsoft::DirectXTK EnTT::EnTT enkiTS::enkiTS)
         # Assimp is PRIVATE on purpose: AssimpMeshImporter.cpp is its only user and no
         # public header mentions it. Static consumers still get it via the link-only interface.
-        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid Lua::Lua sol2::sol2 Jolt::Jolt RecastNavigation::Recast RecastNavigation::Detour RecastNavigation::DetourCrowd ozz_animation ozz_animation_offline)
+        target_link_libraries(${engine_target} PRIVATE assimp::assimp nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator stduuid Lua::Lua sol2::sol2 Jolt::Jolt RecastNavigation::Recast RecastNavigation::Detour RecastNavigation::DetourCrowd ozz_animation ozz_animation_offline ZLIB::ZLIB)
     endif()
 endforeach()
 

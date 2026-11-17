@@ -18,6 +18,7 @@
         "joltphysics",
         "recastnavigation",
         "miniaudio",
+        "zlib",
         { "name": "rmlui", "default-features": false, "features": ["freetype"] }
     ],
     "builtin-baseline": "8a9d7414691554ff6c7e1f5e957872d6a033df26",
