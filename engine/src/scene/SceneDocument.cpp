@@ -28,6 +28,7 @@ void ValidateEmitter(const ParticleEmitter& value) {
         !std::isfinite(value.tint.x) || !std::isfinite(value.tint.y) || !std::isfinite(value.tint.z) ||
         value.tint.x < 0 || value.tint.y < 0 || value.tint.z < 0)
         throw std::invalid_argument("invalid ParticleEmitter values");
+    if (value.appearance == 1) throw std::invalid_argument("ParticleEmitter appearance 1 is reserved");
 }
 
 std::uint32_t Unsigned32(const Json& value) {
@@ -170,8 +171,6 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
                       "effect", "overrideEmission"});
         ParticleEmitter value;
         value.appearance = Unsigned32(json.at("appearance"));
-        // Explicit migration: the retired built-in fire (1) becomes standard particles (0).
-        if (value.appearance == 1) value.appearance = 0;
         if (json.contains("effect") && !json.at("effect").is_null()) value.effect = Reference(json.at("effect"));
         if (json.contains("overrideEmission")) value.overrideEmission = Boolean(json.at("overrideEmission"));
         value.maxAlive = Unsigned32(json.at("maxAlive"));
@@ -583,7 +582,7 @@ Json Encode(const SceneDocument& document) {
             ValidateEmitter(emitter);
             if (!emitter.effect.id.IsValid() && !emitter.effect.path.empty())
                 throw std::invalid_argument("invalid ParticleEmitter effect reference");
-            components["ParticleEmitter"] = {{"appearance", emitter.appearance == 1 ? 0 : emitter.appearance}, {"maxAlive", emitter.maxAlive},
+            components["ParticleEmitter"] = {{"appearance", emitter.appearance}, {"maxAlive", emitter.maxAlive},
                 {"seed", emitter.seed}, {"rate", emitter.rate}, {"lifetime", emitter.lifetime},
                 {"speed", emitter.speed}, {"radius", emitter.radius}, {"spread", emitter.spread},
                 {"tint", Encode(emitter.tint)}, {"effect", emitter.effect.id.IsValid() ? Encode(emitter.effect) : Json(nullptr)},

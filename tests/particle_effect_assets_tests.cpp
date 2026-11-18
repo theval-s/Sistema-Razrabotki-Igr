@@ -166,7 +166,7 @@ TEST(ParticleEffectAssets, PackedAsyncLoadingReloadAndTextureFailure) {
     EXPECT_TRUE(assets.LoadParticleEffect("game/smoke"));
 }
 
-TEST(ParticleEffectScene, ReferencesOverridesAndLegacyFireMigration) {
+TEST(ParticleEffectScene, ReferencesOverridesAndReservedAppearance) {
     SceneDocument document;
     SceneEntityDefinition entity;
     entity.id = EntityUuid(NewUuid());
@@ -185,14 +185,13 @@ TEST(ParticleEffectScene, ReferencesOverridesAndLegacyFireMigration) {
     auto json = Json::parse(text);
     auto& emitter = json["entities"][0]["components"]["ParticleEmitter"];
     emitter.erase("effect"); emitter.erase("overrideEmission"); emitter["appearance"] = 1;
-    ASSERT_TRUE(ParseSceneDocument(json.dump(), decoded, error)) << error;
-    ASSERT_TRUE(decoded.entities[0].particleEmitter);
-    EXPECT_EQ(decoded.entities[0].particleEmitter->appearance, 0u);
-    EXPECT_FALSE(decoded.entities[0].particleEmitter->effect.id.IsValid());
-    EXPECT_FALSE(decoded.entities[0].particleEmitter->overrideEmission);
+    EXPECT_FALSE(ParseSceneDocument(json.dump(), decoded, error)) << "appearance 1 is reserved";
     emitter["appearance"] = 2;
     ASSERT_TRUE(ParseSceneDocument(json.dump(), decoded, error)) << error;
+    ASSERT_TRUE(decoded.entities[0].particleEmitter);
     EXPECT_EQ(decoded.entities[0].particleEmitter->appearance, 2u);
+    EXPECT_FALSE(decoded.entities[0].particleEmitter->effect.id.IsValid());
+    EXPECT_FALSE(decoded.entities[0].particleEmitter->overrideEmission);
     emitter["effect"] = {{"id", "bad"}, {"path", "game/smoke.particle-effect.json"}};
     const auto before = decoded;
     EXPECT_FALSE(ParseSceneDocument(json.dump(), decoded, error));

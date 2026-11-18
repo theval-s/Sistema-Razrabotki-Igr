@@ -181,6 +181,7 @@ TEST(SceneDocument, ParticleEmitterRejectsMalformedValuesTransactionally) {
         EXPECT_EQ(parsed.entities, original);
     };
     reject("\"appearance\": 0", "\"appearance\": -1");
+    reject("\"appearance\": 0", "\"appearance\": 1"); // reserved
     reject("\"appearance\": 0", "\"appearance\": 4294967296");
     reject("\"seed\": 1", "\"seed\": 1.5");
     reject("\"maxAlive\": 256", "\"maxAlive\": 0");

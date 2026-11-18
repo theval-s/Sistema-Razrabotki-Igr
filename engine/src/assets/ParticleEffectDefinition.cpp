@@ -40,7 +40,7 @@ DirectX::SimpleMath::Vector3 Vector(const Json& j) {
 Json Encode(const DirectX::SimpleMath::Vector3& v) { return Json::array({v.x, v.y, v.z}); }
 void Validate(const ParticleEffectSettings& s) {
     const auto nonnegative = [](float v) { return std::isfinite(v) && v >= 0; };
-    Require(s.appearance != 1, "particle appearance 1 (retired fire) is invalid in effect definitions");
+    Require(s.appearance != 1, "particle appearance 1 is reserved");
     Require(s.maxAlive >= 1, "particle maxAlive must be at least 1");
     Require(std::isfinite(s.lifetime) && s.lifetime > 0, "particle lifetime must be positive");
     Require(nonnegative(s.lifetimeVariation) && s.lifetimeVariation < 1 &&

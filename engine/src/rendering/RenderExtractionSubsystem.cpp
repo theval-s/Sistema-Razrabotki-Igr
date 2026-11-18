@@ -82,9 +82,7 @@ void RenderExtractionSubsystem::LateUpdate(const FrameContext&) {
             }
             effective.appearance = effect.appearance;
         } else {
-            // Retired inline fire migrates to standard particles, including runtime-created emitters.
-            effective.appearance = emitter.appearance == 1 ? 0 : emitter.appearance;
-            effect.appearance = effective.appearance;
+            effect.appearance = emitter.appearance; // reserved 1 fails validation and isn't simulated
         }
         const auto matrix = scene.GetWorldMatrix(entity);
         Vector3 up = matrix.Up();

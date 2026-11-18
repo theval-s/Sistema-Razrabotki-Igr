@@ -10,7 +10,7 @@ enum class ParticleBlendMode : std::uint32_t { Alpha, Additive };
 
 /// Shared authoring defaults. Colors are straight linear HDR; distances are world units.
 struct ParticleEffectSettings {
-    std::uint32_t appearance{0}, maxAlive{256}; // 0 = standard textured particle, >= 2 = project hooks
+    std::uint32_t appearance{0}, maxAlive{256}; // 0 = standard textured particle, 1 = reserved, >= 2 = project hooks
     float rate{30}, lifetime{2}, speed{1}, radius{0.25f}, spread{0.35f};
     float lifetimeVariation{}, speedVariation{}; // symmetric fractions: lifetime [0,1), speed [0,1]
     DirectX::SimpleMath::Vector3 acceleration{};
@@ -26,7 +26,7 @@ struct ParticleEffectSettings {
 
 /// Emits in world space along the entity's local up axis. Rates are births per simulation second.
 struct ParticleEmitter {
-    std::uint32_t appearance{0}, maxAlive{256}, seed{1}; // legacy inline settings; appearance 1 loads as 0
+    std::uint32_t appearance{0}, maxAlive{256}, seed{1}; // inline settings; appearance as in ParticleEffectSettings
     float rate{30}, lifetime{2}, speed{1}, radius{0.25f}, spread{0.35f};
     DirectX::SimpleMath::Vector3 tint{1, 1, 1}; // straight linear HDR
     AssetReference effect;
