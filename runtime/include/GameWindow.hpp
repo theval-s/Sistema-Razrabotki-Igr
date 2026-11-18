@@ -40,6 +40,10 @@ public:
     [[nodiscard]] HWND Handle() const noexcept { return hwnd_; }
     [[nodiscard]] engine::NativeSurface Surface() const;
     [[nodiscard]] bool IsMinimized() const noexcept { return minimized_; }
+    [[nodiscard]] bool IsFullscreen() const noexcept { return fullscreen_; }
+
+    // Borderless over the window's monitor; leaving it restores the previous placement. Alt+Enter toggles it.
+    void SetFullscreen(bool fullscreen);
 
     void SetResizeCallback(std::function<void(std::uint32_t, std::uint32_t)> cb) {
         onResize_ = std::move(cb);
@@ -57,6 +61,7 @@ private:
     );
 
     void NotifyResize();
+    void FitToMonitor();
 
 private:
 
@@ -68,6 +73,9 @@ private:
     bool classRegistered_ = false;
     bool minimized_ = false;
     bool resizing_ = false;
+    bool fullscreen_ = false;
+
+    WINDOWPLACEMENT windowedPlacement_{sizeof(WINDOWPLACEMENT)};
 
     std::function<void(std::uint32_t, std::uint32_t)> onResize_;
 

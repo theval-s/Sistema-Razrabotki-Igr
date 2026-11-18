@@ -284,7 +284,7 @@ TEST(Input, CursorModeRequestOutlivesFocusLossAndReset) {
     EXPECT_EQ(input.GetCursorMode(), CursorMode::Locked);
 }
 
-TEST(Input, CursorPolicySuspendsAndRestoresEveryRequestWithoutLosingUiDrag) {
+TEST(Input, CursorPolicySuspendsAndRestoresEveryRequestAndOnlyGrabsForLock) {
     for (const auto request : {CursorMode::Normal, CursorMode::Hidden, CursorMode::Locked}) {
         auto p = ResolveCursorPolicy(request, true, false, false, false);
         EXPECT_EQ(p.mode, request);
@@ -293,7 +293,8 @@ TEST(Input, CursorPolicySuspendsAndRestoresEveryRequestWithoutLosingUiDrag) {
             p = ResolveCursorPolicy(request, true, requirement == 0, requirement == 1, requirement == 2);
             EXPECT_EQ(p.mode, CursorMode::Normal);
             EXPECT_TRUE(p.interactiveUi);
-            EXPECT_EQ(p.grab, requirement == 0);
+            // A menu must leave the window frame usable; hosts hold the mouse only during a drag.
+            EXPECT_FALSE(p.grab);
         }
         p = ResolveCursorPolicy(request, false, true, true, true);
         EXPECT_EQ(p.mode, CursorMode::Normal);

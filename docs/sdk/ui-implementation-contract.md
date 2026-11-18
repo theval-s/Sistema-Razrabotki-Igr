@@ -253,7 +253,9 @@ composition on focus loss, owner teardown or session end. Host clipboard and cur
 remain Qt-free. `SetCapture` supplies UI requirements to the host's cursor policy;
 it does not change the gameplay request stored in `InputSubsystem`. UI pointer
 capture, a visible-pointer requirement, or text entry overrides gameplay hiding and
-locking. A UI drag keeps its mouse capture independently of gameplay mode. When UI
+locking. UI pointer capture never grabs the OS mouse: hosts grab it only for `Locked`
+and while a button is held, so a UI drag still ends in the game and a menu leaves the
+window frame usable. When UI
 releases its requirements, the host reapplies the requested mode if it owns input.
 Focus loss or explicit editor input release frees capture without clearing that
 request. The recapture click is consumed by the editor. A null host uses an in-memory

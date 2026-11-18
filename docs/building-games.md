@@ -28,6 +28,12 @@ MyGame/
 `sri-build` only replaces an output folder that is empty or carries `.sri-build`. If the project
 has errors it reports them and leaves the previous build as it was.
 
+## The game window
+
+The game opens in a window whose inside is `width` by `height` pixels. With `fullscreen` it covers
+the monitor it opens on instead, without a frame; the display mode stays as it is. **Alt+Enter**
+switches between the two at any time, and the game doesn't receive that Enter press.
+
 ## Cooking
 
 | Content | In a build |

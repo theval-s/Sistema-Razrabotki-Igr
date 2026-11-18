@@ -41,6 +41,11 @@ InputUiNavigationKey Navigation(WPARAM key) {
     case VK_INSERT: return InputUiNavigationKey::Insert; default: return InputUiNavigationKey::None;
     }
 }
+POINT ClientCenter(HWND window) {
+    RECT client{}; GetClientRect(window, &client);
+    POINT center{client.right / 2, client.bottom / 2}; ClientToScreen(window, &center);
+    return center;
+}
 std::wstring CompositionString(HIMC context, DWORD type) {
     const LONG bytes = ImmGetCompositionStringW(context, type, nullptr, 0);
     if (bytes <= 0 || bytes % sizeof(wchar_t)) return {};
@@ -199,7 +204,7 @@ void Win32InputHost::ApplyCursorMode() {
         else while (ShowCursor(TRUE) < 0) {}
     }
     // Capture can be released by the OS without changing the persistent request.
-    if (policy.grab) {
+    if (policy.grab || dragging_) {
         if (GetCapture() != window_) ::SetCapture(window_);
     } else if (GetCapture() == window_) ReleaseCapture();
     const bool changed = cursorMode_ != policy.mode;
@@ -207,10 +212,7 @@ void Win32InputHost::ApplyCursorMode() {
     if (uiHost_ && (ownsInput || wasHidden)) ::SetCursor(hidden ? nullptr :
         (policy.interactiveUi && !uiHost_->cursor ? LoadCursorW(nullptr, IDC_ARROW) : uiHost_->cursor));
     if (changed && cursorMode_ == CursorMode::Locked) {
-        RECT client{};
-        GetClientRect(window_, &client);
-        POINT center{client.right / 2, client.bottom / 2};
-        ClientToScreen(window_, &center);
+        const POINT center = ClientCenter(window_);
         SetCursorPos(center.x, center.y);
     }
     if (changed) hasCursorPosition_ = false;
@@ -218,6 +220,7 @@ void Win32InputHost::ApplyCursorMode() {
 void Win32InputHost::Shutdown() {
     SetInputMessageHandler(window_, {});
     focused_ = false;
+    dragging_ = false;
     ApplyCursorMode();
     if (uiHost_ && uiHost_->owner) { uiHost_->CancelComposition(); uiHost_->owner = nullptr; }
     if (GetCapture() == window_) ReleaseCapture();
@@ -267,7 +270,8 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
     InputUiEvent event;
     switch (message) {
     case WM_MOUSEACTIVATE:
-        if (!focused_) {
+        // Only a click into the game is eaten: one on the frame must still move or size the window.
+        if (!focused_ && LOWORD(lp) == HTCLIENT) {
             const auto buttonMessage = HIWORD(lp);
             swallowedButton_ = buttonMessage == WM_LBUTTONDOWN ? MouseButton::Left :
                 buttonMessage == WM_RBUTTONDOWN ? MouseButton::Right :
@@ -279,6 +283,7 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
     case WM_NCDESTROY:
         if (focused_) input_->OnFocusLost();
         focused_ = false;
+        dragging_ = false;
         ApplyCursorMode();
         uiHost_->CancelComposition();
         uiHost_->owner = nullptr;
@@ -288,7 +293,7 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
         focused_ = true; hasCursorPosition_ = false;
         event.payload = InputUiFocus{true}; Queue(std::move(event)); break;
     case WM_KILLFOCUS:
-        focused_ = false; hasCursorPosition_ = false;
+        focused_ = false; dragging_ = false; hasCursorPosition_ = false;
         ApplyCursorMode();
         if (GetCapture() == window) ReleaseCapture();
         uiHost_->CancelComposition();
@@ -337,6 +342,9 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
             const auto button = message == WM_LBUTTONDOWN || message == WM_LBUTTONUP ? MouseButton::Left :
                 message == WM_RBUTTONDOWN || message == WM_RBUTTONUP ? MouseButton::Right : MouseButton::Middle;
             const bool down = message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN;
+            // A drag that leaves the window still ends here: hold the mouse until every button is up.
+            dragging_ = (wp & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)) != 0;
+            ApplyCursorMode();
             if (button == swallowedButton_) {
                 if (!down) swallowedButton_ = MouseButton::Count;
                 result = 0; return true;
@@ -460,6 +468,12 @@ bool Win32InputHost::HandleMessage(HWND window, UINT message, WPARAM wp, LPARAM 
     case WM_SETCURSOR:
         if (LOWORD(lp) == HTCLIENT) { ApplyCursorMode(); result = TRUE; return true; }
         break;
+    case WM_CAPTURECHANGED: // Another window took the mouse mid-drag.
+        if (reinterpret_cast<HWND>(lp) != window) dragging_ = false;
+        break;
+    case WM_WINDOWPOSCHANGED: // A moved centre (Alt+Enter, resize) must not read as one big mouse-look delta.
+        if (cursorMode_ == CursorMode::Locked && !IsIconic(window)) { const POINT center = ClientCenter(window); SetCursorPos(center.x, center.y); }
+        break;
     case WM_DPICHANGED: {
         const auto* rect = reinterpret_cast<const RECT*>(lp);
         SetWindowPos(window, nullptr, rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -485,8 +499,7 @@ void Win32InputHost::Update(const FrameContext&) {
     POINT cursor{};
     if (!GetCursorPos(&cursor)) return;
     if (cursorMode_ == CursorMode::Locked) {
-        RECT client{}; GetClientRect(window_, &client);
-        POINT center{client.right / 2, client.bottom / 2}; ClientToScreen(window_, &center);
+        const POINT center = ClientCenter(window_);
         input_->OnMouseMove(static_cast<float>(cursor.x - center.x), static_cast<float>(cursor.y - center.y));
         SetCursorPos(center.x, center.y);
     } else {

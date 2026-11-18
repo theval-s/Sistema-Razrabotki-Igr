@@ -8,6 +8,7 @@ namespace engine {
 /// This policy has no platform or UI subsystem dependencies.
 struct CursorPolicy {
     CursorMode mode = CursorMode::Normal;
+    /// Mouse-look only. UI drags use the host's button-held capture, so a menu never blocks the window frame.
     bool grab = false;
     bool interactiveUi = false;
 };
@@ -17,7 +18,7 @@ struct CursorPolicy {
     if (!ownsInput) return {};
     const bool interactive = pointerCapture || wantsVisibleCursor || textInput;
     const auto mode = interactive ? CursorMode::Normal : requested;
-    return {mode, pointerCapture || mode == CursorMode::Locked, interactive};
+    return {mode, mode == CursorMode::Locked, interactive};
 }
 
 } // namespace engine

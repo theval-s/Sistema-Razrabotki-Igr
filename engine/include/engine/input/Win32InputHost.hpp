@@ -43,6 +43,8 @@ private:
     class HostBridge;
     std::shared_ptr<HostBridge> uiHost_;
     bool focused_ = false;
+    /// A button is held after a press in the client area; the window keeps the mouse until release.
+    bool dragging_ = false;
     MouseButton swallowedButton_ = MouseButton::Count;
     bool composing_ = false;
     wchar_t highSurrogate_ = 0;

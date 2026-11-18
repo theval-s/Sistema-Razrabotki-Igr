@@ -135,6 +135,26 @@ TEST(Win32Input, SentMessagesUnicodeFocusAndRecaptureIngestion) {
     EXPECT_FALSE(focus->focused);
 }
 
+TEST(Win32Input, FrameClickActivatesWithoutEatingTheNextClick) {
+    RootScope root;
+    DesktopScope desktop;
+    WindowScope window{CreateHostWindow()};
+    ASSERT_NE(window.handle, nullptr);
+    Engine engine{EngineConfig{.taskThreads = 1}};
+    engine.AddSubsystem<Win32InputHost>(window.handle);
+    auto* input = engine.AddSubsystem<InputSubsystem>();
+    ASSERT_TRUE(engine.Initialize());
+    SendMessageW(window.handle, WM_KILLFOCUS, 0, 0);
+    // The caption and borders keep the click so the first drag moves or sizes the window.
+    for (const int hit : {HTCAPTION, HTBOTTOMRIGHT})
+        EXPECT_NE(SendMessageW(window.handle, WM_MOUSEACTIVATE, 0, MAKELPARAM(hit, WM_LBUTTONDOWN)), MA_ACTIVATEANDEAT);
+    SendMessageW(window.handle, WM_SETFOCUS, 0, 0);
+    SendMessageW(window.handle, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(40, 40));
+    input->Update({});
+    EXPECT_TRUE(input->WasPressed(MouseButton::Left));
+    SendMessageW(window.handle, WM_LBUTTONUP, 0, MAKELPARAM(40, 40));
+}
+
 TEST(Win32Input, InteractiveCursorArbitrationAndFocusRestore) {
     RootScope root;
     DesktopScope desktop;
@@ -172,9 +192,17 @@ TEST(Win32Input, InteractiveCursorArbitrationAndFocusRestore) {
     EXPECT_EQ(GetCursor(), nullptr);
     bridge->SetCapture({.pointer = true});
     EXPECT_EQ(native->GetEffectiveCursorMode(), CursorMode::Normal);
-    EXPECT_EQ(GetCapture(), window.handle);
+    // A modal or hovered UI doesn't take the mouse, or the frame couldn't move or size the window.
+    EXPECT_EQ(GetCapture(), nullptr);
     EXPECT_EQ(GetCursor(), LoadCursorW(nullptr, IDC_IBEAM));
+    // A press holds it until every button is up, whatever the UI asks meanwhile.
+    SendMessageW(window.handle, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(40, 40));
+    EXPECT_EQ(GetCapture(), window.handle);
+    SendMessageW(window.handle, WM_RBUTTONDOWN, MK_LBUTTON | MK_RBUTTON, MAKELPARAM(40, 40));
     bridge->SetCapture({.wantsVisibleCursor = true});
+    SendMessageW(window.handle, WM_LBUTTONUP, MK_RBUTTON, MAKELPARAM(40, 40));
+    EXPECT_EQ(GetCapture(), window.handle);
+    SendMessageW(window.handle, WM_RBUTTONUP, 0, MAKELPARAM(40, 40));
     EXPECT_EQ(GetCapture(), nullptr);
     bridge->SetCapture({});
     EXPECT_EQ(native->GetEffectiveCursorMode(), CursorMode::Locked);

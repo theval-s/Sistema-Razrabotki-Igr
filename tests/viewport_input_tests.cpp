@@ -180,9 +180,9 @@ TEST_F(ViewportInputTest, PausedUiKeepsCaptureAndResumeDoesNotStealReleasedFocus
     host->SetCapture({.pointer = true, .wantsVisibleCursor = true});
     viewport->setPaused(true);
     EXPECT_TRUE(viewport->capturesInput());
-    EXPECT_EQ(QWidget::mouseGrabber(), viewport);
-    viewport->releaseInput();
+    // A menu keeps the game's input but not the mouse: the editor stays clickable.
     EXPECT_EQ(QWidget::mouseGrabber(), nullptr);
+    viewport->releaseInput();
     field->setFocus();
     viewport->setPaused(false);
     EXPECT_FALSE(viewport->capturesInput());
@@ -190,7 +190,7 @@ TEST_F(ViewportInputTest, PausedUiKeepsCaptureAndResumeDoesNotStealReleasedFocus
     viewport->setPaused(true);
     QTest::mouseClick(viewport, Qt::LeftButton, {}, Inside);
     EXPECT_TRUE(viewport->capturesInput());
-    EXPECT_EQ(QWidget::mouseGrabber(), viewport);
+    EXPECT_EQ(QWidget::mouseGrabber(), nullptr);
     frame();
     for (const auto& event : input.GetUiEvents())
         EXPECT_FALSE(std::holds_alternative<engine::InputUiPointerButton>(event.payload));
@@ -213,7 +213,7 @@ TEST_F(ViewportInputTest, LockedPlayShortcutsWinAndRightReleaseKeepsLock) {
     EXPECT_FALSE(viewport->capturesInput());
 }
 
-TEST_F(ViewportInputTest, UiTemporarilyOverridesGameAndRetainsItsOwnDrag) {
+TEST_F(ViewportInputTest, UiTemporarilyOverridesGameWithoutGrabbingTheMouse) {
     viewport->setPlaying(true);
     auto host = viewport->uiHost();
     for (auto mode : {engine::CursorMode::Hidden, engine::CursorMode::Locked}) {
@@ -225,21 +225,14 @@ TEST_F(ViewportInputTest, UiTemporarilyOverridesGameAndRetainsItsOwnDrag) {
         host->SetCapture({.wantsVisibleCursor = true});
         EXPECT_EQ(viewport->cursor().shape(), Qt::IBeamCursor);
         EXPECT_EQ(QWidget::mouseGrabber(), nullptr);
+        // Even over a lock: a UI drag relies on Qt's implicit grab while the button is down.
         host->SetCapture({.pointer = true});
-        EXPECT_EQ(QWidget::mouseGrabber(), viewport);
+        EXPECT_EQ(QWidget::mouseGrabber(), nullptr);
         EXPECT_EQ(viewport->cursor().shape(), Qt::IBeamCursor);
         host->SetCapture({});
         EXPECT_EQ(viewport->cursor().shape(), Qt::BlankCursor);
         EXPECT_EQ(input.GetCursorMode(), mode);
     }
-    input.SetCursorMode(engine::CursorMode::Normal);
-    viewport->applyCursorMode();
-    host->SetCapture({.pointer = true});
-    EXPECT_EQ(QWidget::mouseGrabber(), viewport);
-    viewport->applyCursorMode();
-    EXPECT_EQ(QWidget::mouseGrabber(), viewport);
-    host->SetCapture({});
-    EXPECT_EQ(QWidget::mouseGrabber(), nullptr);
     input.SetCursorMode(engine::CursorMode::Locked);
     host->SetTextInput({.active = true});
     EXPECT_EQ(viewport->cursor().shape(), Qt::IBeamCursor);

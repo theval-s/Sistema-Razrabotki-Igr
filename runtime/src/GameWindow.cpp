@@ -56,48 +56,24 @@ std::unique_ptr<GameWindow> GameWindow::Create(const Options& options, std::stri
     window->classRegistered_ = true;
 
     constexpr DWORD windowExStyle = WS_EX_APPWINDOW;
+    constexpr DWORD windowStyle = WS_OVERLAPPEDWINDOW;
 
-    DWORD windowStyle = 0;
+    // Fullscreen starts from a real window too, so Alt+Enter has one to go back to.
+    RECT windowRect{
+        0,
+        0,
+        static_cast<LONG>(options.width),
+        static_cast<LONG>(options.height)
+    };
 
-    int x = 0;
-    int y = 0;
-    int width = 0;
-    int height = 0;
-
-    if (options.fullscreen) {
-        windowStyle = WS_POPUP;
-
-        x = 0;
-        y = 0;
-
-        width = GetSystemMetrics(SM_CXSCREEN);
-        height = GetSystemMetrics(SM_CYSCREEN);
-    }
-    else {
-        windowStyle = WS_OVERLAPPEDWINDOW;
-
-        RECT windowRect{
-            0,
-            0,
-            static_cast<LONG>(options.width),
-            static_cast<LONG>(options.height)
-        };
-
-        if (!AdjustWindowRectEx(
-            &windowRect,
-            windowStyle,
-            FALSE,
-            windowExStyle
-        )) {
-            error = "AdjustWindowRectEx failed. Error: " + std::to_string(GetLastError());
-            return nullptr;
-        }
-
-        x = CW_USEDEFAULT;
-        y = CW_USEDEFAULT;
-
-        width = windowRect.right - windowRect.left;
-        height = windowRect.bottom - windowRect.top;
+    if (!AdjustWindowRectEx(
+        &windowRect,
+        windowStyle,
+        FALSE,
+        windowExStyle
+    )) {
+        error = "AdjustWindowRectEx failed. Error: " + std::to_string(GetLastError());
+        return nullptr;
     }
 
     HWND hwnd = CreateWindowExW(
@@ -105,10 +81,10 @@ std::unique_ptr<GameWindow> GameWindow::Create(const Options& options, std::stri
         window->className_.c_str(),
         options.title.c_str(),
         windowStyle,
-        x,
-        y,
-        width,
-        height,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        windowRect.right - windowRect.left,
+        windowRect.bottom - windowRect.top,
         nullptr,
         nullptr,
         window->hInstance_,
@@ -121,6 +97,10 @@ std::unique_ptr<GameWindow> GameWindow::Create(const Options& options, std::stri
     }
 
     window->hwnd_ = hwnd;
+
+    if (options.fullscreen) {
+        window->SetFullscreen(true);
+    }
 
     ShowWindow(hwnd, SW_SHOW);
     SetForegroundWindow(hwnd);
@@ -171,6 +151,64 @@ void GameWindow::NotifyResize() {
     onResize_(width, height);
 }
 
+void GameWindow::SetFullscreen(const bool fullscreen) {
+    if (hwnd_ == nullptr || fullscreen == fullscreen_) {
+        return;
+    }
+
+    const auto style = static_cast<DWORD>(GetWindowLongPtrW(hwnd_, GWL_STYLE));
+
+    if (fullscreen) {
+        if (!GetWindowPlacement(hwnd_, &windowedPlacement_)) {
+            return;
+        }
+
+        // A window that was hidden or minimized comes back as a normal one.
+        if (windowedPlacement_.showCmd != SW_SHOWMAXIMIZED) {
+            windowedPlacement_.showCmd = SW_SHOWNORMAL;
+        }
+
+        SetWindowLongPtrW(hwnd_, GWL_STYLE, style & ~WS_OVERLAPPEDWINDOW);
+        fullscreen_ = true;
+        FitToMonitor();
+    }
+    else {
+        SetWindowLongPtrW(hwnd_, GWL_STYLE, style | WS_OVERLAPPEDWINDOW);
+        fullscreen_ = false;
+        SetWindowPlacement(hwnd_, &windowedPlacement_);
+        SetWindowPos(
+            hwnd_,
+            nullptr,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED
+        );
+    }
+}
+
+void GameWindow::FitToMonitor() {
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof(MONITORINFO);
+
+    if (!GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &monitor)) {
+        return;
+    }
+
+    const RECT& area = monitor.rcMonitor;
+
+    SetWindowPos(
+        hwnd_,
+        nullptr,
+        area.left,
+        area.top,
+        area.right - area.left,
+        area.bottom - area.top,
+        SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+    );
+}
+
 LRESULT CALLBACK GameWindow::Proc(
     HWND hwnd,
     UINT msg,
@@ -197,12 +235,46 @@ LRESULT CALLBACK GameWindow::Proc(
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
 
+    auto* self = reinterpret_cast<GameWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+    // Window keys go before the input host: the game never sees the Enter of Alt+Enter.
+    if (self != nullptr) {
+        switch (msg) {
+
+        case WM_SYSKEYDOWN:
+            if (wp == VK_RETURN && (HIWORD(lp) & KF_ALTDOWN) != 0) {
+                if ((HIWORD(lp) & KF_REPEAT) == 0) {
+                    self->SetFullscreen(!self->fullscreen_);
+                }
+                return 0;
+            }
+            break;
+
+        case WM_SYSCOMMAND:
+            // Alt or F10 on its own would enter the modal menu loop and stall the game.
+            if ((wp & 0xFFF0) == SC_KEYMENU) {
+                return 0;
+            }
+            break;
+
+        case WM_DPICHANGED:
+        case WM_DISPLAYCHANGE:
+            // The system's suggested rect is for a framed window and would shrink a fullscreen one.
+            if (self->fullscreen_) {
+                self->FitToMonitor();
+                return 0;
+            }
+            break;
+
+        default:
+            break;
+        }
+    }
+
     // Win32InputHost reads keys, buttons, focus and text from here.
     if (LRESULT result = 0; engine::DispatchInputMessage(hwnd, msg, wp, lp, result)) {
         return result;
     }
-
-    auto* self = reinterpret_cast<GameWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 
     if (self != nullptr) {
         switch (msg) {

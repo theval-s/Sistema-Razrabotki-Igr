@@ -72,7 +72,7 @@ bool RenderingContext::CreateDeviceAndSwapChain(const HWND hwnd, const uint32_t 
         .OutputWindow = hwnd,
         .Windowed = true,
         .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
-        .Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH,
+        .Flags = 0,
     };
 
     constexpr D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
@@ -97,6 +97,10 @@ bool RenderingContext::CreateDeviceAndSwapChain(const HWND hwnd, const uint32_t 
         r = create(flags & ~static_cast<UINT>(D3D11_CREATE_DEVICE_DEBUG));
     }
     rendering_detail::Check(r, "D3D11CreateDeviceAndSwapChain", device_.Get(), fmt::format("Requested surface {}x{}", width, height));
+    // Hosts own their windows: Alt+Enter must not switch DXGI to exclusive fullscreen.
+    ComPtr<IDXGIFactory> factory;
+    if (SUCCEEDED(swapChain_->GetParent(IID_PPV_ARGS(factory.GetAddressOf()))))
+        factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
 
     resourceManager_.Initialize(device_.Get());
     renderingStates_.Initialize(device_.Get());
