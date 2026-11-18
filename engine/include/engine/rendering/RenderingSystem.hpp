@@ -57,6 +57,13 @@ struct ENGINE_API RenderingSystem {
     void RequestParticleBurst(std::uint64_t owner, std::uint32_t count);
     /// Clear simulation, fractional emission, and telemetry at scene/session boundaries.
     void ResetParticles();
+    /// Edit-mode transport, supplied by the host. Switching target/mode clears preview particles.
+    /// Speed must be finite and in (0, 4]; invalid requests leave the transport unchanged.
+    void SetParticlePreview(ParticlePreview preview);
+    [[nodiscard]] ParticlePreview GetParticlePreview() const noexcept { return particlePreview_; }
+    void RestartParticlePreview();
+    /// Schedule bounded fixed-size warm-up steps, spread over frames; ignored outside preview.
+    void PrewarmParticlePreview(float seconds = 2.0f);
     /// Low-level inspection/readback view; engine thread only. The reference is
     /// borrowed from this renderer, not an owned diagnostics snapshot or GPU lease.
     /// Contents change during rendering and lifecycle calls. Use GPU handles only
@@ -76,6 +83,8 @@ private:
     RenderingResources resources_{0, 0};
     ParticleBudget particleBudget_{};
     ParticleStats particleStats_{};
+    ParticlePreview particlePreview_{};
+    float particlePrewarmRemaining_{};
     ParticlePass* particlePass_{}; // owned by renderPasses_
     std::vector<std::unique_ptr<RenderPass>> renderPasses_{};
     bool ready_ = false;

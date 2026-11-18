@@ -43,6 +43,8 @@ struct RenderWorld {
         std::uint64_t owner;
         ParticleEmitter settings;
         Vector3 position, direction;
+        ParticleEffectSettings effect;
+        TextureHandle texture;
     };
     // World-space sources for this frame; replaced by scene extraction, even while paused.
     std::vector<EmitterSource> particleEmitters;

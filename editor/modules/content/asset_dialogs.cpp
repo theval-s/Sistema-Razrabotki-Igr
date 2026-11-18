@@ -22,10 +22,12 @@
 #include <QTimer>
 #include <QTreeWidget>
 #include <QSignalBlocker>
+#include <QScrollArea>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 
 #include <engine/assets/AssetPathResolver.hpp>
@@ -699,6 +701,158 @@ QString MaterialDialog::problem() const {
     if (shader_->currentIndex() < 0) return tr("Choose a shader or standard shading.");
     const bool hooked = gbuffer_vs_->isChecked() || gbuffer_ps_->isChecked() || shadow_vs_->isChecked();
     return shader_->reference() && !hooked ? tr("Pick the hooks the shader implements.") : QString();
+}
+
+ParticleEffectDialog::ParticleEffectDialog(const engine::AssetCatalog& catalog, const QString& folder,
+    const QString& name, QWidget* parent, bool editing)
+    : NewAssetDialog(editing ? tr("Edit Particle Effect") : tr("New Particle Effect"), folder,
+                     QStringLiteral(".particle-effect.json"), name, parent, editing) {
+    texture_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Texture, tr("(default soft disc)"));
+    texture_->setToolTip(tr("A selected texture multiplies particle colour and opacity for both Standard and Custom appearances.\n"
+        "Without a selected texture, Custom uses its procedural hook alone."));
+    auto* textureRow = new QHBoxLayout;
+    textureRow->addWidget(texture_, 1);
+    auto* clear = new QPushButton(tr("Use soft disc"));
+    connect(clear, &QPushButton::clicked, this, [this] { texture_->setCurrentIndex(0); });
+    textureRow->addWidget(clear);
+    form()->addRow(tr("Texture"), textureRow);
+    connect(texture_, &QComboBox::currentIndexChanged, this, [this] { validate(); });
+
+    auto* contents = new QWidget;
+    auto* groups = new QVBoxLayout(contents);
+    const auto group = [groups](const QString& title) {
+        auto* box = new QGroupBox(title);
+        groups->addWidget(box);
+        return new QFormLayout(box);
+    };
+    const auto number = [this](QFormLayout* layout, const QString& label, float& value,
+                               double minimum, double maximum, const QString& tip = {}) {
+        auto* box = new QDoubleSpinBox;
+        box->setDecimals(4);
+        box->setRange(minimum, maximum);
+        box->setSingleStep(0.1);
+        box->setToolTip(tip);
+        box->setKeyboardTracking(false);
+        layout->addRow(label, box);
+        auto* target = &value;
+        // Loading may round/clamp the display; only a user edit may replace the authored float.
+        refreshers_.push_back([box, target] { const QSignalBlocker blocker(box); box->setValue(*target); });
+        connect(box, &QDoubleSpinBox::valueChanged, this, [this, target](double v) {
+            *target = static_cast<float>(v); validate();
+        });
+    };
+    const auto boolean = [this](QFormLayout* layout, const QString& label, bool& value) {
+        auto* box = new QCheckBox;
+        layout->addRow(label, box);
+        auto* target = &value;
+        refreshers_.push_back([box, target] { const QSignalBlocker blocker(box); box->setChecked(*target); });
+        connect(box, &QCheckBox::toggled, this, [target](bool v) { *target = v; });
+    };
+    auto& s = value_.settings;
+    auto* emission = group(tr("Emission"));
+    number(emission, tr("Particles per second"), s.rate, 0, 1e6);
+    number(emission, tr("Lifetime (seconds)"), s.lifetime, 0.001, 1e6);
+    number(emission, tr("Initial speed"), s.speed, 0, 1e6);
+    number(emission, tr("Billboard base radius"), s.radius, 0, 1e6,
+           tr("Particle billboard base radius in world units, scaled by size over lifetime."));
+    number(emission, tr("Direction jitter"), s.spread, 0, 1e6,
+           tr("Adds a random unit vector scaled by Spread to the emission direction before normalization (dimensionless)."));
+    auto* count = new QDoubleSpinBox;
+    count->setDecimals(0);
+    count->setRange(1, static_cast<double>(std::numeric_limits<std::uint32_t>::max()));
+    count->setSingleStep(1);
+    count->setKeyboardTracking(false);
+    emission->addRow(tr("Maximum alive"), count);
+    refreshers_.push_back([this, count] { const QSignalBlocker blocker(count); count->setValue(value_.settings.maxAlive); });
+    connect(count, &QDoubleSpinBox::valueChanged, this, [this](double v) { value_.settings.maxAlive = static_cast<std::uint32_t>(v); validate(); });
+    auto* motion = group(tr("Motion and variation"));
+    const auto variationTip = tr("Symmetric fraction of the base value: 0 means constant, 1 allows full variation.");
+    number(motion, tr("Lifetime variation"), s.lifetimeVariation, 0, 0.9999,
+           tr("Symmetric fraction of lifetime, below 1 so every particle has a positive lifetime."));
+    number(motion, tr("Speed variation"), s.speedVariation, 0, 1, variationTip);
+    number(motion, tr("Acceleration X"), s.acceleration.x, -1e6, 1e6);
+    number(motion, tr("Acceleration Y"), s.acceleration.y, -1e6, 1e6);
+    number(motion, tr("Acceleration Z"), s.acceleration.z, -1e6, 1e6);
+    number(motion, tr("Drag"), s.drag, 0, 1e6, tr("Slows particles over time; zero preserves velocity."));
+    auto* surface = group(tr("Appearance over lifetime"));
+    number(surface, tr("Start size"), s.sizeStart, 0, 1e6);
+    number(surface, tr("End size"), s.sizeEnd, 0, 1e6);
+    number(surface, tr("Start colour · red"), s.colorStart.x, 0, 1e6);
+    number(surface, tr("Start colour · green"), s.colorStart.y, 0, 1e6);
+    number(surface, tr("Start colour · blue"), s.colorStart.z, 0, 1e6);
+    number(surface, tr("End colour · red"), s.colorEnd.x, 0, 1e6);
+    number(surface, tr("End colour · green"), s.colorEnd.y, 0, 1e6);
+    number(surface, tr("End colour · blue"), s.colorEnd.z, 0, 1e6);
+    number(surface, tr("Start opacity"), s.opacityStart, 0, 1);
+    number(surface, tr("End opacity"), s.opacityEnd, 0, 1);
+    number(surface, tr("Fade-in lifetime fraction"), s.fadeIn, 0, 1, tr("Fraction of each particle's lifetime used to fade in."));
+    boolean(surface, tr("Random rotation"), s.randomRotation);
+    auto* lighting = group(tr("Blending and shadows"));
+    number(lighting, tr("Soft intersection distance"), s.softDistance, 0, 1e6,
+           tr("World-space distance used to soften intersections with scene geometry."));
+    number(lighting, tr("Shadow density"), s.shadowDensity, 0, 1e6);
+    boolean(lighting, tr("Cast shadows"), s.castShadows);
+    auto* blend = new QComboBox;
+    blend->addItems({tr("Alpha"), tr("Additive")});
+    lighting->addRow(tr("Blend mode"), blend);
+    refreshers_.push_back([this, blend] { const QSignalBlocker blocker(blend); blend->setCurrentIndex(static_cast<int>(value_.settings.blend)); });
+    connect(blend, &QComboBox::currentIndexChanged, this, [this](int v) { value_.settings.blend = static_cast<engine::ParticleBlendMode>(v); });
+    auto* advanced = group(tr("Advanced project hook"));
+    auto* custom = new QCheckBox(tr("Use custom hook instead of Standard"));
+    custom->setToolTip(tr("Uses compile-defined project particle shader functions; IDs begin at 2.\n"
+        "A selected texture also multiplies the hook's colour and opacity."));
+    auto* hook = new QDoubleSpinBox;
+    hook->setDecimals(0);
+    hook->setRange(2, static_cast<double>(std::numeric_limits<std::uint32_t>::max()));
+    hook->setSingleStep(1);
+    hook->setKeyboardTracking(false);
+    advanced->addRow(custom);
+    advanced->addRow(tr("Hook ID"), hook);
+    refreshers_.push_back([this, custom, hook] {
+        const QSignalBlocker a(custom), b(hook);
+        custom->setChecked(value_.settings.appearance >= 2);
+        hook->setValue(std::max(2u, value_.settings.appearance));
+        hook->setEnabled(custom->isChecked());
+    });
+    connect(custom, &QCheckBox::toggled, this, [this, hook](bool enabled) {
+        hook->setEnabled(enabled);
+        value_.settings.appearance = enabled ? static_cast<std::uint32_t>(hook->value()) : 0;
+    });
+    connect(hook, &QDoubleSpinBox::valueChanged, this, [this, custom](double v) {
+        if (custom->isChecked()) value_.settings.appearance = static_cast<std::uint32_t>(v);
+    });
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setWidget(contents);
+    scroll->setMinimumSize(480, 480);
+    form()->addRow(scroll);
+    load(value_);
+}
+
+void ParticleEffectDialog::load(const engine::ParticleEffectDefinition& definition) {
+    value_ = definition;
+    const QSignalBlocker blocker(texture_);
+    if (value_.texture.id.IsValid()) {
+        if (!texture_->selectId(value_.texture.id)) texture_->setCurrentIndex(-1);
+    } else if (!value_.texture.path.empty()) {
+        if (!texture_->selectPath(QString::fromStdString(value_.texture.path))) texture_->setCurrentIndex(-1);
+    } else texture_->setCurrentIndex(0);
+    for (const auto& refresh : refreshers_) refresh();
+    validate();
+}
+
+engine::ParticleEffectDefinition ParticleEffectDialog::definition() const {
+    auto result = value_;
+    result.texture = texture_->reference().value_or(engine::AssetReference{});
+    return result;
+}
+
+QString ParticleEffectDialog::problem() const {
+    if (const auto base = NewAssetDialog::problem(); !base.isEmpty()) return base;
+    if (texture_ && texture_->currentIndex() < 0) return tr("Choose a texture or the default soft disc.");
+    std::string error;
+    if (!engine::ValidateParticleEffectSettings(value_.settings, error)) return QString::fromStdString(error);
+    return {};
 }
 
 }  // namespace content

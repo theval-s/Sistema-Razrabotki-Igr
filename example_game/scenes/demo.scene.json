@@ -9,16 +9,16 @@
       "parent": null,
       "components": {
         "Transform": { "position": [-2, 0.1, -2], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-        "ParticleEmitter": { "appearance": 0, "maxAlive": 256, "seed": 1, "rate": 30, "lifetime": 2, "speed": 1, "radius": 0.25, "spread": 0.35, "tint": [1, 1, 1] }
+        "ParticleEmitter": { "appearance": 0, "maxAlive": 256, "seed": 1, "rate": 30, "lifetime": 2, "speed": 1, "radius": 0.25, "spread": 0.35, "tint": [1, 1, 1], "overrideEmission": false, "effect": { "id": "49533bcb-ea22-49d3-b53e-1c1c57e43003", "path": "engine/particles/smoke.particle-effect.json" } }
       }
     },
     {
       "id": "49533bcb-ea22-49d3-b53e-1c1c57e43002",
-      "name": "Fire particles",
+      "name": "Custom ring particles",
       "parent": null,
       "components": {
         "Transform": { "position": [2, 0.1, -2], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-        "ParticleEmitter": { "appearance": 1, "maxAlive": 256, "seed": 2, "rate": 60, "lifetime": 1, "speed": 1.5, "radius": 0.25, "spread": 0.25, "tint": [1, 1, 1] }
+        "ParticleEmitter": { "appearance": 2, "maxAlive": 256, "seed": 2, "rate": 30, "lifetime": 1.5, "speed": 1, "radius": 0.35, "spread": 0.25, "tint": [0.15, 0.5, 1] }
       }
     },
     {

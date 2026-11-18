@@ -1,10 +1,13 @@
 #include <engine/animation/AnimationSubsystem.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/assets/ParticleEffectDefinition.hpp>
+#include <engine/core/FileSystem.hpp>
 #include <engine/core/Uuid.hpp>
 #include <engine/engine.hpp>
 #include <engine/rendering/RenderExtractionSubsystem.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
+#include <engine/scene/Scene.hpp>
 
 #include <DirectXPackedVector.h>
 #include <d3d11_1.h>
@@ -478,6 +481,149 @@ TEST(RenderDebugNative, GizmoHostAndEngineOverlayLeasesShareBackbufferInOrderAcr
     host.Shutdown();
 }
 
+TEST(RenderDebugNative, AuthoredParticleTextureReloadReachesExtractedStandardAndCustomPixels) {
+    NativeFiles files;
+    ASSERT_NE(files.window, nullptr);
+    struct ParticleFiles {
+        std::filesystem::path oldGameRoot = AssetPathResolver::GetGameRoot();
+        std::filesystem::path root = std::filesystem::temp_directory_path() / ("sri-particle-texture-" + NewUuid());
+        ParticleFiles() {
+            std::filesystem::create_directories(root);
+            AssetPathResolver::SetGameRoot(root); // No project shader override: exercise the default custom hook too.
+        }
+        ~ParticleFiles() {
+            AssetPathResolver::SetGameRoot(oldGameRoot);
+            std::error_code ignored;
+            std::filesystem::remove_all(root, ignored);
+        }
+    } temporary;
+    std::string error, text;
+    const AssetReference red{NewUuid(), "game/red.bmp"}, green{NewUuid(), "game/green.bmp"};
+    const AssetReference effectReference{NewUuid(), "game/color.particle-effect.json"};
+    const auto writeTexture = [&](const AssetReference& reference, unsigned char r, unsigned char g) {
+        // Two 24-bit BMP rows, each padded to eight bytes. Opaque primary colours
+        // make a lost texture or stale array layer distinguishable from a disc.
+        std::string bmp(70, '\0');
+        const auto integer = [&](size_t offset, uint32_t value, size_t bytes) {
+            for (size_t i = 0; i < bytes; ++i) bmp[offset + i] = static_cast<char>((value >> (8 * i)) & 255);
+        };
+        bmp[0] = 'B'; bmp[1] = 'M';
+        integer(2, 70, 4); integer(10, 54, 4); integer(14, 40, 4);
+        integer(18, 2, 4); integer(22, 2, 4); integer(26, 1, 2); integer(28, 24, 2);
+        integer(34, 16, 4);
+        for (size_t y = 0; y < 2; ++y) for (size_t x = 0; x < 2; ++x) {
+            bmp[54 + y * 8 + x * 3 + 1] = static_cast<char>(g);
+            bmp[54 + y * 8 + x * 3 + 2] = static_cast<char>(r);
+        }
+        const auto path = temporary.root / std::filesystem::path(reference.path).filename();
+        ASSERT_TRUE(WriteFileAtomic(path, bmp, error)) << error;
+        ASSERT_TRUE(WriteAssetMetadata(path, {reference.id, CatalogAssetKind::Texture}, error)) << error;
+    };
+    ASSERT_NO_FATAL_FAILURE(writeTexture(red, 255, 0));
+    ASSERT_NO_FATAL_FAILURE(writeTexture(green, 0, 255));
+    ParticleEffectDefinition definition;
+    definition.texture = red;
+    auto& settings = definition.settings;
+    settings.maxAlive = 1;
+    settings.rate = 4;
+    settings.lifetime = 20;
+    settings.speed = settings.spread = 0;
+    settings.radius = 0.5f;
+    settings.sizeStart = settings.sizeEnd = 1;
+    settings.opacityStart = settings.opacityEnd = 1;
+    settings.fadeIn = settings.softDistance = 0;
+    settings.randomRotation = settings.castShadows = false;
+    const auto save = [&] {
+        ASSERT_TRUE(SerializeParticleEffectDefinition(definition, text, error)) << error;
+        ASSERT_TRUE(WriteFileAtomic(temporary.root / "color.particle-effect.json", text, error)) << error;
+    };
+    ASSERT_NO_FATAL_FAILURE(save());
+    ASSERT_TRUE(WriteAssetMetadata(temporary.root / "color.particle-effect.json",
+        {effectReference.id, CatalogAssetKind::ParticleEffect}, error)) << error;
+
+    Engine host({.applicationName = "Authored particle texture integration",
+        .surface = {files.window, InitialWidth, InitialHeight}, .taskThreads = 2, .graphicsDebugLayer = true});
+    auto* rendering = host.AddSubsystem<RenderingSubsystem>();
+    auto* extraction = host.AddSubsystem<RenderExtractionSubsystem>();
+    ASSERT_TRUE(host.Initialize());
+    auto& assets = host.GetSceneAssets();
+    auto& renderer = rendering->GetRendering();
+    auto& world = rendering->GetWorld();
+    ASSERT_TRUE(renderer.SetParticleBudget({.maxParticles = 8, .maxEmitters = 2}));
+    world.camera = FPSCamera{1, float(InitialWidth) / InitialHeight, 0.1f, 100};
+    world.camera.position = {0, 0, 3};
+    const auto entity = host.GetScene().CreateEntity("Authored colour");
+    ParticleEmitter emitter;
+    emitter.effect = effectReference;
+    ASSERT_NE(host.GetScene().AddComponent<ParticleEmitter>(entity, emitter), nullptr);
+    const auto effectHandle = assets.RequestParticleEffect(effectReference);
+    const auto live = assets.LoadParticleEffect(effectReference.path);
+    ASSERT_TRUE(live);
+    Image hdr;
+    unsigned captures = 0;
+    rendering->SetOverlayCallbacks([&](RenderingContext& context, const FrameContext&) {
+        ASSERT_NO_FATAL_FAILURE(ReadHandle(context, renderer.GetResources().gBuffer.resultTexture, hdr));
+        ++captures;
+    }, {});
+    FrameContext frame;
+    for (const uint32_t appearance : {0u, 2u}) {
+        SCOPED_TRACE(appearance);
+        definition.settings.appearance = appearance;
+        for (const auto& texture : {red, green, AssetReference{}}) {
+            SCOPED_TRACE(texture.path);
+            definition.texture = texture;
+            ASSERT_NO_FATAL_FAILURE(save());
+            ASSERT_TRUE(assets.Reload(effectReference.path, AssetKind::ParticleEffect, error)) << error;
+            EXPECT_EQ(assets.RequestParticleEffect(effectReference), effectHandle);
+            EXPECT_EQ(&*assets.Peek(effectHandle), &*live);
+            EXPECT_EQ(live->definition, definition);
+            renderer.ResetParticles();
+            extraction->LateUpdate({});
+            ASSERT_EQ(world.particleEmitters.size(), 1u);
+            EXPECT_EQ(world.particleEmitters.front().settings.appearance, appearance);
+            if (texture.id.IsValid()) {
+                ASSERT_TRUE(assets.IsReady(live->texture));
+                EXPECT_EQ(live->texture, assets.RequestTexture(texture));
+                EXPECT_EQ(world.particleEmitters.front().texture, assets.Peek(live->texture)->texture);
+                ASSERT_TRUE(world.particleEmitters.front().texture);
+            } else {
+                EXPECT_FALSE(live->texture);
+                EXPECT_FALSE(world.particleEmitters.front().texture);
+            }
+            ++frame.frameIndex;
+            frame.deltaSeconds = frame.realDeltaSeconds = 0.25;
+            frame.simulationTimeSeconds += frame.deltaSeconds;
+            frame.realTimeSeconds += frame.realDeltaSeconds;
+            const auto before = captures;
+            rendering->Render(frame);
+            ASSERT_EQ(rendering->GetDiagnostics().lifecycle, RenderingLifecycle::Ready);
+            ASSERT_EQ(captures, before + 1);
+            ASSERT_NO_FATAL_FAILURE(ExpectNoHazards(rendering->GetContext().GetDevice()));
+            size_t visible = 0;
+            for (const auto& pixel : hdr.pixels) {
+                for (const auto value : pixel) ASSERT_TRUE(std::isfinite(value));
+                if (std::max({pixel[0], pixel[1], pixel[2]}) < 0.1f) continue;
+                ++visible;
+                if (texture.id == red.id) {
+                    ASSERT_GT(pixel[0], 0.1f);
+                    ASSERT_LT(pixel[1], 0.01f);
+                    ASSERT_LT(pixel[2], 0.01f);
+                } else if (texture.id == green.id) {
+                    ASSERT_GT(pixel[1], 0.1f);
+                    ASSERT_LT(pixel[0], 0.01f);
+                    ASSERT_LT(pixel[2], 0.01f);
+                } else {
+                    ASSERT_NEAR(pixel[0], pixel[1], 0.002f);
+                    ASSERT_NEAR(pixel[0], pixel[2], 0.002f);
+                }
+            }
+            EXPECT_GT(visible, 20u) << "The authored effect must contribute actual coloured/fallback pixels";
+        }
+    }
+    rendering->ClearOverlayCallbacks();
+    host.Shutdown();
+}
+
 TEST(RenderDebugNative, ParticlePopulationSurvivesPauseAndResizeAndHonorsBurstBudgetAndReset) {
     NativeFiles files;
     ASSERT_NE(files.window, nullptr);
@@ -503,6 +649,9 @@ TEST(RenderDebugNative, ParticlePopulationSurvivesPauseAndResizeAndHonorsBurstBu
         .settings = {.appearance = 2, .maxAlive = 8, .rate = 4, .lifetime = 0.5f,
                      .speed = 0, .radius = 0.5f, .spread = 0, .tint = {4, 0, 0}},
         .position = {0, 1, -3}, .direction = {0, 1, 0}};
+    source.effect.fadeIn = 0;
+    source.effect.opacityStart = source.effect.opacityEnd = 1;
+    source.effect.sizeStart = source.effect.sizeEnd = 1;
 
     Image hdr;
     FrameContext frame;
@@ -623,6 +772,285 @@ TEST(RenderDebugNative, ParticlePopulationSurvivesPauseAndResizeAndHonorsBurstBu
     EXPECT_TRUE(renderer.GetParticleStats().emitters.empty());
     EXPECT_EQ(renderer.GetParticleStats().tileFrame, 0u);
     EXPECT_TRUE(hdr.pixels == resizedEmpty) << "Reset must discard both live particles and pending bursts";
+}
+
+TEST(RenderDebugNative, ParticlePreviewUsesRealDeltaFiltersOwnersAndPreservesPausedStateAcrossResize) {
+    NativeFiles files;
+    ASSERT_NE(files.window, nullptr);
+    AssetPathResolver::SetGameRoot(std::filesystem::path(SRI_SOURCE_ROOT) / "tests");
+    RenderingSystem renderer;
+    ASSERT_TRUE(renderer.Initialize({files.window, InitialWidth, InitialHeight}, true));
+    ASSERT_TRUE(renderer.SetParticleBudget({.maxParticles = 64, .maxEmitters = 4}));
+    auto& world = renderer.GetWorld();
+    auto& context = renderer.GetRenderingContext();
+    auto* const device = context.GetDevice();
+    world.camera = FPSCamera{1, float(InitialWidth) / InitialHeight, 0.1f, 100};
+    world.camera.position = {0, 1, 0};
+    world.directionalLight = {{0, 0, 0}, {0, -1, -1}, {1, 1, 1}, 0, 0, LightInfo::Directional};
+    constexpr uint64_t selected = 0x10000002aULL, other = 0x20000002aULL;
+    RenderWorld::EmitterSource source{
+        .owner = selected,
+        .settings = {.appearance = 2, .maxAlive = 32, .rate = 4, .lifetime = 20,
+                     .speed = 0.5f, .radius = 0.3f, .spread = 0, .tint = {4, 0, 0}},
+        .position = {-0.6f, 1, -3}, .direction = {0, 1, 0}};
+    source.effect.fadeIn = 0;
+    source.effect.opacityStart = source.effect.opacityEnd = 1;
+    source.effect.sizeStart = source.effect.sizeEnd = 1;
+    auto second = source;
+    second.owner = other;
+    second.position.x = 0.6f;
+    second.settings.tint = {0, 4, 0};
+    world.particleEmitters = {source, second};
+    ParticlePreview preview{.enabled = true, .owner = selected};
+    renderer.SetParticlePreview(preview);
+    Image hdr;
+    FrameContext frame;
+    double realDelta = 0.25;
+    const auto render = [&] {
+        ++frame.frameIndex;
+        frame.realDeltaSeconds = realDelta;
+        frame.realTimeSeconds += frame.realDeltaSeconds;
+        frame.deltaSeconds = 0;
+        frame.paused = true;
+        bool captured = false;
+        renderer.RenderFrame(frame, [&](RenderingContext& ctx, const FrameContext&) {
+            ASSERT_NO_FATAL_FAILURE(ReadHandle(ctx, renderer.GetResources().gBuffer.resultTexture, hdr));
+            captured = true; // Blocking readback also completes preceding telemetry copies.
+        });
+        ASSERT_TRUE(captured);
+        ASSERT_EQ(renderer.GetDiagnostics().lifecycle, RenderingLifecycle::Ready);
+        ASSERT_EQ(context.GetDevice(), device);
+        EXPECT_EQ(renderer.GetResources().particleShadowView, nullptr);
+        ASSERT_NO_FATAL_FAILURE(ExpectNoHazards(device));
+    };
+    const auto pause = [&] {
+        preview.paused = true;
+        renderer.SetParticlePreview(preview);
+    };
+    const auto sample = [&](uint64_t step, uint32_t alive) {
+        ASSERT_TRUE(renderer.GetParticlePreview().paused);
+        for (int i = 0; i < 4 && renderer.GetParticleStats().simulationStep < step; ++i)
+            ASSERT_NO_FATAL_FAILURE(render());
+        EXPECT_EQ(renderer.GetParticleStats().simulationStep, step);
+        EXPECT_EQ(renderer.GetParticleStats().alive, alive);
+        EXPECT_EQ(renderer.GetParticleStats().rejected, 0u);
+    };
+    const auto channelPeak = [&](size_t channel) {
+        float peak = 0;
+        for (const auto& pixel : hdr.pixels) peak = std::max(peak, pixel[channel]);
+        return peak;
+    };
+
+    ASSERT_NO_FATAL_FAILURE(render());
+    pause();
+    ASSERT_NO_FATAL_FAILURE(sample(1, 1));
+    ASSERT_EQ(renderer.GetParticleStats().emitters.size(), 1u);
+    EXPECT_EQ(renderer.GetParticleStats().emitters.front().owner, selected);
+    EXPECT_GT(channelPeak(0), 1);
+    EXPECT_FLOAT_EQ(channelPeak(1), 0);
+    const auto first = hdr.pixels;
+    preview.paused = false;
+    renderer.SetParticlePreview(preview);
+    ASSERT_NO_FATAL_FAILURE(render());
+    pause();
+    ASSERT_NO_FATAL_FAILURE(sample(2, 2));
+    EXPECT_NE(hdr.pixels, first) << "Real delta must advance preview while simulation delta is zero";
+    const auto frozen = hdr.pixels;
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_NO_FATAL_FAILURE(render());
+        ASSERT_NO_FATAL_FAILURE(sample(2, 2));
+        EXPECT_EQ(hdr.pixels, frozen);
+    }
+    ASSERT_TRUE(renderer.Reinitialize({files.window, 240, 180}));
+    ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_EQ(hdr.width, 240u);
+    EXPECT_EQ(hdr.height, 180u);
+    ASSERT_NO_FATAL_FAILURE(sample(2, 2));
+    EXPECT_EQ(renderer.GetParticlePreview(), preview);
+    EXPECT_GT(channelPeak(0), 1);
+    const auto resized = hdr.pixels;
+    ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_EQ(hdr.pixels, resized);
+
+    preview.allEmitters = true;
+    preview.paused = false;
+    renderer.SetParticlePreview(preview); // Changing scope starts a fresh population.
+    ASSERT_NO_FATAL_FAILURE(render());
+    pause();
+    ASSERT_NO_FATAL_FAILURE(sample(1, 2));
+    ASSERT_EQ(renderer.GetParticleStats().emitters.size(), 2u);
+    for (const auto id : {selected, other}) {
+        const auto& rows = renderer.GetParticleStats().emitters;
+        const auto row = std::find_if(rows.begin(), rows.end(), [id](const auto& entry) { return entry.owner == id; });
+        ASSERT_NE(row, rows.end());
+        EXPECT_EQ(row->alive, 1u);
+    }
+    EXPECT_GT(channelPeak(0), 1);
+    EXPECT_GT(channelPeak(1), 1);
+
+    renderer.RequestParticleBurst(selected, 5);
+    renderer.RestartParticlePreview();
+    EXPECT_EQ(renderer.GetParticlePreview(), preview);
+    ASSERT_NO_FATAL_FAILURE(render());
+    ASSERT_NO_FATAL_FAILURE(sample(0, 0));
+    EXPECT_TRUE(renderer.GetParticleStats().emitters.empty());
+    EXPECT_FLOAT_EQ(channelPeak(0), 0);
+    EXPECT_FLOAT_EQ(channelPeak(1), 0);
+
+    // Seed a live particle so even the steps before the next rate birth execute.
+    // Sixteen steps (the last partial) span two displayed frames, eight per frame.
+    // The preview stays paused throughout; polling never needs wall-clock sleeps.
+    renderer.RequestParticleBurst(selected, 1);
+    renderer.PrewarmParticlePreview(0.26f);
+    ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_GT(channelPeak(0), 1);
+    EXPECT_FLOAT_EQ(channelPeak(1), 0) << "Prewarm exceeded its per-frame bound";
+    ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_GT(channelPeak(0), 1);
+    EXPECT_GT(channelPeak(1), 1);
+    // A multi-step frame may fill the observational staging ring and skip its
+    // final sample. The readback above drains it; one tiny real-time step now
+    // guarantees a final-population ticket without another rate birth.
+    realDelta = 1.0 / 1024;
+    preview.paused = false;
+    renderer.SetParticlePreview(preview);
+    ASSERT_NO_FATAL_FAILURE(render());
+    pause();
+    ASSERT_NO_FATAL_FAILURE(sample(17, 3));
+    realDelta = 0.25;
+    const auto warmed = hdr.pixels;
+    ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_EQ(hdr.pixels, warmed);
+    EXPECT_EQ(renderer.GetParticleStats().simulationStep, 17u);
+
+    // A pending warm-up and burst must not survive the reset boundary.
+    renderer.PrewarmParticlePreview(10);
+    renderer.RequestParticleBurst(selected, 5);
+    renderer.ResetParticles();
+    EXPECT_EQ(renderer.GetParticlePreview(), ParticlePreview{});
+    EXPECT_TRUE(world.particleEmitters.empty());
+    world.particleEmitters = {source, second};
+    ASSERT_NO_FATAL_FAILURE(render()); // simulation is still paused, preview is disabled
+    EXPECT_EQ(renderer.GetParticleStats().simulationStep, 0u);
+    EXPECT_EQ(renderer.GetParticleStats().alive, 0u);
+    EXPECT_FLOAT_EQ(channelPeak(0), 0);
+    EXPECT_FLOAT_EQ(channelPeak(1), 0);
+    preview.paused = true;
+    renderer.SetParticlePreview(preview);
+    ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_EQ(renderer.GetParticleStats().simulationStep, 0u) << "Reset retained pending prewarm";
+    EXPECT_FLOAT_EQ(channelPeak(0), 0);
+}
+
+TEST(RenderDebugNative, ParticleShadowsAttenuateOpaqueSceneDirectLightAndResetWithoutLeakingState) {
+    NativeFiles files;
+    ASSERT_NE(files.window, nullptr);
+    Engine host({.applicationName = "Native particle shadow integration", .surface = {files.window, InitialWidth, InitialHeight},
+                 .taskThreads = 2, .graphicsDebugLayer = true});
+    auto* rendering = host.AddSubsystem<RenderingSubsystem>();
+    auto* animation = host.AddSubsystem<AnimationSubsystem>();
+    auto* extraction = host.AddSubsystem<RenderExtractionSubsystem>();
+    ASSERT_TRUE(host.Initialize());
+    ASSERT_NO_FATAL_FAILURE(LoadSceneFixture(host, *animation, *extraction));
+    auto& renderer = rendering->GetRendering();
+    auto& world = rendering->GetWorld();
+    std::erase_if(world.sceneItems, [](const auto& item) { return bool(item.skinning); });
+    ASSERT_FALSE(world.sceneItems.empty());
+    world.selectedSceneItems.clear();
+    world.lights.clear();
+    world.particleEmitters.clear();
+    world.directionalLight = {{0, 0, 0}, {0, -1, 0}, {1, 1, 1}, 1, 0, LightInfo::Directional};
+    ASSERT_TRUE(renderer.SetParticleBudget({.maxParticles = 16, .maxEmitters = 2}));
+    FrameImages images;
+    rendering->SetOverlayCallbacks([&](RenderingContext&, const FrameContext&) { Capture(*rendering, images); }, {});
+    FrameContext frame;
+    const auto render = [&] {
+        ++frame.frameIndex;
+        frame.realDeltaSeconds = 0.25;
+        frame.realTimeSeconds += frame.realDeltaSeconds;
+        frame.deltaSeconds = 0;
+        frame.paused = true;
+        rendering->Render(frame);
+        ASSERT_EQ(rendering->GetDiagnostics().lifecycle, RenderingLifecycle::Ready);
+        ASSERT_FALSE(images.lit.pixels.empty());
+        ASSERT_NO_FATAL_FAILURE(ExpectNoHazards(rendering->GetContext().GetDevice()));
+    };
+    ASSERT_NO_FATAL_FAILURE(render());
+    const auto baseline = images;
+    EXPECT_EQ(renderer.GetResources().particleShadowView, nullptr);
+    RenderWorld::EmitterSource source{
+        .owner = 42,
+        .settings = {.maxAlive = 1, .rate = 4, .lifetime = 20, .speed = 0,
+                     .radius = 1.5f, .spread = 0, .tint = {1, 1, 1}},
+        .position = {0, 2, 0}, .direction = {0, 1, 0}};
+    source.effect.fadeIn = 0;
+    source.effect.opacityStart = source.effect.opacityEnd = 0.8f;
+    source.effect.sizeStart = source.effect.sizeEnd = 1;
+    source.effect.randomRotation = false;
+    world.particleEmitters = {source};
+    ParticlePreview preview{.enabled = true, .owner = source.owner};
+    renderer.SetParticlePreview(preview);
+    // Diagnostic presentation suppresses camera particle compositing but still
+    // executes simulation, CSM, particle opacity, opaque G-buffer and lighting.
+    ASSERT_TRUE(rendering->SetDebugView(RenderDebugView::Albedo));
+    ASSERT_NO_FATAL_FAILURE(render());
+    preview.paused = true;
+    renderer.SetParticlePreview(preview);
+    for (int i = 0; i < 4 && renderer.GetParticleStats().simulationStep < 1; ++i)
+        ASSERT_NO_FATAL_FAILURE(render());
+    ASSERT_EQ(renderer.GetParticleStats().alive, 1u);
+    ASSERT_NE(renderer.GetResources().particleShadowView, nullptr);
+    EXPECT_EQ(images.albedo.pixels, baseline.albedo.pixels) << "Shadow blend state leaked into opaque G-buffer";
+    EXPECT_EQ(images.normal.pixels, baseline.normal.pixels);
+    EXPECT_EQ(images.depth.pixels, baseline.depth.pixels);
+    size_t attenuated = 0, unaffected = 0;
+    for (size_t i = 0; i < images.lit.pixels.size(); ++i) {
+        if (baseline.depth.pixels[i][0] <= 0) continue;
+        const float before = baseline.lit.pixels[i][0], after = images.lit.pixels[i][0];
+        ASSERT_TRUE(std::isfinite(after));
+        EXPECT_LE(after, before + 0.003f);
+        // Ambient remains: only the opaque scene's direct illumination is attenuated.
+        EXPECT_GE(after, 0.095f);
+        attenuated += after < before - 0.05f;
+        unaffected += std::abs(after - before) < 0.003f;
+    }
+    EXPECT_GT(attenuated, 20u) << "An opacity map alone does not prove scene lighting consumed it";
+    EXPECT_GT(unaffected, 50u);
+    const auto shadowed = images.lit.pixels;
+    ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_EQ(images.lit.pixels, shadowed);
+
+    world.directionalLight.intensity = 0;
+    ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_EQ(renderer.GetResources().particleShadowView, nullptr);
+    world.directionalLight.intensity = 1;
+    ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_NE(renderer.GetResources().particleShadowView, nullptr);
+    EXPECT_EQ(images.lit.pixels, shadowed);
+
+    // Exercise camera compositing too, after the opacity pass has touched raw
+    // D3D state. Returning to diagnostic mode must recover identical scene light.
+    ASSERT_TRUE(rendering->SetDebugView(RenderDebugView::Final));
+    ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_NE(renderer.GetResources().particleShadowView, nullptr);
+    EXPECT_EQ(images.albedo.pixels, baseline.albedo.pixels);
+    EXPECT_NE(images.lit.pixels, shadowed) << "The integrated camera particle pass must contribute pixels";
+    ASSERT_TRUE(rendering->SetDebugView(RenderDebugView::Albedo));
+    ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_EQ(images.lit.pixels, shadowed);
+
+    rendering->ResetSimulation(); // The Engine-facing reset must clear transient editor transport too.
+    EXPECT_EQ(renderer.GetParticlePreview(), ParticlePreview{});
+    EXPECT_EQ(renderer.GetResources().particleShadowView, nullptr);
+    EXPECT_TRUE(world.particleEmitters.empty());
+    ASSERT_TRUE(rendering->SetDebugView(RenderDebugView::Final));
+    ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_EQ(renderer.GetResources().particleShadowView, nullptr);
+    EXPECT_EQ(renderer.GetParticleStats().alive, 0u);
+    EXPECT_EQ(images.lit.pixels, baseline.lit.pixels) << "Null opacity input retained a previous frame's particle shadow";
+    EXPECT_EQ(images.albedo.pixels, baseline.albedo.pixels);
+    rendering->ClearOverlayCallbacks();
+    host.Shutdown();
 }
 
 std::filesystem::path Executable() {

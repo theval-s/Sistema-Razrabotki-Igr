@@ -299,7 +299,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) { outputData[id.x] = id.x; }
 TEST_F(AssetCooking, ParticleHooksUseMountedIncludesAndBakeIntoTheShaderLibrary) {
     const auto shaders = root / "engine-shaders";
     fs::create_directories(shaders);
-    for (const auto* name : {"ParticleSim.hlsl", "ParticleHooks.hlsli", "Particle.hlsli", "DefaultParticleHooks.hlsli"}) {
+    for (const auto* name : {"ParticleSim.hlsl", "ParticleHooks.hlsli", "Particle.hlsli", "ParticleStyle.hlsli", "DefaultParticleHooks.hlsli"}) {
         fs::copy_file(fs::path(SRI_SOURCE_ROOT) / "engine/shaders" / name, shaders / name);
     }
     const auto file = shaders / "ParticleSim.hlsl";

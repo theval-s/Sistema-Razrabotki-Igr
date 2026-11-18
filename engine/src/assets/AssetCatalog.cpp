@@ -38,6 +38,7 @@ std::string_view KindName(CatalogAssetKind kind) {
     case CatalogAssetKind::AnimationClip: return "animationClip";
     case CatalogAssetKind::SkinnedMesh: return "skinnedMesh";
     case CatalogAssetKind::NavMesh: return "navMesh";
+    case CatalogAssetKind::ParticleEffect: return "particleEffect";
     }
     return {};
 }
@@ -107,7 +108,8 @@ AssetMetadata MetadataFromJson(const Json& j) {
                                   CatalogAssetKind::Material, CatalogAssetKind::MaterialInstance, CatalogAssetKind::Scene, CatalogAssetKind::Script,
                                   CatalogAssetKind::UiDocument, CatalogAssetKind::UiStylesheet, CatalogAssetKind::UiTemplate, CatalogAssetKind::Font,
                                   CatalogAssetKind::BehaviorTree, CatalogAssetKind::AudioClip, CatalogAssetKind::Skeleton,
-                                  CatalogAssetKind::AnimationClip, CatalogAssetKind::SkinnedMesh, CatalogAssetKind::NavMesh}) {
+                                  CatalogAssetKind::AnimationClip, CatalogAssetKind::SkinnedMesh, CatalogAssetKind::NavMesh,
+                                  CatalogAssetKind::ParticleEffect}) {
         if (kind == KindName(candidate)) { meta.kind = candidate; found = true; break; }
     }
     if (!found || ((j.contains("centerOnLoad") || j.contains("materials")) && meta.kind != CatalogAssetKind::Mesh))
@@ -154,6 +156,7 @@ std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& 
 
     if (name.ends_with(".material-instance.json")) return CatalogAssetKind::MaterialInstance;
     if (name.ends_with(".material.json")) return CatalogAssetKind::Material;
+    if (name.ends_with(".particle-effect.json")) return CatalogAssetKind::ParticleEffect;
     if (name.ends_with(".scene.json")) return CatalogAssetKind::Scene;
     if (name.ends_with(".skeleton.json")) return CatalogAssetKind::Skeleton;
     if (name.ends_with(".animation.json")) return CatalogAssetKind::AnimationClip;

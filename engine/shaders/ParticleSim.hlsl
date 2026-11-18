@@ -1,6 +1,8 @@
 // Compile CSMain three times, defining exactly one of PARTICLE_SIM_UPDATE/ADMIT/SPAWN.
 #if defined(PARTICLE_SIM_UPDATE) || defined(PARTICLE_SIM_SPAWN)
 #include "ParticleHooks.hlsli"
+#define PARTICLE_STYLE_SLOT t3
+#include "ParticleStyle.hlsli"
 #endif
 
 struct Emitter { float4 positionLife, directionSpeed, tintRadius, jitter; uint4 requestLimitKindSeed; };
@@ -17,6 +19,8 @@ RWStructuredBuffer<uint4> stats : register(u2);
     Particle p = previous[i];
     const uint4 originalMeta = p.meta;
     p.positionAge.w += dt;
+    ParticleStyle style=Style(p);
+    p.velocityLifetime.xyz=(p.velocityLifetime.xyz+style.accelerationDrag.xyz*dt)*exp(-max(0,style.accelerationDrag.w)*dt);
     p.positionAge.xyz += dt * p.velocityLifetime.xyz;
     ParticleUpdate(p, dt);
     p.meta.xzw = originalMeta.xzw;
@@ -70,6 +74,9 @@ uint Mix(uint x) {
     p.positionAge = float4(e.positionLife.xyz,0);
     p.velocityLifetime = float4(d*rsqrt(max(dot(d,d),1e-20))*e.directionSpeed.w,e.positionLife.w);
     p.colorSize = e.tintRadius; p.meta = uint4(lo,e.requestLimitKindSeed.z,seed,0);
+    ParticleStyle style=Style(p);
+    p.velocityLifetime.w*=max(1e-4,1+(2*(Mix(seed+1)>>8)/16777216.0-1)*saturate(style.variationDensity.x));
+    p.velocityLifetime.xyz*=1+(2*(Mix(seed+2)>>8)/16777216.0-1)*saturate(style.variationDensity.y);
     ParticleSpawn(p);
     p.meta.xzw = uint3(lo, seed, 0);
     pool[i] = p;

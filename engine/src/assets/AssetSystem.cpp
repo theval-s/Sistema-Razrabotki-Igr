@@ -36,6 +36,8 @@ T MakeValue(const AssetDesc& desc, const LoadJob& job, const GpuPayload& gpu) {
         return MaterialAsset{gpu.material, cpu.material.definition};
     } else if constexpr (std::is_same_v<T, SkeletonAsset>) {
         return cpu.skeleton;
+    } else if constexpr (std::is_same_v<T, ParticleEffectAsset>) {
+        return ParticleEffectAsset{cpu.particleEffect, job.textureDependency};
     } else if constexpr (std::is_same_v<T, AnimationClipAsset>) {
         return cpu.animationClip;
     } else if constexpr (std::is_same_v<T, SkinnedMeshAsset>) {
@@ -102,6 +104,7 @@ constexpr std::string_view ToString(const AssetKind kind) {
     case AssetKind::Skeleton: return "skeleton";
     case AssetKind::AnimationClip: return "animation clip";
     case AssetKind::SkinnedMesh: return "skinned mesh";
+    case AssetKind::ParticleEffect: return "particle effect";
     case AssetKind::Count:
         break;
     }
@@ -132,6 +135,7 @@ void AssetSystem::Initialize() {
     importers_[static_cast<size_t>(AssetKind::Shader)] = std::make_unique<ShaderImporter>();
     importers_[static_cast<size_t>(AssetKind::Material)] = std::make_unique<MaterialImporter>();
     importers_[static_cast<size_t>(AssetKind::MaterialInstance)] = std::make_unique<MaterialInstanceImporter>();
+    importers_[static_cast<size_t>(AssetKind::ParticleEffect)] = std::make_unique<ParticleEffectImporter>();
     for (const auto kind : {AssetKind::Skeleton, AssetKind::AnimationClip, AssetKind::SkinnedMesh})
         importers_[static_cast<size_t>(kind)] = std::make_unique<SkeletalAssetImporter>(kind);
     if (AssetPathResolver::IsCooked()) {
@@ -204,6 +208,20 @@ entt::resource<MaterialInstanceAsset> AssetSystem::LoadMaterialInstance(const st
 entt::resource<SkeletonAsset> AssetSystem::LoadSkeleton(std::string_view name) {
     return LoadSync(RequestSkeleton(name));
 }
+entt::resource<ParticleEffectAsset> AssetSystem::LoadParticleEffect(std::string_view name) {
+    return LoadSync(RequestParticleEffect(name));
+}
+AssetHandle<ParticleEffectAsset> AssetSystem::RequestParticleEffect(std::string_view name) {
+    if (name.empty()) return {};
+    AssetDesc desc;
+    desc.name = NormalizeAssetName(name, AssetKind::ParticleEffect);
+    desc.path = AssetPathResolver::DefaultPath(desc.name, AssetKind::ParticleEffect);
+    return Request<ParticleEffectAsset>(std::move(desc));
+}
+AssetHandle<ParticleEffectAsset> AssetSystem::RequestParticleEffect(const AssetReference& reference) {
+    const auto* entry = Resolve(reference, CatalogAssetKind::ParticleEffect);
+    return entry ? RequestParticleEffect(entry->path) : AssetHandle<ParticleEffectAsset>{};
+}
 entt::resource<AnimationClipAsset> AssetSystem::LoadAnimationClip(std::string_view name) {
     return LoadSync(RequestAnimationClip(name));
 }
@@ -248,7 +266,7 @@ AssetHandle<SkinnedMeshAsset> AssetSystem::RequestSkinnedMesh(const AssetReferen
 
 bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& error) {
     error.clear();
-    if (kind != AssetKind::Material && kind != AssetKind::MaterialInstance) {
+    if (kind != AssetKind::Material && kind != AssetKind::MaterialInstance && kind != AssetKind::ParticleEffect) {
         error = "reload is not supported for this asset type";
         return false;
     }
@@ -256,10 +274,22 @@ bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& err
     // A never-requested asset has no live state to replace.
     if (kind == AssetKind::Material && !materials_.Find(normalized)) return true;
     if (kind == AssetKind::MaterialInstance && !materialInstances_.Find(normalized)) return true;
+    if (kind == AssetKind::ParticleEffect && !particleEffects_.Find(normalized)) {
+        // Failed records retire their handles. Extraction resolves effects by catalog name,
+        // so a save can recover a previously broken scene effect without editing its emitter.
+        RequestParticleEffect(normalized);
+        return true;
+    }
     if (kind == AssetKind::Material) {
         const auto handle = materials_.Find(normalized);
         if (materials_.Get(handle)->state == AssetState::Loading && !LoadSync(handle)) {
             error = "could not finish loading the previous material";
+            return false;
+        }
+    } else if (kind == AssetKind::ParticleEffect) {
+        const auto handle = particleEffects_.Find(normalized);
+        if (particleEffects_.Get(handle)->state == AssetState::Loading && !LoadSync(handle)) {
+            error = "could not finish loading the previous particle effect";
             return false;
         }
     } else {
@@ -283,7 +313,8 @@ bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& err
         desc = record->desc;
         return true;
     };
-    if (!(kind == AssetKind::Material ? capture(materials_) : capture(materialInstances_))) {
+    if (!(kind == AssetKind::ParticleEffect ? capture(particleEffects_) :
+          kind == AssetKind::Material ? capture(materials_) : capture(materialInstances_))) {
         error = "asset is no longer Ready for reload";
         return false;
     }
@@ -308,6 +339,15 @@ bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& err
 }
 
 bool AssetSystem::ReloadReady(LoadJob& job, std::string& error) {
+    if (job.kind == AssetKind::ParticleEffect) {
+        auto* record = particleEffects_.Get({job.slot, job.generation});
+        if (!record || record->state != AssetState::Ready) {
+            error = "asset was retired while resolving reload dependencies";
+            return false;
+        }
+        *record->value = ParticleEffectAsset{std::move(job.payload.particleEffect), job.textureDependency};
+        return true;
+    }
     const auto current = [&](const auto& table, const auto handle) {
         const auto* record = table.Get(handle);
         return record && record->state == AssetState::Ready;
@@ -357,9 +397,11 @@ bool AssetSystem::ReloadReady(LoadJob& job, std::string& error) {
 
 std::string AssetSystem::NormalizeAssetName(std::string_view name, AssetKind kind) {
     auto normalized = NormalizeName(name);
-    if (!normalized.empty() && (kind == AssetKind::Material || kind == AssetKind::MaterialInstance) &&
+    if (!normalized.empty() && (kind == AssetKind::Material || kind == AssetKind::MaterialInstance ||
+                               kind == AssetKind::ParticleEffect) &&
         FromUtf8(normalized).extension().empty()) {
-        normalized += kind == AssetKind::Material ? ".material.json" : ".material-instance.json";
+        normalized += kind == AssetKind::ParticleEffect ? ".particle-effect.json" :
+            kind == AssetKind::Material ? ".material.json" : ".material-instance.json";
     }
     return normalized;
 }
@@ -500,6 +542,7 @@ void AssetSystem::UnloadAll() {
     skinnedMeshes_.EvictAll();
     animationClips_.EvictAll();
     skeletons_.EvictAll();
+    particleEffects_.EvictAll();
 }
 
 std::optional<AssetReference> AssetSystem::ReferenceFor(AssetHandle<SkinnedMeshAsset> handle) const {
@@ -687,6 +730,9 @@ bool AssetSystem::FinishJob(LoadJob& job, const uint64_t frameIndex) {
     case AssetKind::SkinnedMesh:
         FinishTyped(job, skinnedMeshes_, AssetHandle<SkinnedMeshAsset>{job.slot, job.generation}, frameIndex);
         break;
+    case AssetKind::ParticleEffect:
+        FinishTyped(job, particleEffects_, AssetHandle<ParticleEffectAsset>{job.slot, job.generation}, frameIndex);
+        break;
     case AssetKind::Count:
         break;
     }
@@ -694,6 +740,19 @@ bool AssetSystem::FinishJob(LoadJob& job, const uint64_t frameIndex) {
 }
 
 AssetSystem::DependencyState AssetSystem::ResolveDependencies(LoadJob& job, bool wait) {
+    if (job.kind == AssetKind::ParticleEffect) {
+        const auto& reference = job.payload.particleEffect.texture;
+        if (!reference.id.IsValid()) return DependencyState::Ready;
+        if (!job.dependenciesRequested) {
+            job.dependenciesRequested = true;
+            job.textureDependency = RequestTexture(reference);
+        }
+        const auto texture = wait ? LoadSync(job.textureDependency) : Peek(job.textureDependency);
+        if (texture) return DependencyState::Ready;
+        if (GetState(job.textureDependency) == AssetState::Loading) return DependencyState::Waiting;
+        job.error = "particle texture dependency '" + reference.id.ToString() + "' failed while loading '" + job.name + "'";
+        return DependencyState::Failed;
+    }
     if (job.kind == AssetKind::Mesh) {
         if (!job.dependenciesRequested) {
             job.dependenciesRequested = true;
@@ -767,7 +826,8 @@ entt::resource<T> AssetSystem::FinishTyped(const LoadJob& job, AssetTable<T>& ta
     }
 
     GpuPayload gpu;
-    if constexpr (!std::is_same_v<T, SkeletonAsset> && !std::is_same_v<T, AnimationClipAsset>) {
+    if constexpr (!std::is_same_v<T, SkeletonAsset> && !std::is_same_v<T, AnimationClipAsset> &&
+                  !std::is_same_v<T, ParticleEffectAsset>) {
         auto* rendering = engine_.GetSubsystem<RenderingSubsystem>();
         std::string error;
         bool uploaded = false;

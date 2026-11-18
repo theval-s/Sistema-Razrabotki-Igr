@@ -52,6 +52,7 @@ struct ParticleTiles::Impl {
     ComPtr<ID3D11DeviceContext> ctx;
     ComPtr<ID3D11ComputeShader> build,merge,bin,shade;
     ComPtr<ID3D11Buffer> cb;
+    ComPtr<ID3D11SamplerState> sampler;
     ComPtr<ID3D11Texture2D> image;
     ComPtr<ID3D11UnorderedAccessView> imageUav;
     Storage keys,sprites,masks,stats;
@@ -78,9 +79,9 @@ struct ParticleTiles::Impl {
         return S_OK;
     }
     void Unbind() {
-        ID3D11ShaderResourceView* s[8]{};
+        ID3D11ShaderResourceView* s[10]{};
         ID3D11UnorderedAccessView* u[3]{};
-        ctx->CSSetShaderResources(0,8,s);
+        ctx->CSSetShaderResources(0,10,s);
         ctx->CSSetUnorderedAccessViews(0,3,u,nullptr);
     }
 };
@@ -108,6 +109,9 @@ long ParticleTiles::Initialize(ID3D11Device* d, Programs p, UINT capacity, UINT 
         if (regions<=(8u<<20)/f.words) break;
     }
     HRESULT hr;
+    D3D11_SAMPLER_DESC sd{}; sd.Filter=D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP; sd.MaxLOD=D3D11_FLOAT32_MAX;
+    if(FAILED(hr=d->CreateSamplerState(&sd,&a.sampler))) return hr;
     if (FAILED(hr=a.keys.Create(d,a.padded,16)) || FAILED(hr=a.sprites.Create(d,capacity,32)) ||
         FAILED(hr=a.masks.Create(d,regions*f.words,4)) || FAILED(hr=a.stats.Create(d,2,4))) return hr;
     D3D11_BUFFER_DESC b{}; b.ByteWidth=sizeof(Frame); b.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
@@ -127,7 +131,7 @@ long ParticleTiles::Initialize(ID3D11Device* d, Programs p, UINT capacity, UINT 
 }
 
 long ParticleTiles::Render(ParticleSimulation::Views v, const Camera& camera,
-                           ID3D11ShaderResourceView* depth, ID3D11ShaderResourceView* lit) {
+                           ID3D11ShaderResourceView* depth, ID3D11ShaderResourceView* lit, ID3D11ShaderResourceView* textures) {
     if (!impl_) return E_UNEXPECTED;
     if (!v.particles || !v.activeIndices || !v.activeCount || !v.dispatchArgs || !depth || !lit) return E_INVALIDARG;
     auto& a=*impl_; auto& f=a.f; auto* c=a.ctx.Get();
@@ -142,6 +146,7 @@ long ParticleTiles::Render(ParticleSimulation::Views v, const Camera& camera,
                                    a.sprites.srv.Get(),a.masks.srv.Get(),depth,lit};
     ID3D11UnorderedAccessView* buildOut[]={a.keys.uav.Get(),a.sprites.uav.Get()};
     c->CSSetShaderResources(0,3,s);
+    c->CSSetShaderResources(8,1,&v.settings);
     c->CSSetUnorderedAccessViews(0,2,buildOut,nullptr);
     c->CSSetShader(a.build.Get(),nullptr,0);
     const UINT extent = std::bit_ceil((std::clamp)(v.upperAlive, 256u, a.padded));
@@ -166,10 +171,14 @@ long ParticleTiles::Render(ParticleSimulation::Views v, const Camera& camera,
     ID3D11UnorderedAccessView* shadeOut[]={a.imageUav.Get(),a.stats.uav.Get()};
     c->CSSetShader(a.shade.Get(),nullptr,0);
     c->CSSetShaderResources(0,8,s);
+    c->CSSetShaderResources(8,1,&v.settings);
+    c->CSSetShaderResources(9,1,&textures);
+    c->CSSetSamplers(0,1,a.sampler.GetAddressOf());
     c->CSSetUnorderedAccessViews(0,2,shadeOut,nullptr);
     c->Dispatch(DivUp(f.width,8),DivUp(f.height,8),1);
     a.Unbind();
     c->CSSetShader(nullptr,nullptr,0);
+    ID3D11SamplerState* nullSampler{}; c->CSSetSamplers(0,1,&nullSampler);
     ID3D11Buffer* nullCB{}; c->CSSetConstantBuffers(0,1,&nullCB);
     c->CopyResource(dst.Get(),a.image.Get());
     ++a.frame;

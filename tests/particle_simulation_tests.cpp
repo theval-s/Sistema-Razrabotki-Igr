@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <thread>
@@ -117,6 +118,34 @@ void ExpectRow(const Sim::Snapshot& s, uint64_t owner, UINT alive, UINT rejected
     ASSERT_NE(row, s.emitters.end());
     EXPECT_EQ(row->alive, alive);
     EXPECT_EQ(row->rejected, rejected);
+}
+
+TEST_F(ParticleSimulationWarp, RemovedOwnerRetainsAccelerationDragAndSymmetricBirthVariation) {
+    ASSERT_HRESULT_SUCCEEDED(Init(256,1));
+    Sim::Emitter e{.owner=42,.requested=256,.maxAlive=256,.lifetime=10,.speed=4};
+    e.effect.acceleration={2,0,0}; e.effect.drag=1;
+    e.effect.lifetimeVariation=.25f; e.effect.speedVariation=.5f;
+    ASSERT_HRESULT_SUCCEEDED(sim.Step(0,std::span(&e,1)));
+    std::vector<Sim::Particle> born, moved;
+    ASSERT_NO_FATAL_FAILURE(Rendered(256,born));
+    bool shortLife=false,longLife=false,slow=false,fast=false;
+    for(const auto& p:born) {
+        EXPECT_GE(p.velocityLifetime[3],7.5f); EXPECT_LE(p.velocityLifetime[3],12.5f);
+        EXPECT_GE(p.velocityLifetime[1],2); EXPECT_LE(p.velocityLifetime[1],6);
+        shortLife|=p.velocityLifetime[3]<10; longLife|=p.velocityLifetime[3]>10;
+        slow|=p.velocityLifetime[1]<4; fast|=p.velocityLifetime[1]>4;
+    }
+    EXPECT_TRUE(shortLife&&longLife&&slow&&fast);
+    ASSERT_HRESULT_SUCCEEDED(sim.Step(.5f,{}));
+    ASSERT_NO_FATAL_FAILURE(Rendered(256,moved));
+    for(const auto& p:moved) {
+        auto previous=std::find_if(born.begin(),born.end(),[&](auto& b){return b.meta[2]==p.meta[2];});
+        ASSERT_NE(previous,born.end());
+        EXPECT_NEAR(p.velocityLifetime[0],std::exp(-.5f),1e-5f);
+        EXPECT_NEAR(p.velocityLifetime[1],previous->velocityLifetime[1]*std::exp(-.5f),1e-5f);
+        EXPECT_NEAR(p.positionAge[0],.5f*std::exp(-.5f),1e-5f);
+        EXPECT_EQ(p.meta[3],0u);
+    }
 }
 
 TEST_F(ParticleSimulationWarp, ExactAdmissionAndCompactionAcrossPartialWorkgroups) {

@@ -4,6 +4,9 @@
 #include <QString>
 
 #include <optional>
+#include <functional>
+#include <vector>
+#include <engine/assets/ParticleEffectDefinition.hpp>
 
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/MaterialDefinition.hpp>
@@ -29,6 +32,7 @@ class AssetPicker;
 namespace content {
 
 class ColorButton;
+
 
 /// File dialog filter for images that import as textures.
 [[nodiscard]] QString imageFilter();
@@ -66,6 +70,20 @@ private:
     QLabel* problem_ = nullptr;
     QDialogButtonBox* buttons_ = nullptr;
     QPushButton* ok_ = nullptr;
+};
+
+class ParticleEffectDialog : public NewAssetDialog {
+public:
+    ParticleEffectDialog(const engine::AssetCatalog& catalog, const QString& folder, const QString& name,
+                         QWidget* parent, bool editing = false);
+    void load(const engine::ParticleEffectDefinition& definition);
+    [[nodiscard]] engine::ParticleEffectDefinition definition() const;
+protected:
+    [[nodiscard]] QString problem() const override;
+private:
+    engine::ParticleEffectDefinition value_;
+    editor::AssetPicker* texture_ = nullptr;
+    std::vector<std::function<void()>> refreshers_;
 };
 
 /// A model's material slots and what they get: its textures, and a material instance each.

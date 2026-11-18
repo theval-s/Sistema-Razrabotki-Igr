@@ -1,9 +1,10 @@
 // See ParticleTiles.hpp for frame and shader variant contracts.
 #if defined(PARTICLE_TILES_SHADE)
-#include "ParticleHooks.hlsli"
+#include "ParticleAppearance.hlsli"
 #else
 #include "Particle.hlsli"
 #endif
+#include "ParticleStyle.hlsli"
 struct Sprite { float2 center, extent; float depth, radius; uint2 pad; };
 cbuffer Frame : register(b0) {
     row_major float4x4 view, projection;
@@ -39,12 +40,12 @@ void LocalStep(uint i, uint lane, uint k, uint j) {
     if (i<count) {
         uint index=indices[i]; Particle p=pool[index];
         float4 v=mul(float4(p.positionAge.xyz,1),view), clip=mul(v,projection);
-        float age=saturate(p.positionAge.w/p.velocityLifetime.w);
         Sprite s=(Sprite)0;
-        s.depth=-v.z; s.radius=p.colorSize.w*(p.meta.y==0 ? lerp(0.65,1.8,age) : 1);
+        s.depth=-v.z; s.radius=ParticleRadius(p);
         if (s.depth>0 && clip.w>0 && clip.z>=0 && clip.z<=clip.w && s.radius>0) {
             s.center=(clip.xy/clip.w*float2(.5,-.5)+.5)*size;
             s.extent=.5*size*abs(float2(projection._11,projection._22))*s.radius/clip.w;
+            float angle=ParticleRotation(p); s.extent*=abs(cos(angle))+abs(sin(angle));
             if (all(s.center+s.extent>=0) && all(s.center-s.extent<float2(size))) {
                 projected[index]=s; key=uint4(~asuint(s.depth),p.meta.z,p.meta.x,index);
             }
@@ -90,16 +91,10 @@ Texture2D<float4> scene : register(t7);
 RWTexture2D<float4> result : register(u0);
 RWStructuredBuffer<uint> stats : register(u1);
 // ParticleHooks.hlsli resolves the project's ParticleAppearance override or engine default.
-// uv is signed unit-disc space. Return straight linear HDR RGB + opacity; depth fade
+// uv is signed unit-square space. Return straight linear HDR RGB + opacity; depth fade
 // and premultiplication are applied here.
 float4 Appearance(Particle p,float2 uv,float age) {
-    if(p.meta.y>=2) return ParticleAppearance(p,uv,age);
-    float phase=(p.meta.z>>8)*(6.2831853/16777216.0);
-    float swirl=sin(5*uv.x+phase+2*age)*sin(6*uv.y-phase-3*age);
-    float density=saturate(1-dot(uv,uv))*(.77+.23*swirl);
-    float fade=smoothstep(0,.1,age)*(1-smoothstep(.45,1,age));
-    if(p.meta.y==1) return float4(p.colorSize.rgb*lerp(float3(2,.18,.025),float3(8,4,1),density*density),density*fade);
-    return float4(p.colorSize.rgb*(.65+.25*swirl),density*density*fade*.72);
+    return EvaluateParticle(p,uv);
 }
 groupshared uint ids[64], batchCount, finished;
 groupshared Sprite batchSprite[64];
@@ -128,11 +123,14 @@ groupshared Particle batchParticle[64];
         if(lane<batchCount) { batchSprite[lane]=sprites[ids[lane]]; batchParticle[lane]=pool[ids[lane]]; }
         GroupMemoryBarrierWithGroupSync();
         [loop] for(uint i=0;i<batchCount;++i) {
-            Sprite s=batchSprite[i]; float2 uv=(pixel+.5-s.center)/s.extent;
-            if(dot(uv,uv)<1 && sceneDistance>s.depth) {
-                Particle p=batchParticle[i]; float4 src=Appearance(p,uv,saturate(p.positionAge.w/p.velocityLifetime.w));
-                float alpha=saturate(src.a)*saturate((sceneDistance-s.depth)/max(s.radius,1e-6));
-                dst=float4(src.rgb,1)*alpha+dst*(1-alpha);
+            Sprite s=batchSprite[i]; Particle p=batchParticle[i];
+            float angle=ParticleRotation(p);
+            float2 uv=ParticleUV(p,(pixel+.5-s.center)/s.extent*(abs(cos(angle))+abs(sin(angle))));
+            if(all(abs(uv)<=1) && sceneDistance>s.depth) {
+                ParticleStyle style=Style(p); float4 src=Appearance(p,uv,ParticleAge(p));
+                float alpha=saturate(src.a)* (style.colorEndSoft.w>0 ? saturate((sceneDistance-s.depth)/style.colorEndSoft.w) : 1);
+                if(style.flags.y==1) dst.rgb+=src.rgb*alpha;
+                else dst=float4(src.rgb,1)*alpha+dst*(1-alpha);
             }
         }
         if(finished) break;

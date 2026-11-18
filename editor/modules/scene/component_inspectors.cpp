@@ -47,6 +47,8 @@
 #include <engine/physics/PhysicsComponents.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/rendering/Particles.hpp>
+#include <engine/rendering/RenderingSubsystem.hpp>
+#include <editor/play_session.hpp>
 #include <engine/scene/Scene.hpp>
 
 #include <editor/asset_picker.hpp>
@@ -530,14 +532,198 @@ void buildSkinnedMeshRenderer(PropertyForm& form, editor::EditorContext& context
 
 void buildParticleEmitter(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
     engine::Scene& scene = context.scene();
-    form.addUInt32(QObject::tr("Appearance"), field(scene, entity, &engine::ParticleEmitter::appearance));
-    form.addUInt32(QObject::tr("Max Alive"), field(scene, entity, &engine::ParticleEmitter::maxAlive), 1);
-    form.addUInt32(QObject::tr("Seed"), field(scene, entity, &engine::ParticleEmitter::seed));
-    form.addFloat(QObject::tr("Rate"), field(scene, entity, &engine::ParticleEmitter::rate), {.minimum = 0.0});
-    form.addFloat(QObject::tr("Lifetime"), field(scene, entity, &engine::ParticleEmitter::lifetime), {.minimum = 0.001});
-    form.addFloat(QObject::tr("Speed"), field(scene, entity, &engine::ParticleEmitter::speed), {.minimum = 0.0});
-    form.addFloat(QObject::tr("Radius"), field(scene, entity, &engine::ParticleEmitter::radius), {.minimum = 0.0});
-    form.addFloat(QObject::tr("Spread"), field(scene, entity, &engine::ParticleEmitter::spread), {.minimum = 0.0});
+    auto* transport = new QWidget;
+    auto* layout = new QHBoxLayout(transport);
+    layout->setContentsMargins(0, 0, 0, 0);
+    auto* play = new QPushButton(QObject::tr("Play"));
+    auto* stop = new QPushButton(QObject::tr("Stop"));
+    auto* restart = new QPushButton(QObject::tr("Restart"));
+    auto* prewarm = new QPushButton(QObject::tr("Prewarm"));
+    prewarm->setToolTip(QObject::tr("Simulate two seconds before displaying the effect"));
+    for (auto* button : {play, stop, restart, prewarm}) layout->addWidget(button);
+    const auto renderer = [&context]() -> engine::RenderingSystem* {
+        if (context.playSession().isPlaying()) return nullptr; // includes paused Play
+        auto* subsystem = context.engine().GetSubsystem<engine::RenderingSubsystem>();
+        return subsystem ? &subsystem->GetRendering() : nullptr;
+    };
+    const auto owner = static_cast<std::uint64_t>(entt::to_integral(entity));
+    const auto restartIncludedPreview = [renderer, owner] {
+        if (auto* rendering = renderer()) {
+            const auto preview = rendering->GetParticlePreview();
+            if (preview.enabled && (preview.allEmitters || preview.owner == owner))
+                rendering->RestartParticlePreview();
+        }
+    };
+    const auto restartingField = [restartIncludedPreview](auto binding) {
+        auto set = binding.set;
+        auto get = binding.get;
+        binding.set = [set, get, restartIncludedPreview](const auto& value) {
+            const auto* current = get();
+            if (!current || *current == value) return;
+            set(value);
+            restartIncludedPreview();
+        };
+        return binding;
+    };
+    QObject::connect(play, &QPushButton::clicked, transport, [renderer, owner] {
+        if (auto* rendering = renderer()) {
+            auto preview = rendering->GetParticlePreview();
+            preview.paused = preview.enabled ? !preview.paused : false;
+            preview.enabled = true;
+            preview.owner = owner;
+            rendering->SetParticlePreview(preview);
+        }
+    });
+    QObject::connect(stop, &QPushButton::clicked, transport, [renderer] {
+        if (auto* rendering = renderer()) {
+            auto preview = rendering->GetParticlePreview();
+            preview.enabled = false;
+            rendering->SetParticlePreview(preview);
+        }
+    });
+    QObject::connect(restart, &QPushButton::clicked, transport, [renderer] {
+        if (auto* rendering = renderer()) rendering->RestartParticlePreview();
+    });
+    QObject::connect(prewarm, &QPushButton::clicked, transport, [renderer] {
+        if (auto* rendering = renderer()) rendering->PrewarmParticlePreview(2.0f);
+    });
+    form.addRow(QObject::tr("Scene preview"), transport, [renderer, transport, play, stop, restart, prewarm] {
+        auto* rendering = renderer();
+        transport->setEnabled(rendering != nullptr);
+        const auto preview = rendering ? rendering->GetParticlePreview() : engine::ParticlePreview{};
+        play->setText(preview.enabled && !preview.paused ? QObject::tr("Pause") : QObject::tr("Play"));
+        for (auto* button : {stop, restart, prewarm}) button->setEnabled(preview.enabled);
+    });
+    auto* scope = new QComboBox;
+    scope->addItems({QObject::tr("Selected emitter"), QObject::tr("All emitters")});
+    QObject::connect(scope, &QComboBox::currentIndexChanged, scope, [renderer, owner](int index) {
+        if (auto* rendering = renderer()) {
+            auto preview = rendering->GetParticlePreview();
+            preview.allEmitters = index == 1;
+            preview.owner = owner;
+            rendering->SetParticlePreview(preview);
+        }
+    });
+    form.addRow(QObject::tr("Preview scope"), scope, [renderer, scope] {
+        auto* rendering = renderer();
+        scope->setEnabled(rendering != nullptr);
+        const QSignalBlocker blocker(scope);
+        scope->setCurrentIndex(rendering && rendering->GetParticlePreview().allEmitters ? 1 : 0);
+    });
+    auto* previewSpeed = new QDoubleSpinBox;
+    previewSpeed->setRange(0.01, 4);
+    previewSpeed->setSingleStep(0.1);
+    previewSpeed->setSuffix(QStringLiteral("×"));
+    QObject::connect(previewSpeed, &QDoubleSpinBox::valueChanged, previewSpeed, [renderer](double value) {
+        if (auto* rendering = renderer()) {
+            auto preview = rendering->GetParticlePreview();
+            preview.speed = static_cast<float>(value);
+            rendering->SetParticlePreview(preview);
+        }
+    });
+    form.addRow(QObject::tr("Preview speed"), previewSpeed, [renderer, previewSpeed] {
+        auto* rendering = renderer();
+        previewSpeed->setEnabled(rendering != nullptr);
+        if (!previewSpeed->hasFocus()) {
+            const QSignalBlocker blocker(previewSpeed);
+            previewSpeed->setValue(rendering ? rendering->GetParticlePreview().speed : 1);
+        }
+    });
+
+    auto* effect = new editor::AssetPicker(context.engine().GetSceneAssets().GetCatalog(),
+        engine::CatalogAssetKind::ParticleEffect, QObject::tr("(inline / soft disc)"));
+    const auto effectField = restartingField(field(scene, entity, &engine::ParticleEmitter::effect));
+    QObject::connect(effect, &QComboBox::currentIndexChanged, effect, [&context, effect, effectField] {
+        if (context.playSession().isPlaying() || effect->currentIndex() < 0) return;
+        const auto reference = effect->reference().value_or(engine::AssetReference{});
+        context.history().edit(QObject::tr("Change Particle Effect"), [&] {
+            effectField.set(reference);
+        });
+    });
+    form.addRow(QObject::tr("Effect"), effect, [&scene, entity, effect] {
+        if (effect->hasFocus() || effect->lineEdit()->hasFocus() || effect->view()->isVisible()) return;
+        if (const auto* emitter = std::as_const(scene).TryGetComponent<engine::ParticleEmitter>(entity)) {
+            const QSignalBlocker blocker(effect);
+            const auto& reference = emitter->effect;
+            const auto select = [&] {
+                return reference.id.IsValid() ? effect->selectId(reference.id) :
+                    effect->selectPath(QString::fromStdString(reference.path));
+            };
+            effect->lineEdit()->setPlaceholderText({});
+            effect->setToolTip({});
+            if (!reference.id.IsValid() && reference.path.empty()) effect->setCurrentIndex(0);
+            else if (!select()) {
+                effect->reload();
+                if (!select()) {
+                    effect->setCurrentIndex(-1);
+                    const auto diagnostic = QObject::tr("Missing particle effect: %1 (UUID: %2)")
+                        .arg(QString::fromStdString(reference.path),
+                             QString::fromStdString(reference.id.ToString()));
+                    effect->lineEdit()->setPlaceholderText(diagnostic);
+                    effect->setToolTip(diagnostic);
+                }
+            }
+        }
+    });
+    form.addBool(QObject::tr("Override effect emission"), field(scene, entity, &engine::ParticleEmitter::overrideEmission));
+    auto* effectiveAppearance = new QLabel;
+    form.addRow(effectiveAppearance, [&context, &scene, entity, effectiveAppearance] {
+        const auto* emitter = std::as_const(scene).TryGetComponent<engine::ParticleEmitter>(entity);
+        const bool assigned = emitter && (emitter->effect.id.IsValid() || !emitter->effect.path.empty());
+        effectiveAppearance->setVisible(assigned);
+        if (!assigned) return;
+        auto& assets = context.engine().GetSceneAssets();
+        const auto* entry = assets.GetCatalog().Find(emitter->effect.id, engine::CatalogAssetKind::ParticleEffect);
+        const auto effect = entry ? assets.Peek<engine::ParticleEffectAsset>(entry->path) :
+            entt::resource<engine::ParticleEffectAsset>{};
+        effectiveAppearance->setText(!effect ? QObject::tr("Effect appearance: loading/unavailable") :
+            effect->definition.settings.appearance >= 2 ?
+                QObject::tr("Effect appearance: Custom (hook ID %1)").arg(effect->definition.settings.appearance) :
+                QObject::tr("Effect appearance: Standard"));
+        effectiveAppearance->setToolTip(QString::fromStdString(emitter->effect.id.ToString()));
+    });
+    auto appearance = field(scene, entity, &engine::ParticleEmitter::appearance);
+    auto* inlineAppearance = new PropertyForm;
+    auto* custom = new QCheckBox(QObject::tr("Custom hook"));
+    custom->setToolTip(QObject::tr("Standard uses a soft textured particle. Custom selects compile-defined project shader functions with an ID of 2 or higher."));
+    QObject::connect(custom, &QCheckBox::toggled, custom, [&context, appearance](bool enabled) {
+        context.history().edit(QObject::tr("Change Particle Appearance"), [&] {
+            appearance.set(enabled ? 2u : 0u);
+        });
+    });
+    inlineAppearance->addRow(QObject::tr("Standard / Custom"), custom, [custom, appearance] {
+        const QSignalBlocker blocker(custom);
+        custom->setChecked(appearance.get() && *appearance.get() >= 2);
+    });
+    auto* hook = new PropertyForm;
+    hook->addUInt32(QObject::tr("Advanced hook ID"), appearance, 2);
+    inlineAppearance->addRow(hook, [hook, custom] {
+        hook->setVisible(custom->isChecked());
+        hook->setEnabled(custom->isEnabled());
+        hook->refresh();
+    });
+    form.addRow(inlineAppearance, [inlineAppearance, &scene, entity] {
+        const auto* emitter = std::as_const(scene).TryGetComponent<engine::ParticleEmitter>(entity);
+        inlineAppearance->setVisible(emitter && !emitter->effect.id.IsValid() && emitter->effect.path.empty());
+        inlineAppearance->refresh();
+    });
+    auto* emission = new PropertyForm;
+    emission->addUInt32(QObject::tr("Max Alive"), field(scene, entity, &engine::ParticleEmitter::maxAlive), 1);
+    emission->addFloat(QObject::tr("Particles per second"), field(scene, entity, &engine::ParticleEmitter::rate), {.minimum = 0.0});
+    emission->addFloat(QObject::tr("Lifetime (seconds)"), field(scene, entity, &engine::ParticleEmitter::lifetime), {.minimum = 0.001});
+    emission->addFloat(QObject::tr("Initial speed"), field(scene, entity, &engine::ParticleEmitter::speed), {.minimum = 0.0});
+    emission->addFloat(QObject::tr("Billboard base radius"), field(scene, entity, &engine::ParticleEmitter::radius), {.minimum = 0.0});
+    emission->addFloat(QObject::tr("Direction jitter"), field(scene, entity, &engine::ParticleEmitter::spread), {.minimum = 0.0});
+    emission->setToolTip(QObject::tr("Inline emission applies when no effect is assigned, or when Override effect emission is enabled.\n"
+        "Billboard base radius is the particle's base radius in world units.\n"
+        "Direction jitter adds a random unit vector scaled by Spread to the emission direction before normalization (dimensionless)."));
+    form.addRow(emission, [&scene, entity, emission] {
+        const auto* emitter = std::as_const(scene).TryGetComponent<engine::ParticleEmitter>(entity);
+        emission->setEnabled(emitter && (emitter->overrideEmission ||
+            (!emitter->effect.id.IsValid() && emitter->effect.path.empty())));
+        emission->refresh();
+    });
+    form.addUInt32(QObject::tr("Seed"), restartingField(field(scene, entity, &engine::ParticleEmitter::seed)));
     form.addColor(QObject::tr("Tint"), field(scene, entity, &engine::ParticleEmitter::tint));
 }
 

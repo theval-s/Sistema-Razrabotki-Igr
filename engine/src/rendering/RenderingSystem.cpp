@@ -3,6 +3,8 @@
 #include <engine/core/PathUtils.hpp>
 #include "LifecycleFailure.hpp"
 #include "particles/ParticlePass.hpp"
+#include <algorithm>
+#include <cmath>
 
 namespace engine {
 namespace {
@@ -118,7 +120,24 @@ void RenderingSystem::RenderFrame(const FrameContext& frame, const OverlayCallba
         rendering_detail::Check(device->GetDeviceRemovedReason(), "GetDeviceRemovedReason", device);
         renderingContext_.ClearState();
         resources_.debugView = debugView_;
-        resources_.simulationDeltaSeconds = frame.deltaSeconds;
+        resources_.particleShadowView = nullptr;
+        rendering_detail::InPass("ParticleSimulation", [&] {
+            if (particlePreview_.enabled) {
+                // Warm-up is bounded per displayed frame so the editor remains responsive.
+                // Even a paused preview can explicitly request prewarm.
+                constexpr float warmStep = 1.0f / 60.0f;
+                for (int i = 0; i < 8 && particlePrewarmRemaining_ > 0; ++i) {
+                    const float dt = std::min(warmStep, particlePrewarmRemaining_);
+                    particlePass_->Advance(world_, renderingContext_, dt, &particlePreview_);
+                    particlePrewarmRemaining_ = std::max(0.0f, particlePrewarmRemaining_ - dt);
+                }
+                if (!particlePreview_.paused)
+                    particlePass_->Advance(world_, renderingContext_, frame.realDeltaSeconds * particlePreview_.speed, &particlePreview_);
+            } else {
+                particlePass_->Advance(world_, renderingContext_, frame.deltaSeconds, nullptr);
+            }
+        });
+        renderingContext_.ClearState();
         resources_.BindCBuffers(renderingContext_);
         resources_.frameCBuffer.Update(renderingContext_, [&](FrameBufferData& data) {
             data.simulationTimeSeconds = static_cast<float>(frame.simulationTimeSeconds);
@@ -128,6 +147,16 @@ void RenderingSystem::RenderFrame(const FrameContext& frame, const OverlayCallba
             rendering_detail::InPass(PassNames[i], [&] { renderPasses_[i]->Render(world_, renderingContext_, resources_); });
             if (i + 1 == renderPasses_.size() && overlay) overlay(renderingContext_, frame);
             renderingContext_.ClearHazardousState();
+            if (i == 0) {
+                rendering_detail::InPass("ParticleShadows", [&] {
+                    particlePass_->RenderShadows(world_, renderingContext_, resources_);
+                });
+                // The particle light-view pass owns raw D3D state, including multiplicative
+                // blending. Restore all defaults, not just SRVs, before opaque G-buffer draws.
+                renderingContext_.ClearState();
+                resources_.BindCBuffers(renderingContext_);
+                renderingContext_.BindSamplers();
+            }
         }
         renderingContext_.Present();
     } catch (const RenderingException& error) {
@@ -147,6 +176,9 @@ void RenderingSystem::Shutdown() noexcept {
     particlePass_ = nullptr;
     particleStats_ = {};
     world_.particleEmitters.clear();
+    particlePreview_ = {};
+    particlePrewarmRemaining_ = 0;
+    resources_.particleShadowView = nullptr;
     try { resources_.Destroy(renderingContext_.GetResourceManager()); } catch (...) {}
     world_.sceneItems.clear();
     world_.renderItems.clear();
@@ -163,13 +195,39 @@ void RenderingSystem::RequestParticleBurst(std::uint64_t owner, std::uint32_t co
     if (particlePass_ && count) particlePass_->Burst(owner, count);
 }
 void RenderingSystem::ResetParticles() {
+    resources_.particleShadowView = nullptr;
     if (particlePass_) particlePass_->Reset();
     world_.particleEmitters.clear();
+    particlePreview_ = {};
+    particlePrewarmRemaining_ = 0;
+}
+void RenderingSystem::SetParticlePreview(ParticlePreview preview) {
+    if (!std::isfinite(preview.speed) || preview.speed <= 0 || preview.speed > 4) return;
+    const bool restart = preview.enabled != particlePreview_.enabled ||
+        preview.allEmitters != particlePreview_.allEmitters ||
+        (!preview.allEmitters && preview.owner != particlePreview_.owner);
+    particlePreview_ = preview;
+    if (restart) {
+        resources_.particleShadowView = nullptr;
+        if (particlePass_) particlePass_->Reset();
+        particlePrewarmRemaining_ = 0;
+    }
+}
+void RenderingSystem::RestartParticlePreview() {
+    if (!particlePreview_.enabled) return;
+    resources_.particleShadowView = nullptr;
+    if (particlePass_) particlePass_->Reset();
+    particlePrewarmRemaining_ = 0;
+}
+void RenderingSystem::PrewarmParticlePreview(float seconds) {
+    if (particlePreview_.enabled && std::isfinite(seconds) && seconds > 0)
+        particlePrewarmRemaining_ = std::min(seconds, 10.0f);
 }
 bool RenderingSystem::SetParticleBudget(ParticleBudget budget) {
     if (!budget.maxParticles || budget.maxParticles > 65536 || !budget.maxEmitters || budget.maxEmitters > 4096)
         return false;
     if (budget != particleBudget_) {
+        resources_.particleShadowView = nullptr;
         if (particlePass_) particlePass_->Reset();
         particleBudget_ = budget;
     }

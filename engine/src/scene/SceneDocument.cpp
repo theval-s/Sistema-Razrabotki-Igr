@@ -166,9 +166,14 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
     Fields(components, {"Transform", "MeshRenderer", "SkinnedMeshRenderer", "Animator", "Camera", "DirectionalLight", "PointLight", "SpotLight", "ParticleEmitter", "Controller", "Bounds", "GamePersistence", "Script", "BehaviorTree", "RigidBody", "Collider", "NavigationRegion", "NavigationSource", "AudioSource", "AudioListener"});
     if (components.contains("ParticleEmitter")) {
         const auto& json = components.at("ParticleEmitter");
-        Fields(json, {"appearance", "maxAlive", "seed", "rate", "lifetime", "speed", "radius", "spread", "tint"});
+        Fields(json, {"appearance", "maxAlive", "seed", "rate", "lifetime", "speed", "radius", "spread", "tint",
+                      "effect", "overrideEmission"});
         ParticleEmitter value;
         value.appearance = Unsigned32(json.at("appearance"));
+        // Explicit migration: the retired built-in fire (1) becomes standard particles (0).
+        if (value.appearance == 1) value.appearance = 0;
+        if (json.contains("effect") && !json.at("effect").is_null()) value.effect = Reference(json.at("effect"));
+        if (json.contains("overrideEmission")) value.overrideEmission = Boolean(json.at("overrideEmission"));
         value.maxAlive = Unsigned32(json.at("maxAlive"));
         value.seed = Unsigned32(json.at("seed"));
         value.rate = Number(json.at("rate"));
@@ -576,10 +581,13 @@ Json Encode(const SceneDocument& document) {
         if (entity.particleEmitter) {
             const auto& emitter = *entity.particleEmitter;
             ValidateEmitter(emitter);
-            components["ParticleEmitter"] = {{"appearance", emitter.appearance}, {"maxAlive", emitter.maxAlive},
+            if (!emitter.effect.id.IsValid() && !emitter.effect.path.empty())
+                throw std::invalid_argument("invalid ParticleEmitter effect reference");
+            components["ParticleEmitter"] = {{"appearance", emitter.appearance == 1 ? 0 : emitter.appearance}, {"maxAlive", emitter.maxAlive},
                 {"seed", emitter.seed}, {"rate", emitter.rate}, {"lifetime", emitter.lifetime},
                 {"speed", emitter.speed}, {"radius", emitter.radius}, {"spread", emitter.spread},
-                {"tint", Encode(emitter.tint)}};
+                {"tint", Encode(emitter.tint)}, {"effect", emitter.effect.id.IsValid() ? Encode(emitter.effect) : Json(nullptr)},
+                {"overrideEmission", emitter.overrideEmission}};
         }
         if (entity.controller)
             components["Controller"] = {{"type", entity.controller->type}, {"version", entity.controller->version},
@@ -805,6 +813,8 @@ void ApplyEntity(const SceneEntityDefinition& definition, AssetSystem& assets, S
     MatchComponent(destination, entity, definition.pointLight);
     MatchComponent(destination, entity, definition.spotLight);
     MatchComponent(destination, entity, definition.particleEmitter);
+    if (definition.particleEmitter && definition.particleEmitter->effect.id.IsValid())
+        assets.RequestParticleEffect(definition.particleEmitter->effect);
     MatchComponent(destination, entity, definition.rigidBody);
     MatchComponent(destination, entity, definition.collider);
     MatchComponent(destination, entity, definition.navigationRegion);

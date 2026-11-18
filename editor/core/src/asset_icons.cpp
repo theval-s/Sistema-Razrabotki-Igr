@@ -34,6 +34,8 @@ Style styleOf(const engine::CatalogAssetKind kind) {
         return {"HLSL", QColor(0x7a, 0x52, 0xb3)};
     case engine::CatalogAssetKind::Material:
         return {"MAT", QColor(0x2f, 0x7f, 0xc1)};
+    case engine::CatalogAssetKind::ParticleEffect:
+        return {"VFX", QColor(0xc4, 0x70, 0xa2)};
     case engine::CatalogAssetKind::MaterialInstance:
         return {"INST", QColor(0x3a, 0xa3, 0xc9)};
     case engine::CatalogAssetKind::Scene:
@@ -121,6 +123,8 @@ QString assetKindName(const engine::CatalogAssetKind kind) {
         return QObject::tr("Shaders");
     case engine::CatalogAssetKind::Material:
         return QObject::tr("Materials");
+    case engine::CatalogAssetKind::ParticleEffect:
+        return QObject::tr("Particle Effects");
     case engine::CatalogAssetKind::MaterialInstance:
         return QObject::tr("Material Instances");
     case engine::CatalogAssetKind::Scene:

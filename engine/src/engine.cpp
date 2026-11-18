@@ -83,6 +83,9 @@ struct Engine::Impl {
     entt::dispatcher events;
     // GPU clones belong to the active scene runtime, never to serializable components.
     SceneRuntimeResources sceneRuntime;
+    // Resolve only when the authored reference changes; transform edits must not retry broken effects.
+    // Outlives Scene, whose destruction still dispatches lifecycle observers.
+    std::unordered_map<entt::entity, AssetReference> particleEffectRequests;
     Scene scene;
     SceneDocument sceneBaseline;
     AssetReference sceneReference;
@@ -127,7 +130,19 @@ Engine::Engine(EngineConfig config) : impl_(std::make_unique<Impl>(std::move(con
     // Initialize() regardless of registration order.
     impl_->assets = std::make_unique<AssetSystem>(*this);
     impl_->sceneAssets = std::make_unique<AssetSystem>(*this);
+    [[maybe_unused]] const auto particleObserver = impl_->scene.AddChangeObserver(
+        [this](Scene::ChangeKind kind, entt::entity entity) {
+            if (!impl_->initialized || kind != Scene::ChangeKind::Modified) return;
+            if (const auto* emitter = impl_->scene.TryGetComponent<ParticleEmitter>(entity);
+                emitter && (emitter->effect.id.IsValid() || !emitter->effect.path.empty())) {
+                const auto found = impl_->particleEffectRequests.find(entity);
+                if (found != impl_->particleEffectRequests.end() && found->second == emitter->effect) return;
+                impl_->particleEffectRequests[entity] = emitter->effect;
+                impl_->sceneAssets->RequestParticleEffect(emitter->effect);
+            } else impl_->particleEffectRequests.erase(entity);
+        });
     [[maybe_unused]] const auto observer = impl_->scene.AddLifecycleObserver([this](Scene::LifecycleEvent event, entt::entity entity, entt::id_type component) {
+        if (event == Scene::LifecycleEvent::EntityDestroying) impl_->particleEffectRequests.erase(entity);
         if (event != Scene::LifecycleEvent::EntityDestroying &&
             component != entt::type_hash<MeshRenderer>::value()) return;
         impl_->sceneRuntime.Release(entity, GetSubsystem<RenderingSubsystem>());
@@ -205,6 +220,13 @@ bool Engine::Initialize() {
     // Size is re-read every iteration: a subsystem may register others from its
     // Initialize(), those get initialized by this same loop.
     impl_->initialized = true;
+    impl_->particleEffectRequests.clear();
+    impl_->scene.ForEach<ParticleEmitter>([this](entt::entity entity, const ParticleEmitter& emitter) {
+        if (emitter.effect.id.IsValid() || !emitter.effect.path.empty()) {
+            impl_->particleEffectRequests[entity] = emitter.effect;
+            impl_->sceneAssets->RequestParticleEffect(emitter.effect);
+        }
+    });
     for (; impl_->initializedCount < impl_->subsystems.size(); ++impl_->initializedCount) {
         Subsystem& subsystem = *impl_->subsystems[impl_->initializedCount].subsystem;
         log::Engine().info("Initializing subsystem '{}'", subsystem.GetName());

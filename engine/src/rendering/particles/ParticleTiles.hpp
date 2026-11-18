@@ -24,9 +24,9 @@ public:
     // Fresh RenderViews(), R32_FLOAT depth SRV and RGBA16_FLOAT result SRV (also copy destination).
     // Both textures: mip 0, single mip/slice/sample, initialized dimensions. All resources and
     // programs on same device; release conflicting bindings (including OM RTV/DSV and other SRVs)
-    // first. Clobbers CS shader/b0/t0..7/u0..2, leaves them null. Render thread only.
+    // first. Clobbers CS shader/b0/t0..9/s0/u0..2, leaves them null. Render thread only.
     long Render(ParticleSimulation::Views, const Camera&, ID3D11ShaderResourceView* depth,
-                ID3D11ShaderResourceView* lit);
+                ID3D11ShaderResourceView* lit, ID3D11ShaderResourceView* textures=nullptr);
     // Last completed diagnostic copy; frame 0 until available. No wait/flush, drops samples
     // if all staging slots busy. Occupancy counts projected AABB intersections before depth tests.
     Stats Latest();

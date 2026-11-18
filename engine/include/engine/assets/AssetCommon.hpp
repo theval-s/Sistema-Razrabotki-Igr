@@ -20,6 +20,7 @@ enum class AssetKind : uint8_t {
     Skeleton,
     AnimationClip,
     SkinnedMesh,
+    ParticleEffect,
     Count
 };
 

@@ -7,6 +7,8 @@
 #include <engine/assets/AssetCooking.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/assets/ParticleEffectDefinition.hpp>
+#include <engine/scene/SceneDocument.hpp>
 #include <engine/engine.hpp>
 #include <engine/rendering/EngineShaders.hpp>
 #include <engine/core/Content.hpp>
@@ -255,4 +257,98 @@ TEST(AnimationBuild, ValidatesBeforeReplacingStagedOutput) {
     std::string markerText;
     ASSERT_TRUE(engine::ReadTextFile(marker, markerText, error)) << error;
     EXPECT_EQ(markerText, "preserve this output");
+}
+
+TEST(ParticleEffectBuild, CopiesJsonAndValidatesSceneAndTextureUuidDependencies) {
+    TemporaryDirectory temp;
+    const auto content = temp.path / "project/content";
+    const auto runtime = temp.path / "runtime";
+    const auto output = temp.path / "output";
+    fs::create_directories(content);
+    fs::create_directories(runtime);
+    std::string error, text;
+    engine::Project project;
+    project.file = temp.path / "project/Test.sriproject";
+    project.name = "ParticleEffectBuildTest";
+    project.startupScene = "game/test.scene.json";
+    ASSERT_TRUE(project.Save(error)) << error;
+    ASSERT_TRUE(engine::WriteFileAtomic(runtime / "sri_runtime.exe", "runtime marker", error)) << error;
+    const engine::AssetReference effect{engine::NewUuid(), "game/smoke.particle-effect.json"};
+    const engine::AssetReference texture{engine::NewUuid(), "game/smoke.png"};
+    engine::ParticleEffectDefinition definition;
+    ASSERT_TRUE(engine::SerializeParticleEffectDefinition(definition, text, error)) << error;
+    ASSERT_TRUE(engine::WriteFileAtomic(content / "smoke.particle-effect.json", text, error)) << error;
+    ASSERT_TRUE(engine::WriteAssetMetadata(content / "smoke.particle-effect.json",
+        {effect.id, engine::CatalogAssetKind::ParticleEffect}, error)) << error;
+    // Image decoding belongs to runtime texture loading; build validates catalog dependencies and copies bytes.
+    ASSERT_TRUE(engine::WriteFileAtomic(content / "smoke.png", "image marker", error)) << error;
+    ASSERT_TRUE(engine::WriteAssetMetadata(content / "smoke.png",
+        {texture.id, engine::CatalogAssetKind::Texture}, error)) << error;
+    engine::SceneDocument scene;
+    engine::SceneEntityDefinition entity;
+    entity.id = engine::EntityUuid(engine::NewUuid());
+    entity.name = "Smoke";
+    entity.particleEmitter = engine::ParticleEmitter{};
+    entity.particleEmitter->effect = effect;
+    scene.entities.push_back(entity);
+    const auto saveScene = [&] {
+        return engine::SerializeSceneDocument(scene, text, error) &&
+            engine::WriteFileAtomic(content / "test.scene.json", text, error);
+    };
+    const auto saveEffect = [&] {
+        return engine::SerializeParticleEffectDefinition(definition, text, error) &&
+            engine::WriteFileAtomic(content / "smoke.particle-effect.json", text, error);
+    };
+    ASSERT_TRUE(saveScene()) << error;
+    ASSERT_TRUE(engine::WriteAssetMetadata(content / "test.scene.json",
+        {engine::NewUuid(), engine::CatalogAssetKind::Scene}, error)) << error;
+    const auto tool = engine::AssetPathResolver::GetRoot() / "sri-build.exe";
+    const auto valid = RunBuild(tool, project.file, output, runtime);
+    ASSERT_TRUE(valid);
+    ASSERT_EQ(*valid, 0u);
+    auto pack = engine::PakSource::Load(output / engine::PakFileName, error);
+    ASSERT_TRUE(pack) << error;
+    EXPECT_TRUE(pack->IsFile(effect.path));
+    EXPECT_TRUE(pack->IsFile(texture.path));
+    {
+        MountScope mount(output, pack);
+        struct Reset {
+            ~Reset() { engine::AssetPathResolver::SetManifest({}); engine::AssetPathResolver::SetGameRoot({}); }
+        } reset;
+        engine::AssetPathResolver::SetManifest(output / "manifest.json");
+        engine::AssetPathResolver::SetGameRoot(output / "game");
+        engine::Engine host{engine::EngineConfig{.taskThreads = 1}};
+        ASSERT_TRUE(host.Initialize());
+        auto& assets = host.GetSceneAssets();
+        ASSERT_NE(assets.GetCatalog().Find(effect.id, engine::CatalogAssetKind::ParticleEffect), nullptr);
+        EXPECT_TRUE(assets.LoadParticleEffect(effect.path));
+    }
+    pack.reset();
+    ASSERT_TRUE(engine::WriteFileAtomic(output / "preserve.txt", "preserve", error)) << error;
+    const auto rejected = [&] {
+        const auto status = RunBuild(tool, project.file, output, runtime);
+        ASSERT_TRUE(status);
+        EXPECT_NE(*status, 0u);
+        std::string marker;
+        ASSERT_TRUE(engine::ReadTextFile(output / "preserve.txt", marker, error)) << error;
+        EXPECT_EQ(marker, "preserve");
+    };
+    scene.entities[0].particleEmitter->effect = {texture.id, texture.path};
+    ASSERT_TRUE(saveScene()) << error;
+    rejected(); // scene effect is a texture UUID
+    scene.entities[0].particleEmitter->effect = effect;
+    ASSERT_TRUE(saveScene()) << error;
+    definition.texture = {effect.id, effect.path};
+    ASSERT_TRUE(saveEffect()) << error;
+    rejected(); // effect texture is an effect UUID
+    definition.texture = {engine::NewUuid(), "game/missing.png"};
+    ASSERT_TRUE(saveEffect()) << error;
+    rejected();
+    definition.texture = texture;
+    ASSERT_TRUE(saveEffect()) << error;
+    const auto textured = RunBuild(tool, project.file, output, runtime, L" --no-pak");
+    ASSERT_TRUE(textured);
+    EXPECT_EQ(*textured, 0u);
+    EXPECT_TRUE(fs::is_regular_file(output / "game/smoke.particle-effect.json"));
+    EXPECT_TRUE(fs::is_regular_file(output / "game/smoke.png"));
 }

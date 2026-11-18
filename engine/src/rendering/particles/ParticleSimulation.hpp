@@ -4,6 +4,7 @@
 #include <memory>
 #include <span>
 #include <vector>
+#include <engine/rendering/Particles.hpp>
 
 struct ID3D11Device;
 struct ID3D11ComputeShader;
@@ -23,6 +24,8 @@ public:
         std::uint32_t requested{}, maxAlive{}, appearance{}, seed{};
         float position[3]{}, lifetime{1}, direction[3]{0,1,0}, speed{1};
         float tint[3]{1,1,1}, radius{1}, spread{}; // additive unit-vector jitter before normalization
+        ParticleEffectSettings effect{};
+        std::uint32_t textureLayer{};
     };
     struct Programs { ID3D11ComputeShader *update{}, *admit{}, *spawn{}; };
     struct Views {
@@ -30,6 +33,7 @@ public:
         ID3D11Buffer* dispatchArgs{};
         // Safe CPU bound for sizing a sorting network; never an admission result.
         std::uint32_t upperAlive{UINT32_MAX};
+        ID3D11ShaderResourceView* settings{}; // borrowed owner styles; null = identity defaults
     };
     struct EmitterStats { std::uint64_t owner; std::uint32_t alive, rejected; };
     struct Snapshot {
@@ -44,7 +48,7 @@ public:
     long Initialize(ID3D11Device* device, Programs programs, std::uint32_t capacity, std::uint32_t slots);
     // One complete owner submission per step (empty is valid). Missing owners drain. Lowering maxAlive
     // gates new births only. GPU admissions in stable slot order. No free slot => all requests rejected.
-    // Caller must unbind render views first. Clobbers CS, b0, t0..2, u0..4; leaves those slots null.
+    // Caller must unbind render views first. Clobbers CS, b0, t0..3, u0..4; leaves those slots null.
     long Step(float dt, std::span<const Emitter> emitters);
     // Borrowed; reacquire after Step. Structured strides 64,4,4 respectively; count at [0].
     // Indirect args at byte 0: ceil(count/64),1,1. Mask tail threads against activeCount[0].

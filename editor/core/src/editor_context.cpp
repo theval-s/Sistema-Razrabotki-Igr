@@ -62,6 +62,13 @@ EditorContext::EditorContext(engine::Engine& engine, engine::Project& project, Q
       startup_scene_(std::make_unique<StartupScene>(*this)) {
     QObject::connect(&selection_, &Selection::changed, &selection_, [this] {
         if (auto* animation = engine_.GetSubsystem<engine::AnimationSubsystem>()) animation->EndPreview();
+        if (auto* rendering = engine_.GetSubsystem<engine::RenderingSubsystem>()) {
+            auto preview = rendering->GetRendering().GetParticlePreview();
+            if (preview.enabled && !preview.allEmitters) {
+                preview.enabled = false;
+                rendering->GetRendering().SetParticlePreview(preview);
+            }
+        }
     });
 }
 

@@ -36,6 +36,9 @@ const ShaderVariant& GetEngineShader(const EngineShader shader) {
         {L"engine/ParticleTiles.hlsl", Compute, {.defines = {{"PARTICLE_TILES_MERGE"}}}},
         {L"engine/ParticleTiles.hlsl", Compute, {.defines = {{"PARTICLE_TILES_BIN"}}}},
         {L"engine/ParticleTiles.hlsl", Compute, {.defines = {{"PARTICLE_TILES_SHADE"}}}},
+        {L"engine/ParticleTextures.hlsl", Compute, {}},
+        {L"engine/ParticleShadows.hlsl", Vertex, {}},
+        {L"engine/ParticleShadows.hlsl", Pixel, {}},
     }};
     return variants.at(static_cast<std::size_t>(shader));
 }

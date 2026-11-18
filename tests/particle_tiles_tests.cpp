@@ -1,6 +1,9 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/rendering/resources/ShaderContext.hpp>
 #include "rendering/particles/ParticleTiles.hpp"
+#include "rendering/particles/ParticleTextures.hpp"
+#include "rendering/particles/ParticleShadows.hpp"
+#include <engine/rendering/RenderingResources.hpp>
 
 #include <DirectXPackedVector.h>
 #include <gtest/gtest.h>
@@ -19,6 +22,12 @@ using Particle = ParticleSimulation::Particle;
 using Color = std::array<float, 4>;
 using Half = DirectX::PackedVector::HALF;
 using HalfColor = std::array<Half, 4>;
+struct TestStyle {
+    float accelerationDrag[4]{}, sizeOpacity[4]{1,1,1,1}, colorStartFade[4]{1,1,1,0},
+        colorEndSoft[4]{1,1,1,0}, variationDensity[4]{0,0,1,0};
+    UINT flags[4]{0,0,1,0};
+};
+static_assert(sizeof(TestStyle)==96);
 
 void Check(HRESULT hr, const char* operation) {
     if (FAILED(hr)) throw std::runtime_error(std::string(operation) + ": HRESULT " + std::to_string(hr));
@@ -81,7 +90,8 @@ protected:
     }
 
     Image Render(UINT width, UINT height, const ParticleTiles::Camera& camera, const std::vector<Particle>& pool,
-                 const std::vector<UINT>& active, const std::vector<float>& depth) {
+                 const std::vector<UINT>& active, const std::vector<float>& depth,
+                 ID3D11ShaderResourceView* styles=nullptr, ID3D11ShaderResourceView* textures=nullptr) {
         ParticleTiles tiles;
         Check(tiles.Initialize(device.Get(), {shaders[0].Get(), shaders[1].Get(), shaders[2].Get(), shaders[3].Get()},
                                static_cast<UINT>(pool.size()), width, height), "initialize tiles");
@@ -117,7 +127,7 @@ protected:
         D3D11_SUBRESOURCE_DATA litInit{initial.data(), width * UINT(sizeof(HalfColor)), 0};
         Check(device->CreateTexture2D(&tex, &litInit, &lit), "create lit target");
         Check(device->CreateShaderResourceView(lit.Get(), nullptr, &litSrv), "create lit SRV");
-        Check(tiles.Render({particles.Get(), indices.Get(), live.Get(), args.Get()}, camera, depthSrv.Get(), litSrv.Get()),
+        Check(tiles.Render({particles.Get(), indices.Get(), live.Get(), args.Get(),UINT32_MAX,styles}, camera, depthSrv.Get(), litSrv.Get(),textures),
               "render tiles");
 
         tex.BindFlags = 0;
@@ -138,6 +148,32 @@ protected:
         image.stats = tiles.Latest();
         EXPECT_EQ(image.stats.frame, 1u);
         return image;
+    }
+
+    void InitTextures(ParticleTextures& textures) {
+        auto cs=ShaderContext::CompileCpu(std::filesystem::path(SRI_SOURCE_ROOT)/"engine/shaders/ParticleTextures.hlsl",ShaderType::Compute,{});
+        ComPtr<ID3D11ComputeShader> shader;
+        Check(device->CreateComputeShader(cs.blob->GetBufferPointer(),cs.blob->GetBufferSize(),nullptr,&shader),"resample shader");
+        Check(textures.Initialize(device.Get(),shader.Get()),"texture array");
+    }
+    ComPtr<ID3D11ShaderResourceView> SolidTexture(UINT rgba, bool srgb=false) {
+        D3D11_TEXTURE2D_DESC t{}; t.Width=3; t.Height=2; t.MipLevels=t.ArraySize=t.SampleDesc.Count=1;
+        t.Format=srgb?DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:DXGI_FORMAT_R8G8B8A8_UNORM;
+        t.BindFlags=D3D11_BIND_SHADER_RESOURCE;
+        UINT pixels[6]{rgba,rgba,rgba,rgba,rgba,rgba}; D3D11_SUBRESOURCE_DATA data{pixels,12,0};
+        ComPtr<ID3D11Texture2D> texture; ComPtr<ID3D11ShaderResourceView> srv;
+        Check(device->CreateTexture2D(&t,&data,&texture),"source texture");
+        Check(device->CreateShaderResourceView(texture.Get(),nullptr,&srv),"source view"); return srv;
+    }
+    float ReadArray(ID3D11ShaderResourceView* srv, UINT slice, UINT x, UINT y, UINT channel=0) {
+        ComPtr<ID3D11Resource> resource; srv->GetResource(&resource);
+        ComPtr<ID3D11Texture2D> texture,staging; Check(resource.As(&texture),"array resource");
+        D3D11_TEXTURE2D_DESC t{}; texture->GetDesc(&t); UINT channels=t.Format==DXGI_FORMAT_R16_FLOAT?1:4;
+        t.BindFlags=0; t.Usage=D3D11_USAGE_STAGING; t.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        Check(device->CreateTexture2D(&t,nullptr,&staging),"array staging"); ctx->CopyResource(staging.Get(),texture.Get());
+        D3D11_MAPPED_SUBRESOURCE m{}; Check(ctx->Map(staging.Get(),slice,D3D11_MAP_READ,0,&m),"array map");
+        auto row=reinterpret_cast<const Half*>(static_cast<const std::byte*>(m.pData)+y*m.RowPitch);
+        float value=DirectX::PackedVector::XMConvertHalfToFloat(row[x*channels+channel]); ctx->Unmap(staging.Get(),slice); return value;
     }
 };
 
@@ -206,5 +242,124 @@ TEST_F(ParticleTilesWarp, ReverseZSoftIntersectionSpansCoarseBoundaryAndPartialE
     for (UINT x : {63u, 64u}) EXPECT_NEAR(image.At(x, 7)[0], .25f + 1.75f * alpha, .001);
     EXPECT_NEAR(image.At(63, 8)[0], .25f + 1.75f * alpha * .25f, .0005);
     EXPECT_EQ(image.At(64, 8), (Color{.25f, .25f, .25f, .25f}));
+}
+
+TEST_F(ParticleTilesWarp, ResamplingDecodesSrgbAndCacheExhaustionNeverAliases) {
+    ParticleTextures textures; InitTextures(textures);
+    auto source=SolidTexture(0xff808080,true); UINT layer;
+    Check(textures.Resolve(source.Get(),layer),"resolve source"); EXPECT_EQ(layer,1u);
+    EXPECT_NEAR(ReadArray(textures.View(),layer,128,128),.21586f,.001f);
+    EXPECT_NEAR(ReadArray(textures.View(),layer,128,128,3),1,.001f);
+    UINT same; Check(textures.Resolve(source.Get(),same),"cached source"); EXPECT_EQ(same,layer);
+    EXPECT_GT(ReadArray(textures.View(),0,128,128,3),.99f);
+    EXPECT_EQ(ReadArray(textures.View(),0,0,0,3),0);
+    for(UINT i=2;i<64;++i) { auto next=SolidTexture(0xffffffff); Check(textures.Resolve(next.Get(),layer),"fill cache"); EXPECT_EQ(layer,i); }
+    auto excess=SolidTexture(0xffffffff); EXPECT_EQ(textures.Resolve(excess.Get(),layer),HRESULT_FROM_WIN32(ERROR_NO_MORE_ITEMS));
+    EXPECT_EQ(layer,UINT32_MAX);
+}
+
+TEST_F(ParticleTilesWarp, TexturedSquareCornersAndMixedBlendOrderingUseSharedLifetimeStyle) {
+    ParticleTextures textures; InitTextures(textures); auto white=SolidTexture(0xffffffff); UINT layer;
+    Check(textures.Resolve(white.Get(),layer),"white layer");
+    std::array<TestStyle,2> styles{};
+    for(auto& s:styles) { s.flags[0]=layer; s.sizeOpacity[2]=s.sizeOpacity[3]=.5f; }
+    styles[1].flags[1]=1;
+    auto style=Structured<TestStyle>(styles);
+    auto nearParticle=MakeParticle(0,0,2,4,.5f,{1,0,0},1); nearParticle.meta[1]=0;
+    auto farParticle=nearParticle; farParticle.positionAge[2]=-4; farParticle.meta[0]=1; farParticle.colorSize[0]=0; farParticle.colorSize[2]=1;
+    auto image=Render(9,9,Ortho(9,9),{nearParticle,farParticle},{0,1},std::vector<float>(81),style.Get(),textures.View());
+    // uv=(.75,.75): outside old disc, inside square. Far blue additive is attenuated by near red alpha.
+    EXPECT_NEAR(image.At(7,7)[0],.625f,.001f);
+    EXPECT_NEAR(image.At(7,7)[2],.375f,.001f);
+}
+
+TEST_F(ParticleTilesWarp, CascadesMultiplyAllCastersAndClipAtNearestReverseZReceiver) {
+    auto path=std::filesystem::path(SRI_SOURCE_ROOT)/"engine/shaders/ParticleShadows.hlsl";
+    auto vs=ShaderContext::CompileCpu(path,ShaderType::Vertex,{}), ps=ShaderContext::CompileCpu(path,ShaderType::Pixel,{});
+    ComPtr<ID3D11VertexShader> vertex; ComPtr<ID3D11PixelShader> pixel;
+    Check(device->CreateVertexShader(vs.blob->GetBufferPointer(),vs.blob->GetBufferSize(),nullptr,&vertex),"shadow VS");
+    Check(device->CreatePixelShader(ps.blob->GetBufferPointer(),ps.blob->GetBufferSize(),nullptr,&pixel),"shadow PS");
+    ParticleShadows shadows; Check(shadows.Initialize(device.Get(),{vertex.Get(),pixel.Get()},128),"shadow helper");
+    ParticleTextures textures; InitTextures(textures); auto white=SolidTexture(0xffffffff); UINT layer;
+    Check(textures.Resolve(white.Get(),layer),"white layer");
+    TestStyle style; style.flags[0]=layer; style.sizeOpacity[2]=style.sizeOpacity[3]=.01f;
+    auto styles=Structured<TestStyle>({&style,1});
+    std::vector<Particle> particles(100,MakeParticle(0,0,1,1,.5f,{1,1,1},1));
+    std::vector<UINT> ids(100); for(UINT i=0;i<100;++i) { ids[i]=i; particles[i].meta[1]=0; }
+    auto pool=Structured<Particle>(particles), indices=Structured<UINT>(ids); UINT count=100;
+    auto live=Structured<UINT>({&count,1});
+    CascadeInfo cascades;
+    for(auto& matrix:cascades.bufferData.viewProjections) { matrix=Matrix::Identity; matrix._33=.25f; matrix._43=.75f; }
+    constexpr UINT size=ParticleShadowMapSize, center=size/2;
+    // Non-integral scaling exercises floor/ceil receiver footprint bounds.
+    constexpr UINT opaqueSize=size*2+1, receiverTexel=opaqueSize/2;
+    D3D11_TEXTURE2D_DESC t{}; t.Width=t.Height=opaqueSize; t.ArraySize=4; t.MipLevels=t.SampleDesc.Count=1;
+    t.Format=DXGI_FORMAT_R32_FLOAT; t.BindFlags=D3D11_BIND_SHADER_RESOURCE;
+    std::vector<float> depth(opaqueSize*opaqueSize,.25f); // world z=-1 -> reverse depth .5
+    // This receiver overlaps both neighboring low-res texels at the fractional boundary.
+    depth[receiverTexel*opaqueSize+receiverTexel]=.75f;
+    std::array<D3D11_SUBRESOURCE_DATA,4> data; for(auto& d:data) d={depth.data(),opaqueSize*4,0};
+    ComPtr<ID3D11Texture2D> opaque; ComPtr<ID3D11ShaderResourceView> opaqueView;
+    Check(device->CreateTexture2D(&t,data.data(),&opaque),"opaque cascades");
+    Check(device->CreateShaderResourceView(opaque.Get(),nullptr,&opaqueView),"opaque view");
+    ParticleSimulation::Views views{pool.Get(),indices.Get(),live.Get(),nullptr,100,styles.Get()};
+    Check(shadows.Render(views,textures.View(),cascades,opaqueView.Get()),"render shadows");
+    for(UINT slice=0;slice<4;++slice) {
+        EXPECT_NEAR(ReadArray(shadows.View(),slice,center-2,center-2),std::pow(.99f,100),.015f);
+        EXPECT_EQ(ReadArray(shadows.View(),slice,center,center),1);
+        EXPECT_EQ(ReadArray(shadows.View(),slice,center-1,center-1),1);
+    }
+    Check(shadows.Render({},textures.View(),cascades,opaqueView.Get()),"empty shadows");
+    EXPECT_EQ(ReadArray(shadows.View(),0,center-2,center-2),1);
+    // Custom hook opacity is shared with color; density squares transmittance, no camera soft fade.
+    Particle custom=MakeParticle(0,0,1,1,.5f,{1,1,1},1);
+    auto customPool=Structured<Particle>({&custom,1}); count=1; live=Structured<UINT>({&count,1});
+    style.sizeOpacity[2]=style.sizeOpacity[3]=.5f; style.variationDensity[2]=2; style.colorEndSoft[3]=1000;
+    styles=Structured<TestStyle>({&style,1}); views={customPool.Get(),indices.Get(),live.Get(),nullptr,1,styles.Get()};
+    Check(shadows.Render(views,textures.View(),cascades,opaqueView.Get()),"hook shadow");
+    EXPECT_NEAR(ReadArray(shadows.View(),0,center-2,center-2),.5625f,.002f);
+
+    // Explicit texture alpha modulates the hook in both camera and light views.
+    // A transparent colored image must neither show a fallback circle nor cast a shadow.
+    auto transparentRed=SolidTexture(0x000000ff); UINT transparentLayer;
+    Check(textures.Resolve(transparentRed.Get(),transparentLayer),"transparent custom layer");
+    style.flags[0]=transparentLayer;
+    styles=Structured<TestStyle>({&style,1}); views.settings=styles.Get();
+    Check(shadows.Render(views,textures.View(),cascades,opaqueView.Get()),"transparent hook shadow");
+    EXPECT_EQ(ReadArray(shadows.View(),0,center-2,center-2),1);
+    auto image=Render(9,9,Ortho(9,9),{custom},{0},std::vector<float>(81),styles.Get(),textures.View());
+    EXPECT_EQ(image.At(4,4),(Color{.25f,.25f,.25f,.25f}));
+
+    // Half-opacity texture, half-opacity hook, half-opacity style: density two
+    // gives (1 - .5 * .5 * (128/255))^2 transmission near the billboard center.
+    auto halfRed=SolidTexture(0x800000ff); UINT halfLayer;
+    Check(textures.Resolve(halfRed.Get(),halfLayer),"half-opacity custom layer");
+    style.flags[0]=halfLayer;
+    styles=Structured<TestStyle>({&style,1}); views.settings=styles.Get();
+    Check(shadows.Render(views,textures.View(),cascades,opaqueView.Get()),"textured hook shadow");
+    EXPECT_NEAR(ReadArray(shadows.View(),0,center-2,center-2),std::pow(1-.25f*(128.f/255),2),.002f);
+    image=Render(9,9,Ortho(9,9),{custom},{0},std::vector<float>(81),styles.Get(),textures.View());
+    EXPECT_NEAR(image.At(4,4)[0],.25f+.75f*.25f*(128.f/255),.001f);
+    EXPECT_NEAR(image.At(4,4)[1],.25f*(1-.25f*(128.f/255)),.001f);
+
+    style.flags[2]=0; styles=Structured<TestStyle>({&style,1}); views.settings=styles.Get();
+    Check(shadows.Render(views,textures.View(),cascades,opaqueView.Get()),"noncasting shadow");
+    EXPECT_EQ(ReadArray(shadows.View(),0,center-2,center-2),1);
+}
+
+TEST_F(ParticleTilesWarp, RotatedBoundsMatchLifetimeSizeColorOpacityAndFadeIn) {
+    ParticleTextures textures; InitTextures(textures); auto white=SolidTexture(0xffffffff); UINT layer;
+    Check(textures.Resolve(white.Get(),layer),"white layer");
+    TestStyle style; style.flags[0]=layer; style.flags[3]=1;
+    style.sizeOpacity[0]=1; style.sizeOpacity[1]=3; style.sizeOpacity[2]=.8f; style.sizeOpacity[3]=.4f;
+    style.colorStartFade[0]=1; style.colorStartFade[1]=style.colorStartFade[2]=0; style.colorStartFade[3]=1;
+    style.colorEndSoft[0]=style.colorEndSoft[1]=0; style.colorEndSoft[2]=1;
+    auto styles=Structured<TestStyle>({&style,1});
+    auto p=MakeParticle(0,0,2,2,.5f,{1,1,1},536870912); p.meta[1]=0;
+    auto image=Render(13,13,Ortho(13,13),{p},{0},std::vector<float>(169),styles.Get(),textures.View());
+    EXPECT_NEAR(image.At(11,6)[0],.325f,.001f);
+    EXPECT_NEAR(image.At(11,6)[1],.175f,.001f);
+    EXPECT_NEAR(image.At(11,6)[2],.325f,.001f);
+    EXPECT_EQ(image.At(12,6),(Color{.25f,.25f,.25f,.25f}));
 }
 } // namespace

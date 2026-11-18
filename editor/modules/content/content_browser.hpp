@@ -74,6 +74,8 @@ private:
     /// Double-click / Enter: enters folders, opens scenes, edits materials, opens other files.
     void activate(const QModelIndex& index);
     void editMaterial(const QString& path, engine::CatalogAssetKind kind);
+    void editParticleEffect(const QString& path);
+    void newParticleEffect();
     void rebuildBreadcrumb();
     void applyViewMode();
     void applyFilters();

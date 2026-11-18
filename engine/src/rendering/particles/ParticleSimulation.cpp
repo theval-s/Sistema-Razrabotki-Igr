@@ -42,6 +42,11 @@ HRESULT MakeBuffer(ID3D11Device* device, Buffer& out, UINT n, UINT stride, UINT 
     return hr;
 }
 struct GpuEmitter { float posLife[4], dirSpeed[4], tintRadius[4], jitter[4]; UINT request[4]; };
+struct Style {
+    float accelerationDrag[4], sizeOpacity[4], colorStartFade[4], colorEndSoft[4], variationDensity[4];
+    UINT flags[4];
+};
+static_assert(sizeof(Style)==96);
 static_assert(sizeof(GpuEmitter) == 80);
 struct Frame { float dt; UINT capacity, slots, frame; };
 struct Slot {
@@ -58,6 +63,14 @@ struct Ticket {
 };
 bool Valid(const ParticleSimulation::Emitter& e) {
     auto finite = [](float x) { return std::isfinite(x); };
+    const auto& f=e.effect;
+    const float values[]{f.acceleration.x,f.acceleration.y,f.acceleration.z,f.drag,f.sizeStart,f.sizeEnd,
+        f.colorStart.x,f.colorStart.y,f.colorStart.z,f.colorEnd.x,f.colorEnd.y,f.colorEnd.z,
+        f.opacityStart,f.opacityEnd,f.fadeIn,f.softDistance,f.shadowDensity,f.lifetimeVariation,f.speedVariation};
+    if(!std::all_of(std::begin(values),std::end(values),finite) || f.drag<0 || f.sizeStart<0 || f.sizeEnd<0 ||
+       f.softDistance<0 || f.shadowDensity<0 || f.fadeIn<0 || f.fadeIn>1 ||
+       f.lifetimeVariation<0 || f.lifetimeVariation>1 || f.speedVariation<0 || f.speedVariation>1 ||
+       e.textureLayer>=ParticleTextureLayers || static_cast<UINT>(f.blend)>1) return false;
     return std::all_of(e.position,e.position+3,finite) && std::all_of(e.tint,e.tint+3,finite) &&
         std::all_of(e.direction,e.direction+3,finite) && finite(e.lifetime) && e.lifetime>0 &&
         finite(e.speed) && finite(e.spread) && e.spread>=0 && finite(e.radius) && e.radius>=0;
@@ -67,7 +80,8 @@ bool Valid(const ParticleSimulation::Emitter& e) {
 struct ParticleSimulation::Impl {
     ComPtr<ID3D11DeviceContext> ctx;
     ComPtr<ID3D11ComputeShader> update, admit, spawn;
-    Buffer pool[2], count[2], indices, args, births, inputs, stats, cb;
+    Buffer pool[2], count[2], indices, args, births, inputs, stats, cb, settings;
+    std::vector<Style> styles;
     UINT capacity{}, current{}, read{}, pending{}, upperAlive{};
     std::uint64_t frame{};
     std::vector<Slot> slots;
@@ -106,9 +120,9 @@ struct ParticleSimulation::Impl {
         return S_OK;
     }
     void Unbind() {
-        ID3D11ShaderResourceView* srvs[3]{};
+        ID3D11ShaderResourceView* srvs[4]{};
         ID3D11UnorderedAccessView* uavs[5]{};
-        ctx->CSSetShaderResources(0,3,srvs);
+        ctx->CSSetShaderResources(0,4,srvs);
         ctx->CSSetUnorderedAccessViews(0,5,uavs,nullptr);
     }
 };
@@ -127,6 +141,7 @@ long ParticleSimulation::Initialize(ID3D11Device* d, Programs p, UINT cap, UINT 
     d->GetImmediateContext(&a.ctx);
     a.capacity=cap; a.update=p.update; a.admit=p.admit; a.spawn=p.spawn;
     a.slots.resize(n); a.upload.resize(n);
+    a.styles.resize(n);
     constexpr UINT structured=D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, srv=D3D11_BIND_SHADER_RESOURCE,
         uav=D3D11_BIND_UNORDERED_ACCESS, indirect=D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
     HRESULT hr;
@@ -141,6 +156,7 @@ long ParticleSimulation::Initialize(ID3D11Device* d, Programs p, UINT cap, UINT 
     if (FAILED(hr=MakeBuffer(d,a.args,3,4,uav,indirect,empty))) return hr;
     if (FAILED(hr=MakeBuffer(d,a.births,3,4,uav,indirect,empty))) return hr;
     if (FAILED(hr=MakeBuffer(d,a.inputs,n,sizeof(GpuEmitter),srv,structured))) return hr;
+    if (FAILED(hr=MakeBuffer(d,a.settings,n,sizeof(Style),srv,structured,a.styles.data()))) return hr;
     if (FAILED(hr=MakeBuffer(d,a.stats,n,16,srv|uav,structured))) return hr;
     if (FAILED(hr=MakeBuffer(d,a.cb,1,sizeof(Frame),D3D11_BIND_CONSTANT_BUFFER,0))) return hr;
     D3D11_BUFFER_DESC staging{};
@@ -184,6 +200,13 @@ long ParticleSimulation::Step(float dt, std::span<const Emitter> emitters) {
             j=free.back(); free.pop_back(); a.slots[j].owner=e.owner;
         }
         if (e.requested) a.slots[j].lastBirthRequest=a.frame;
+        const auto& f=e.effect;
+        a.styles[j]={{f.acceleration.x,f.acceleration.y,f.acceleration.z,f.drag},
+            {f.sizeStart,f.sizeEnd,f.opacityStart,f.opacityEnd},
+            {f.colorStart.x,f.colorStart.y,f.colorStart.z,f.fadeIn},
+            {f.colorEnd.x,f.colorEnd.y,f.colorEnd.z,f.softDistance},
+            {f.lifetimeVariation,f.speedVariation,f.shadowDensity,0},
+            {e.textureLayer,static_cast<UINT>(f.blend),f.castShadows?1u:0u,f.randomRotation?1u:0u}};
         possibleBirths += (std::min)({a.capacity - possibleBirths, e.requested, e.maxAlive});
         a.upload[j]={{e.position[0],e.position[1],e.position[2],e.lifetime},
                      {e.direction[0],e.direction[1],e.direction[2],e.speed},
@@ -194,6 +217,7 @@ long ParticleSimulation::Step(float dt, std::span<const Emitter> emitters) {
     Frame f{dt,a.capacity,n,static_cast<UINT>(a.frame)};
     c->UpdateSubresource(a.cb.data.Get(),0,nullptr,&f,0,0);
     c->UpdateSubresource(a.inputs.data.Get(),0,nullptr,a.upload.data(),0,0);
+    c->UpdateSubresource(a.settings.data.Get(),0,nullptr,a.styles.data(),0,0);
     c->CSSetConstantBuffers(0,1,a.cb.data.GetAddressOf());
     UINT prev=a.current, next=prev^1, zero[4]{};
     c->ClearUnorderedAccessViewUint(a.stats.uav.Get(),zero);
@@ -201,6 +225,7 @@ long ParticleSimulation::Step(float dt, std::span<const Emitter> emitters) {
     ID3D11ShaderResourceView* previous[]={a.pool[prev].srv.Get(),a.count[prev].srv.Get()};
     ID3D11UnorderedAccessView* survivors[]={a.pool[next].uav.Get(),a.count[next].uav.Get(),a.stats.uav.Get()};
     c->CSSetShader(a.update.Get(),nullptr,0);
+    c->CSSetShaderResources(3,1,a.settings.srv.GetAddressOf());
     c->CSSetShaderResources(0,2,previous);
     c->CSSetUnorderedAccessViews(0,3,survivors,nullptr);
     c->DispatchIndirect(a.args.data.Get(),0);
@@ -215,6 +240,7 @@ long ParticleSimulation::Step(float dt, std::span<const Emitter> emitters) {
 
     ID3D11ShaderResourceView* requests[]={a.inputs.srv.Get(),a.stats.srv.Get(),a.count[next].srv.Get()};
     c->CSSetShader(a.spawn.Get(),nullptr,0);
+    c->CSSetShaderResources(3,1,a.settings.srv.GetAddressOf());
     c->CSSetShaderResources(0,3,requests);
     c->CSSetUnorderedAccessViews(0,1,a.pool[next].uav.GetAddressOf(),nullptr);
     c->DispatchIndirect(a.births.data.Get(),0);
@@ -243,7 +269,7 @@ long ParticleSimulation::Step(float dt, std::span<const Emitter> emitters) {
 ParticleSimulation::Views ParticleSimulation::RenderViews() const {
     if (!impl_) return {};
     auto& a=*impl_;
-    return {a.pool[a.current].srv.Get(),a.indices.srv.Get(),a.count[a.current].srv.Get(),a.args.data.Get(),a.upperAlive};
+    return {a.pool[a.current].srv.Get(),a.indices.srv.Get(),a.count[a.current].srv.Get(),a.args.data.Get(),a.upperAlive,a.settings.srv.Get()};
 }
 const ParticleSimulation::Snapshot* ParticleSimulation::Latest() {
     if (!impl_ || FAILED(impl_->Poll()) || !impl_->latest.frame) return nullptr;
