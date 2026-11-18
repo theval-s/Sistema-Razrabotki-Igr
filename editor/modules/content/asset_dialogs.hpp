@@ -3,14 +3,14 @@
 #include <QDialog>
 #include <QString>
 
-#include <optional>
 #include <functional>
+#include <optional>
 #include <vector>
-#include <engine/assets/ParticleEffectDefinition.hpp>
 
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/assets/MaterialDefinition.hpp>
 #include <engine/assets/ModelImport.hpp>
+#include <engine/assets/ParticleEffectDefinition.hpp>
 
 #include "asset_operations.hpp"
 
@@ -32,7 +32,6 @@ class AssetPicker;
 namespace content {
 
 class ColorButton;
-
 
 /// File dialog filter for images that import as textures.
 [[nodiscard]] QString imageFilter();
