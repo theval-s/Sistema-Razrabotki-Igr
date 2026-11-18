@@ -49,3 +49,4 @@ C++ hosts, in `sdk/` (engine SDK only):
 |---|---|
 | [sdk/ui-implementation-contract.md](sdk/ui-implementation-contract.md) | Native UI integration for C++ hosts |
 | [sdk/content-and-packs.md](sdk/content-and-packs.md) | Running packed builds in a C++ host, reading game files through mounts |
+| [sdk/particles.md](sdk/particles.md) | Particle budgets, bursts, telemetry and preview from C++ |
