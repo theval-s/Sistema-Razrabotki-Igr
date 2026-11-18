@@ -14,6 +14,7 @@
 #include <engine/core/PathUtils.hpp>
 #include "../rendering/RenderingFailureUtils.hpp"
 
+#include "MeshFinish.hpp"
 #include "ModelSlots.hpp"
 
 namespace engine {
@@ -55,6 +56,22 @@ void CenterAndNormalize(MeshCpu& mesh) {
 }
 
 }  // namespace
+
+void detail::FinishMesh(MeshCpu& mesh, const bool centerOnLoad) {
+    if (centerOnLoad) {
+        CenterAndNormalize(mesh);
+    }
+
+    auto geometry = std::make_shared<MeshGeometry>();
+    geometry->positions.reserve(mesh.vertices.size());
+    for (const auto& vertex : mesh.vertices)
+        geometry->positions.emplace_back(vertex.pos.x, vertex.pos.y, vertex.pos.z);
+    geometry->indices = mesh.indices;
+    // Rendering uses D3D winding; Jolt expects CCW triangles.
+    for (std::size_t i = 0; i + 2 < geometry->indices.size(); i += 3)
+        std::swap(geometry->indices[i + 1], geometry->indices[i + 2]);
+    mesh.geometry = std::move(geometry);
+}
 
 bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/, CpuPayload& payload,
                                  std::string& error) const try {
@@ -130,19 +147,7 @@ bool AssimpMeshImporter::ReadCpu(const AssetDesc& desc, ID3D11Device* /*device*/
         error = std::format("Assimp read '{}' but it contains no triangles", ToUtf8(path));
         return false;
     }
-    if (desc.centerOnLoad) {
-        CenterAndNormalize(mesh);
-    }
-
-    auto geometry = std::make_shared<MeshGeometry>();
-    geometry->positions.reserve(mesh.vertices.size());
-    for (const auto& vertex : mesh.vertices)
-        geometry->positions.emplace_back(vertex.pos.x, vertex.pos.y, vertex.pos.z);
-    geometry->indices = mesh.indices;
-    // Rendering uses D3D winding; Jolt expects CCW triangles.
-    for (std::size_t i = 0; i + 2 < geometry->indices.size(); i += 3)
-        std::swap(geometry->indices[i + 1], geometry->indices[i + 2]);
-    mesh.geometry = std::move(geometry);
+    detail::FinishMesh(mesh, desc.centerOnLoad);
 
     payload = CpuPayload{};
     payload.kind = CpuPayload::Kind::Mesh;

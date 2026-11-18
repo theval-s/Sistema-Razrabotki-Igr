@@ -9,6 +9,7 @@
 #include <engine/ui/UiSubsystem.hpp>
 #include "ui/UiDx11Renderer.hpp"
 #include "ui/UiInterfaces.hpp"
+#include "content_fixture.hpp"
 
 #include <RmlUi/Core.h>
 #include <d3d11sdklayers.h>
@@ -308,6 +309,26 @@ TEST_F(UiDx11Test, PngStraightAlphaIsPremultipliedOnceAndChannelsAreCorrect) {
     Pixel(pixels, 39, 32, {128, 0, 127, 255}, width, 4);
     Pixel(pixels, 87, 32, {0, 255, 0, 255}, width, 4);
     Pixel(pixels, 180, 32, {0, 0, 255, 255});
+}
+
+TEST_F(UiDx11Test, ImagesAndFontsLoadFromAMountedPack) {
+    WriteAlphaPng();
+    ASSERT_FALSE(HasFatalFailure());
+    std::vector<std::uint8_t> png, font;
+    ASSERT_TRUE(ReadBinaryFile(root / "alpha.png", png, error)) << error;
+    ASSERT_TRUE(ReadBinaryFile(AssetPathResolver::GetRoot() / "engine/ui/fonts/DejaVuSans.ttf", font, error)) << error;
+    auto pack = std::make_shared<MemorySource>();
+    pack->Add("packed/alpha.png", std::string_view(reinterpret_cast<const char*>(png.data()), png.size()));
+    pack->Add("packed/font.ttf", std::string_view(reinterpret_cast<const char*>(font.data()), font.size()));
+    MountScope mount(root, pack);
+    std::filesystem::remove(root / "alpha.png");
+    ASSERT_TRUE(Rml::LoadFontFace("game/packed/font.ttf"));
+    ASSERT_NE(Document("<img src='game/packed/alpha.png' style='left: 16px; top: 16px; width: 96px; height: 48px;'/>"), nullptr);
+    Clear();
+    Draw();
+    const auto pixels = Readback();
+    Pixel(pixels, 39, 32, {128, 0, 127, 255}, width, 4);
+    Pixel(pixels, 87, 32, {0, 255, 0, 255}, width, 4);
 }
 
 TEST_F(UiDx11Test, FilterLayerCompositesPremultipliedAlphaOverScene) {

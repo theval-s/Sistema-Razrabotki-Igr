@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <iterator>
 
+#include <engine/core/Content.hpp>
 #include <engine/core/FrameContext.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/assets/AssetSystem.hpp>
@@ -70,7 +71,7 @@ bool ScriptSubsystem::BeginPlay(const std::filesystem::path& root,
     if (!ValidateAutoloadDefinitions(autoloads, error)) return StartupError(error, error);
     try {
         const auto absolute = std::filesystem::weakly_canonical(std::filesystem::absolute(root));
-        if (root.empty() || !std::filesystem::is_directory(absolute)) {
+        if (root.empty() || !content::IsDirectory(absolute)) {
             return StartupError(error, "The scripting root must be an existing directory");
         }
         std::vector<ScriptInstanceDesc> resolved;
@@ -87,8 +88,8 @@ bool ScriptSubsystem::BeginPlay(const std::filesystem::path& root,
                 return StartupError(error, context + ": missing Script UUID");
             }
             std::error_code sourceError;
-            const auto source = std::filesystem::canonical(entry->source, sourceError);
-            if (sourceError || !std::filesystem::is_regular_file(source, sourceError)) {
+            const auto source = std::filesystem::weakly_canonical(entry->source, sourceError);
+            if (sourceError || !content::IsFile(source)) {
                 error = context + ": cannot read script source " + ToUtf8(entry->source);
                 if (sourceError) error += ": " + sourceError.message();
                 return StartupError(error, error);

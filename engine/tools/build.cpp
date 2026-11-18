@@ -5,9 +5,12 @@
 
 #include <engine/ai/BehaviorTreeSource.hpp>
 #include <engine/assets/AssetCatalog.hpp>
+#include <engine/assets/AssetCooking.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
+#include <engine/core/Content.hpp>
 #include <engine/core/FileSystem.hpp>
+#include <engine/core/Pak.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/core/Utf.hpp>
 #include <engine/navigation/NavigationMesh.hpp>
@@ -15,10 +18,13 @@
 #include <engine/project/RuntimeSettings.hpp>
 #include <engine/scene/SceneDocument.hpp>
 
+#include <array>
 #include <charconv>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -34,10 +40,25 @@ namespace {
     constexpr std::string_view BuildStampText =
         "Made by sri-build. The next build deletes and replaces this whole folder.\n";
 
+    using Payloads = std::unordered_map<engine::AssetUuid, engine::CpuPayload, engine::AssetUuidHash>;
+
+    struct CookedFile {
+        fs::path target; // relative to the output folder
+        std::vector<std::uint8_t> bytes;
+    };
+
+    struct Cooked {
+        std::vector<CookedFile> files;
+        std::set<fs::path> sources; // replaced by a cooked file, so not copied
+        std::string manifest;
+        std::vector<std::uint8_t> shaders;
+    };
+
     struct Options {
         fs::path project;
         fs::path out;
         fs::path runtime;
+        bool pack = true;
 
         engine::RuntimeSettings settings;
     };
@@ -87,7 +108,7 @@ namespace {
             << "Usage:\n"
             << "  sri-build --project <file> --out <dir> "
             << "[--runtime <dir>] [--title T] [--width N] [--height N] "
-            << "[--fullscreen] [--capture-mouse]\n";
+            << "[--fullscreen] [--capture-mouse] [--no-pak]\n";
     }
 
     bool ParseOptions(
@@ -170,6 +191,9 @@ namespace {
             else if (argument == L"--capture-mouse") {
                 options.settings.captureMouse = true;
             }
+            else if (argument == L"--no-pak") {
+                options.pack = false;
+            }
             else {
                 error = "Unknown argument: " + engine::ToUtf8(fs::path(argument));
                 return false;
@@ -207,14 +231,21 @@ namespace {
         return IsSameOrInside(first, second) || IsSameOrInside(second, first);
     }
 
+    // The engine/ and game/ roots a build ships; engine/ is the one beside sri-build.
+    std::array<std::pair<fs::path, const wchar_t*>, 2> ContentRoots(const engine::Project& project) {
+        return {{{engine::AssetPathResolver::GetRoot() / L"engine", L"engine"}, {project.ContentDir(), L"game"}}};
+    }
+
+    // Skeletal payloads are kept from validation so the cook does not read their sources again.
     bool Validate(
         const engine::Project& project,
+        engine::AssetCatalog& catalog,
+        Payloads& payloads,
         std::vector<std::string>& errors,
         std::vector<std::string>& warnings
     ) {
         engine::AssetPathResolver::SetGameRoot(project.ContentDir());
 
-        engine::AssetCatalog catalog;
         std::string error;
 
         const fs::path engineRoot =
@@ -253,6 +284,7 @@ namespace {
                     assetKind == engine::AssetKind::AnimationClip ? payload.animationClip.skeletonSignature :
                     payload.skinnedMesh.skeletonSignature;
                 signatures.emplace(entry->metadata.id, signature);
+                payloads.emplace(entry->metadata.id, std::move(payload));
             }
         };
         validateSkeletal(engine::CatalogAssetKind::Skeleton, engine::AssetKind::Skeleton, skeletons);
@@ -390,9 +422,87 @@ namespace {
         return errors.empty();
     }
 
+    std::optional<engine::AssetKind> CookedKind(const fs::path& file) {
+        switch (engine::CatalogKindForFile(file).value_or(engine::CatalogAssetKind::Scene)) {
+        case engine::CatalogAssetKind::Mesh: return engine::AssetKind::Mesh;
+        case engine::CatalogAssetKind::Skeleton: return engine::AssetKind::Skeleton;
+        case engine::CatalogAssetKind::AnimationClip: return engine::AssetKind::AnimationClip;
+        case engine::CatalogAssetKind::SkinnedMesh: return engine::AssetKind::SkinnedMesh;
+        default: return std::nullopt;
+        }
+    }
+
+    // In memory, so a failure leaves the previous output untouched.
+    bool Cook(
+        const engine::Project& project,
+        const engine::AssetCatalog& catalog,
+        Payloads& payloads,
+        Cooked& cooked,
+        std::vector<std::string>& errors
+    ) {
+        for (const auto& [root, prefix] : ContentRoots(project)) {
+            if (!fs::is_directory(root)) continue;
+            for (const auto& item : fs::recursive_directory_iterator(root)) {
+                const auto kind = item.is_regular_file() ? CookedKind(item.path()) : std::nullopt;
+                if (!kind) continue;
+                const fs::path relative = fs::path(prefix) / item.path().lexically_relative(root);
+                const std::string name = engine::ToGenericUtf8(relative);
+                engine::CpuPayload payload;
+                std::string error;
+                const auto* entry = catalog.FindPath(name);
+                if (const auto found = entry ? payloads.find(entry->metadata.id) : payloads.end();
+                    found != payloads.end()) {
+                    payload = std::move(found->second);
+                    payloads.erase(found);
+                } else {
+                    engine::AssetDesc desc;
+                    desc.name = name;
+                    desc.path = item.path();
+                    desc.catalog = &catalog;
+                    const bool read = *kind == engine::AssetKind::Mesh
+                        ? engine::AssimpMeshImporter{}.ReadCpu(desc, nullptr, payload, error)
+                        : engine::SkeletalAssetImporter{*kind}.ReadCpu(desc, nullptr, payload, error);
+                    if (!read) {
+                        errors.push_back(name + ": " + error);
+                        continue;
+                    }
+                }
+                CookedFile file{engine::CookedPath(relative), {}};
+                if (!engine::SerializeCooked(*kind, payload, file.bytes, error)) {
+                    errors.push_back(name + ": cannot cook: " + error);
+                    continue;
+                }
+                cooked.files.push_back(std::move(file));
+                cooked.sources.insert(item.path());
+            }
+        }
+        if (std::string error; !catalog.SerializeManifest(cooked.manifest, error)) {
+            errors.push_back("asset manifest: " + error);
+        }
+        engine::ShaderLibrary shaders;
+        if (engine::CookShaderLibrary(catalog, shaders, errors)) {
+            if (std::string error; !shaders.Serialize(cooked.shaders, error)) {
+                errors.push_back("shader library: " + error);
+            }
+        }
+        return errors.empty();
+    }
+
+    // Audio streams straight from the pack, and these images are compressed already.
+    bool Compressible(const fs::path& file) {
+        if (engine::CatalogKindForFile(file) == engine::CatalogAssetKind::AudioClip) return false;
+        const auto extension = engine::content::FoldCase(engine::ToUtf8(file.extension()));
+        return extension != ".png" && extension != ".jpg" && extension != ".jpeg";
+    }
+
+    std::vector<std::uint8_t> Bytes(std::string_view text) {
+        return {text.begin(), text.end()};
+    }
+
     bool Stage(
         const Options& options,
         const engine::Project& project,
+        Cooked cooked,
         std::string& error
     ) {
 
@@ -466,21 +576,68 @@ namespace {
             return false;
         }
 
-        fs::copy(
-            options.runtime,
-            options.out,
-            fs::copy_options::recursive |
-            fs::copy_options::overwrite_existing
-        );
+        // The template's engine/ holds sources; the cooked one below replaces it.
+        for (const auto& item : fs::directory_iterator(options.runtime)) {
+            if (item.path().filename() == L"engine") continue;
+            fs::copy(item.path(), options.out / item.path().filename(),
+                     fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+        }
 
         fs::rename(
             options.out / L"sri_runtime.exe",
             options.out / (projectName.native() + L".exe")
         );
 
-        fs::copy(project.ContentDir(), options.out / L"game", fs::copy_options::recursive);
-        fs::copy_file(project.file, options.out / L"game.sriproject");
+        // Game content goes into the pack, or beside the executable with --no-pak.
+        engine::PakWriter pak;
+        const auto addFile = [&](const fs::path& relative, const fs::path& source) {
+            if (options.pack) {
+                pak.AddFile(engine::ToGenericUtf8(relative), source, Compressible(source));
+                return;
+            }
+            const fs::path target = options.out / relative;
+            fs::create_directories(target.parent_path());
+            fs::copy_file(source, target);
+        };
+        const auto addBytes = [&](const fs::path& relative, std::vector<std::uint8_t> bytes) {
+            if (options.pack) {
+                pak.AddBytes(engine::ToGenericUtf8(relative), std::move(bytes), true);
+                return true;
+            }
+            const fs::path target = options.out / relative;
+            fs::create_directories(target.parent_path());
+            return engine::WriteFileAtomic(
+                target, std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), error);
+        };
 
+        // .meta files are replaced by the manifest, cooked sources by their cooked files and HLSL
+        // by the shader library.
+        for (const auto& [root, prefix] : ContentRoots(project)) {
+            if (!fs::is_directory(root)) continue;
+            for (const auto& item : fs::recursive_directory_iterator(root)) {
+                if (!item.is_regular_file() || item.path().extension() == L".meta" ||
+                    engine::CatalogKindForFile(item.path()) == engine::CatalogAssetKind::Shader ||
+                    cooked.sources.contains(item.path())) {
+                    continue;
+                }
+                addFile(prefix / item.path().lexically_relative(root), item.path());
+            }
+        }
+        for (auto& file : cooked.files) {
+            if (!addBytes(file.target, std::move(file.bytes))) return false;
+        }
+        if (!addBytes(L"manifest.json", Bytes(cooked.manifest)) ||
+            !addBytes(engine::ShaderLibraryName, std::move(cooked.shaders))) {
+            return false;
+        }
+        addFile(L"game.sriproject", project.file);
+
+        if (options.pack) {
+            const fs::path file = options.out / engine::PakFileName;
+            if (!pak.Write(file, error)) return false;
+            Info("Packed " + std::to_string(pak.Size()) + " files into " + engine::ToUtf8(file.filename()) + " (" +
+                 std::to_string((fs::file_size(file) + 512 * 1024) / (1024 * 1024)) + " MB)");
+        }
         return true;
     }
 
@@ -525,8 +682,10 @@ int wmain(int argc, wchar_t* argv[]) {
 
         std::vector<std::string> errors;
         std::vector<std::string> warnings;
+        engine::AssetCatalog catalog;
+        Payloads payloads;
 
-        if (!Validate(*project, errors, warnings)) {
+        if (!Validate(*project, catalog, payloads, errors, warnings)) {
             for (const auto& warning : warnings) {
                 Warning(warning);
             }
@@ -544,7 +703,17 @@ int wmain(int argc, wchar_t* argv[]) {
 
         Info("Project validation passed");
 
-        if (!Stage(options, *project, error)) {
+        Cooked cooked;
+        if (!Cook(*project, catalog, payloads, cooked, errors)) {
+            for (const auto& cookError : errors) {
+                Error(cookError);
+            }
+            return 1;
+        }
+
+        Info("Cooked " + std::to_string(cooked.files.size()) + " assets");
+
+        if (!Stage(options, *project, std::move(cooked), error)) {
             Error(error);
             return 1;
         }

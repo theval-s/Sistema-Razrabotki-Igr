@@ -150,11 +150,9 @@ CascadeInfo GetCascadeData(Vector3 lightDirection, const FPSCamera& camera) {
 
 void ShadowCSMPass::Initialize(RenderingResourceManager& resourceManager, RenderingContext& context,
                                 RenderingResources& resources) try {
-    vertexShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
-        {.defines = {{"MATERIAL_SHADOW_VS"}}});
-    skinnedVertexShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
-        {.defines = {{"MATERIAL_SHADOW_VS"}, {"ENGINE_SKINNED", "1"}}});
-    geometryShader_ = resourceManager.CompileShader(L"engine/ShadowCSMPass.hlsl", ShaderType::Geometry);
+    vertexShader_ = resourceManager.CompileShader(EngineShader::ShadowVS);
+    skinnedVertexShader_ = resourceManager.CompileShader(EngineShader::SkinnedShadowVS);
+    geometryShader_ = resourceManager.CompileShader(EngineShader::ShadowGS);
     const TextureDesc shadowTextureDesc{
         .width = mapSize, .height = mapSize, .arraySize = 4,
         .format = DXGI_FORMAT_R32_TYPELESS,

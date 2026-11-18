@@ -393,6 +393,28 @@ add_custom_command(TARGET lua_runtime_tests POST_BUILD
 )
 add_test(NAME lua_runtime_tests COMMAND lua_runtime_tests)
 
+add_executable(content_tests content_tests.cpp)
+target_link_libraries(content_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
+set_project_warnings(content_tests)
+set_target_properties(content_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET content_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:content_tests> $<TARGET_FILE_DIR:content_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME content_tests COMMAND content_tests)
+
+add_executable(pak_tests pak_tests.cpp)
+target_link_libraries(pak_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
+set_project_warnings(pak_tests)
+set_target_properties(pak_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET pak_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:pak_tests> $<TARGET_FILE_DIR:pak_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME pak_tests COMMAND pak_tests)
+
 # RmlUi owns process-global interfaces: keep fixtures sequential in one process.
 add_executable(ui_tests ui_tests.cpp ui_lifecycle_review_tests.cpp ui_example_tests.cpp ui_text_asset_tests.cpp)
 target_link_libraries(ui_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
@@ -490,6 +512,7 @@ add_custom_command(TARGET scene_document_tests POST_BUILD
 
 add_executable(material_assets_tests material_assets_tests.cpp)
 target_link_libraries(material_assets_tests PRIVATE Engine::Engine GTest::gtest user32)
+target_compile_definitions(material_assets_tests PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
 set_project_warnings(material_assets_tests)
 set_target_properties(material_assets_tests PROPERTIES FOLDER tests)
 
@@ -503,6 +526,19 @@ add_custom_command(TARGET model_import_tests POST_BUILD
     COMMAND_EXPAND_LISTS VERBATIM
 )
 add_test(NAME model_import_tests COMMAND model_import_tests)
+
+add_executable(asset_cooking_tests asset_cooking_tests.cpp)
+target_link_libraries(asset_cooking_tests PRIVATE Engine::EngineStatic GTest::gtest_main ozz_animation)
+target_include_directories(asset_cooking_tests PRIVATE ../engine/src)
+target_compile_definitions(asset_cooking_tests PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+set_project_warnings(asset_cooking_tests)
+set_target_properties(asset_cooking_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET asset_cooking_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:asset_cooking_tests> $<TARGET_FILE_DIR:asset_cooking_tests>
+    COMMAND_EXPAND_LISTS VERBATIM
+)
+add_test(NAME asset_cooking_tests COMMAND asset_cooking_tests)
 
 # CPU import tests use the static engine without exporting internal importers.
 add_executable(mesh_assets_tests mesh_assets_tests.cpp)

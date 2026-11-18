@@ -5,9 +5,10 @@
 #include <RmlUi/Core/TextInputHandler.h>
 #include <engine/ui/UiHost.hpp>
 #include <engine/input/InputUiEvent.hpp>
+#include <engine/core/Content.hpp>
 #include <filesystem>
-#include <fstream>
 #include <map>
+#include <memory>
 #include <set>
 
 namespace engine::ui_detail {
@@ -27,8 +28,7 @@ bool ResolveAsset(std::string_view url, std::filesystem::path& physical, std::st
 std::string JoinAsset(std::string_view source, std::string_view relative);
 bool InspectMarkup(std::string_view source, std::set<std::string>& models, std::string& error);
 class Files final : public Rml::FileInterface {
-    struct File { std::ifstream stream; std::size_t length = 0; };
-    std::map<Rml::FileHandle, std::unique_ptr<File>> files_;
+    std::map<Rml::FileHandle, std::unique_ptr<content::Stream>> files_;
     Rml::FileHandle next_ = 0;
 public:
     bool collecting = false;

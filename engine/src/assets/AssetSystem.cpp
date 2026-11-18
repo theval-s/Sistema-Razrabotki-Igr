@@ -13,6 +13,7 @@
 #include <engine/assets/AssetEvents.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
+#include <engine/core/FileSystem.hpp>
 #include <engine/core/FrameContext.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/engine.hpp>
@@ -107,6 +108,15 @@ constexpr std::string_view ToString(const AssetKind kind) {
     return "unknown";
 }
 
+/// Cooked builds ship a manifest in place of the .meta files a scan reads.
+bool BuildCatalog(AssetCatalog& catalog, std::string& error) {
+    const auto engineRoot = AssetPathResolver::GetRoot() / "engine";
+    if (!AssetPathResolver::IsCooked()) return catalog.Scan(AssetPathResolver::GetGameRoot(), engineRoot, error);
+    std::string text;
+    if (!ReadTextFile(AssetPathResolver::GetManifest(), text, error)) return false;
+    return catalog.LoadManifest(text, AssetPathResolver::GetGameRoot(), engineRoot, error);
+}
+
 }  // namespace
 
 AssetSystem::AssetSystem(Engine& engine) : engine_(engine) {}
@@ -114,7 +124,7 @@ AssetSystem::AssetSystem(Engine& engine) : engine_(engine) {}
 AssetSystem::~AssetSystem() = default;
 
 void AssetSystem::Initialize() {
-    if (!catalog_.Scan(AssetPathResolver::GetGameRoot(), AssetPathResolver::GetRoot() / "engine", catalogError_)) {
+    if (!BuildCatalog(catalog_, catalogError_)) {
         log::Assets().error("Cannot build asset catalog: {}", catalogError_);
     }
     importers_[static_cast<size_t>(AssetKind::Mesh)] = std::make_unique<AssimpMeshImporter>();
@@ -124,6 +134,12 @@ void AssetSystem::Initialize() {
     importers_[static_cast<size_t>(AssetKind::MaterialInstance)] = std::make_unique<MaterialInstanceImporter>();
     for (const auto kind : {AssetKind::Skeleton, AssetKind::AnimationClip, AssetKind::SkinnedMesh})
         importers_[static_cast<size_t>(kind)] = std::make_unique<SkeletalAssetImporter>(kind);
+    if (AssetPathResolver::IsCooked()) {
+        for (const auto kind : {AssetKind::Mesh, AssetKind::Skeleton, AssetKind::AnimationClip, AssetKind::SkinnedMesh}) {
+            auto& importer = importers_[static_cast<size_t>(kind)];
+            importer = std::make_unique<CookedAssetImporter>(kind, std::move(importer));
+        }
+    }
 }
 
 void AssetSystem::Update(const FrameContext& frame) {
@@ -146,7 +162,7 @@ void AssetSystem::Update(const FrameContext& frame) {
 
 bool AssetSystem::RescanCatalog(std::string& error) {
     AssetCatalog next = pendingCatalog_ ? *pendingCatalog_ : catalog_;
-    const bool clean = next.Scan(AssetPathResolver::GetGameRoot(), AssetPathResolver::GetRoot() / "engine", error);
+    const bool clean = BuildCatalog(next, error);
     catalogError_ = error;
     if (std::ranges::all_of(inFlight_, [](const auto& job) { return job->GetIsComplete(); })) {
         ApplyCatalog(std::move(next));

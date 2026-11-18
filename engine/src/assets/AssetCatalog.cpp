@@ -8,6 +8,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <engine/assets/AssetCooking.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/ResourceID.hpp>
 #include <engine/core/PathUtils.hpp>
@@ -126,6 +127,23 @@ AssetMetadata MetadataFromJson(const Json& j) {
     return meta;
 }
 
+Json MetadataToJson(const AssetMetadata& value) {
+    Json encoded = {{"version", 1}, {"id", value.id.ToString()}, {"kind", KindName(value.kind)}};
+    if (value.kind == CatalogAssetKind::Mesh) encoded["centerOnLoad"] = value.centerOnLoad;
+    // Only when set, so metas from before material slots keep their exact format.
+    if (!value.materials.empty()) {
+        Json materials = Json::array();
+        for (const auto& material : value.materials) {
+            materials.push_back(material ? Json{{"id", material->id.ToString()}, {"path", material->path}}
+                                         : Json(nullptr));
+        }
+        encoded["materials"] = std::move(materials);
+    }
+    return encoded;
+}
+
+constexpr int ManifestVersion = 1;
+
 } // namespace
 
 std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& path) {
@@ -163,18 +181,7 @@ bool ParseAssetMetadata(std::string_view json, AssetMetadata& value, std::string
 
 bool SerializeAssetMetadata(const AssetMetadata& value, std::string& json, std::string& error) {
     try {
-        Json encoded = {{"version", 1}, {"id", value.id.ToString()}, {"kind", KindName(value.kind)}};
-        if (value.kind == CatalogAssetKind::Mesh) encoded["centerOnLoad"] = value.centerOnLoad;
-        // Only when set, so metas from before material slots keep their exact format.
-        if (!value.materials.empty()) {
-            Json materials = Json::array();
-            for (const auto& material : value.materials) {
-                materials.push_back(material ? Json{{"id", material->id.ToString()}, {"path", material->path}}
-                                             : Json(nullptr));
-            }
-            encoded["materials"] = std::move(materials);
-        }
-        const auto text = encoded.dump(2);
+        const auto text = MetadataToJson(value).dump(2);
         [[maybe_unused]] const auto checked = MetadataFromJson(Read(text));
         json = text;
         error.clear();
@@ -264,6 +271,52 @@ bool AssetCatalog::Scan(const std::filesystem::path& gameRoot, const std::filesy
     paths_ = std::move(paths);
     error = std::move(missingError);
     return error.empty();
+}
+
+bool AssetCatalog::SerializeManifest(std::string& json, std::string& error) const {
+    try {
+        std::vector<const CatalogEntry*> sorted;
+        for (const auto& [id, entry] : entries_) sorted.push_back(&entry);
+        std::ranges::sort(sorted, {}, &CatalogEntry::path);
+        Json assets = Json::array();
+        for (const auto* entry : sorted) assets.push_back({{"path", entry->path}, {"metadata", MetadataToJson(entry->metadata)}});
+        json = Json{{"version", ManifestVersion}, {"cookedFormat", CookedFormatVersion}, {"assets", std::move(assets)}}.dump(1);
+        error.clear();
+        return true;
+    } catch (const std::exception& e) { error = e.what(); return false; }
+}
+
+bool AssetCatalog::LoadManifest(std::string_view json, const std::filesystem::path& gameRoot,
+                                const std::filesystem::path& engineRoot, std::string& error) {
+    std::unordered_map<AssetUuid, CatalogEntry, AssetUuidHash> entries;
+    std::unordered_map<std::string, AssetUuid> paths;
+    try {
+        const Json root = Read(json);
+        if (!root.is_object() || root.size() != 3 || root.value("version", 0) != ManifestVersion ||
+            !root.contains("cookedFormat") || !root.contains("assets") || !root.at("assets").is_array())
+            throw std::invalid_argument("not an asset manifest");
+        if (root.at("cookedFormat") != CookedFormatVersion)
+            throw std::invalid_argument("the game was cooked by a different engine version; build it again");
+        for (const auto& asset : root.at("assets")) {
+            if (!asset.is_object() || asset.size() != 2 || !asset.contains("path") || !asset.contains("metadata"))
+                throw std::invalid_argument("manifest entry needs exactly path and metadata");
+            const auto logical = asset.at("path").get<std::string>();
+            if (!ValidPath(logical)) throw std::invalid_argument("invalid manifest path: " + logical);
+            const auto meta = MetadataFromJson(asset.at("metadata"));
+            const bool game = logical.starts_with("game/");
+            auto source = (game ? gameRoot : engineRoot) / FromUtf8(logical.substr(game ? 5 : 7));
+            if (CatalogKindForFile(source) != meta.kind)
+                throw std::invalid_argument("manifest kind does not match the file type: " + logical);
+            if (!paths.emplace(NormalizeName(logical), meta.id).second)
+                throw std::invalid_argument("duplicate asset path: " + logical);
+            if (!entries.emplace(meta.id, CatalogEntry{meta, logical, std::move(source)}).second)
+                throw std::invalid_argument("duplicate asset UUID: " + meta.id.ToString());
+        }
+    } catch (const std::exception& e) { error = e.what(); return false; }
+    entries_ = std::move(entries);
+    paths_ = std::move(paths);
+    error.clear();
+    return true;
 }
 
 const CatalogEntry* AssetCatalog::Find(std::string_view uuid) const {

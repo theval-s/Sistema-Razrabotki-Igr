@@ -1,12 +1,14 @@
 # ---------------------------------------------------------------------------
 # Deploy.cmake -- portable, self-contained app folders.
 #
-#   sri_add_deploy(<app> [LIBRARIES <shared library targets>...])
+#   sri_add_deploy(<app> [LIBRARIES <shared library targets>...] [LIBRARY_DIR <dir>])
 #
 # Installs <app>, the listed shared libraries, the vcpkg DLLs they import and
 # the MSVC runtime into install component <app>. The layout is flat, like the
 # build tree: the executable sits in the folder root next to its DLLs, because
-# the engine resolves its files relative to the executable.
+# the engine resolves its files relative to the executable. LIBRARY_DIR moves
+# every DLL into that subfolder instead; <app> then imports none of them and
+# has to put the folder on the DLL search path itself (runtime/src/Launcher.cpp).
 #
 # Also adds a `deploy_<app>` target which builds <app> and installs its
 # component into ${SRI_DEPLOY_DIR}/<config>/<app>; `deploy` runs all of them:
@@ -57,13 +59,19 @@ function(sri_install_docs component destination)
 endfunction()
 
 function(sri_add_deploy app)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "LIBRARIES")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "LIBRARY_DIR" "LIBRARIES")
+    set(libdir .)
+    set(scanned ${app} ${arg_LIBRARIES})
+    if(arg_LIBRARY_DIR)
+        set(libdir ${arg_LIBRARY_DIR})
+        set(scanned ${arg_LIBRARIES})
+    endif()
 
     install(TARGETS ${app} RUNTIME DESTINATION . COMPONENT ${app})
     # install(FILES) rather than install(TARGETS): the latter would also drag
     # the import libraries along.
     foreach(lib IN LISTS arg_LIBRARIES)
-        install(FILES "$<TARGET_FILE:${lib}>" DESTINATION . COMPONENT ${app})
+        install(FILES "$<TARGET_FILE:${lib}>" DESTINATION ${libdir} COMPONENT ${app})
     endforeach()
 
     # Scans the installed binaries and copies the vcpkg DLLs they import
@@ -71,8 +79,8 @@ function(sri_add_deploy app)
     # Must come after the binaries above are installed.
     if(COMMAND x_vcpkg_install_local_dependencies)
         x_vcpkg_install_local_dependencies(
-            TARGETS ${app} ${arg_LIBRARIES}
-            DESTINATION .
+            TARGETS ${scanned}
+            DESTINATION ${libdir}
             COMPONENT ${app}
         )
     else()
@@ -84,7 +92,7 @@ function(sri_add_deploy app)
     # Visual Studio is installed anyway.
     if(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
         install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
-            DESTINATION .
+            DESTINATION ${libdir}
             COMPONENT ${app}
             CONFIGURATIONS Release RelWithDebInfo MinSizeRel
         )

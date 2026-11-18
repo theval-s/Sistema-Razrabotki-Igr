@@ -2,6 +2,7 @@
 #include <engine/scripting/LuaRuntime.hpp>
 #include "LuaBehaviorTree.hpp"
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/core/Content.hpp>
 #include <chrono>
 
 #include <sol/sol.hpp>
@@ -413,7 +414,7 @@ namespace engine {
                         error = "require path escapes project content root: " + ToUtf8(candidate);
                         return false;
                     }
-                    if (std::filesystem::is_regular_file(canonical)) {
+                    if (content::IsFile(canonical)) {
                         sourcePath = canonical;
                         break;
                     }
@@ -519,10 +520,10 @@ namespace engine {
         std::filesystem::path canonicalRoot;
         try {
             if (!root.empty()) {
-                if (!root.is_absolute() || !std::filesystem::is_directory(root)) {
+                if (!root.is_absolute() || !content::IsDirectory(root)) {
                     return SetError(error, "require root must be an existing absolute project content directory");
                 }
-                canonicalRoot = std::filesystem::canonical(root);
+                canonicalRoot = std::filesystem::weakly_canonical(root);
             }
             if (IsInitialized()) {
                 if (!root.empty() && canonicalRoot != impl_->moduleRoot) {
@@ -590,7 +591,7 @@ namespace engine {
                     [runtime = impl_.get(), &catalog](const AssetReference& reference, CatalogAssetKind kind) {
                         const auto* entry = catalog.Find(reference.id, kind);
                         if (!entry) throw std::runtime_error("Missing behavior asset " + reference.id.ToString());
-                        const auto source = std::filesystem::canonical(entry->source);
+                        const auto source = std::filesystem::weakly_canonical(entry->source);
                         if (runtime->moduleRoot.empty() || !IsUnderRoot(source, runtime->moduleRoot))
                             throw std::runtime_error("Behavior asset is outside the project root");
                         std::string text, error;

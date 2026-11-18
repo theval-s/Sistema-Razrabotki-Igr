@@ -121,6 +121,11 @@ ShaderHandle RenderingResourceManager::CompileShader(const std::wstring& fileNam
     return shaders_.Add(std::move(shader));
 }
 
+ShaderHandle RenderingResourceManager::CompileShader(const EngineShader shader) {
+    const auto& variant = GetEngineShader(shader);
+    return CompileShader(variant.file.wstring(), variant.stage, variant.options);
+}
+
 ShaderHandle RenderingResourceManager::RegisterCompiledShader(const CompiledShader& compiled) {
     auto shader = ShaderContext::FinalizeOnDevice(compiled, device_.Get(), inputLayoutCache_);
     return shaders_.Add(std::move(shader));

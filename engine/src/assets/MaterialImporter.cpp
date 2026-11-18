@@ -25,27 +25,49 @@ constexpr std::array Stages{
 
 } // namespace
 
+bool MaterialShaderFile(const MaterialDefinition& definition, const AssetCatalog* catalog,
+                        std::filesystem::path& file, std::string& error) {
+    if (definition.version == 2) {
+        const CatalogEntry* entry = catalog && definition.shaderReference
+            ? catalog->Find(definition.shaderReference->id, CatalogAssetKind::Shader) : nullptr;
+        if (!entry) {
+            error = "missing shader UUID: " +
+                (definition.shaderReference ? definition.shaderReference->id.ToString() : std::string("(none)"));
+            return false;
+        }
+        file = entry->source;
+        return true;
+    }
+    file = AssetPathResolver::ResolveShader({
+        .path = AssetPathResolver::DefaultPath(definition.shaderFile, AssetKind::Shader)});
+    return true;
+}
+
+std::array<std::optional<ShaderVariant>, 5> MaterialShaderVariants(const std::filesystem::path& file,
+                                                                   MaterialHook hooks) {
+    std::array<std::optional<ShaderVariant>, 5> variants;
+    for (size_t i = 0; i < Stages.size(); ++i) {
+        const auto& stage = Stages[i];
+        if (!HasHook(hooks, stage.hook)) continue;
+        ShaderCompileOptions options{.defines = {{stage.define, "1"}, {"MATERIAL_HAS_HOOK", "1"}}};
+        if (stage.skinned) options.defines.push_back({"ENGINE_SKINNED", "1"});
+        variants[i] = ShaderVariant{file, stage.stage, std::move(options)};
+    }
+    return variants;
+}
+
 bool MaterialImporter::ReadCpu(const AssetDesc& desc, ID3D11Device*, CpuPayload& payload, std::string& error) const try {
     std::string text;
     MaterialCpu parsed;
     if (!ReadDefinition(desc, false, text, error) || !ParseMaterialDefinition(text, parsed.definition, error))
         return false;
     if (parsed.definition.hooks != MaterialHook::None) {
-        auto path = AssetPathResolver::ResolveShader({
-            .path = AssetPathResolver::DefaultPath(parsed.definition.shaderFile, AssetKind::Shader)});
-        if (parsed.definition.version == 2) {
-            const CatalogEntry* entry = desc.catalog
-                ? desc.catalog->Find(parsed.definition.shaderReference->id, CatalogAssetKind::Shader) : nullptr;
-            if (!entry) { error = "missing shader UUID: " + parsed.definition.shaderReference->id.ToString(); return false; }
-            path = entry->source;
-        }
-        for (size_t i = 0; i < Stages.size(); ++i) {
-            const auto& stage = Stages[i];
-            if (!HasHook(parsed.definition.hooks, stage.hook)) continue;
-            ShaderCompileOptions options{.defines = {{stage.define, "1"}, {"MATERIAL_HAS_HOOK", "1"}}};
-            if (stage.skinned) options.defines.push_back({"ENGINE_SKINNED", "1"});
-            auto compiled = ShaderContext::CompileCpu(path, stage.stage, options);
-            parsed.shaders[i] = std::move(compiled);
+        std::filesystem::path path;
+        if (!MaterialShaderFile(parsed.definition, desc.catalog, path, error)) return false;
+        const auto variants = MaterialShaderVariants(path, parsed.definition.hooks);
+        for (size_t i = 0; i < variants.size(); ++i) {
+            if (!variants[i]) continue;
+            parsed.shaders[i] = ShaderContext::CompileCpu(variants[i]->file, variants[i]->stage, variants[i]->options);
         }
     }
     payload.kind = CpuPayload::Kind::Material;

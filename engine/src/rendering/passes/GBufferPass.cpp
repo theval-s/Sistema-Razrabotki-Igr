@@ -41,12 +41,9 @@ void DestroyGBuffer(RenderingResourceManager& resourceManager, RenderingResource
 
 void GBufferPass::Initialize(RenderingResourceManager& resourceManager, RenderingContext& context,
                               RenderingResources& resources) try {
-    vertexShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
-        {.defines = {{"MATERIAL_GBUFFER_VS"}}});
-    skinnedVertexShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Vertex,
-        {.defines = {{"MATERIAL_GBUFFER_VS"}, {"ENGINE_SKINNED", "1"}}});
-    pixelShader_ = resourceManager.CompileShader(L"engine/MaterialTemplate.hlsl", ShaderType::Pixel,
-        {.defines = {{"MATERIAL_GBUFFER_PS"}}});
+    vertexShader_ = resourceManager.CompileShader(EngineShader::GBufferVS);
+    skinnedVertexShader_ = resourceManager.CompileShader(EngineShader::SkinnedGBufferVS);
+    pixelShader_ = resourceManager.CompileShader(EngineShader::GBufferPS);
 
     CreateGBuffer(resourceManager, resources);
 

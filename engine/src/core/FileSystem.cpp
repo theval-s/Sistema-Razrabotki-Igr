@@ -5,15 +5,28 @@
 #include <random>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 #include <engine/core/PathUtils.hpp>
+
+#include "ContentMounts.hpp"
 
 namespace engine {
 namespace {
 
 template <typename Buffer>
 bool ReadWhole(const std::filesystem::path& file, Buffer& out, std::string& error, const std::uintmax_t maxSize) {
+    if (const auto mounted = content::detail::Find(file); mounted.source && mounted.source->IsFile(mounted.path)) {
+        std::vector<std::uint8_t> bytes;
+        if (!mounted.source->Read(mounted.path, bytes, error, maxSize)) {
+            error = "cannot read " + ToUtf8(file) + ": " + error;
+            return false;
+        }
+        if constexpr (std::is_same_v<Buffer, std::vector<std::uint8_t>>) out = std::move(bytes);
+        else out.assign(bytes.begin(), bytes.end());
+        return true;
+    }
     std::error_code ec;
     const auto size = std::filesystem::file_size(file, ec);
     if (ec) {

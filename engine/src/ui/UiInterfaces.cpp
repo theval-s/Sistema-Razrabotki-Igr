@@ -56,23 +56,22 @@ Rml::FileHandle Files::Open(const Rml::String& url) {
     std::filesystem::path p; std::string logical;
     auto fail = [&]() -> Rml::FileHandle { if (collecting) diagnostics.push_back("Cannot open UI resource: " + url); return 0; };
     if (!ResolveAsset(url, p, logical)) return fail();
-    auto file = std::make_unique<File>(); file->stream.open(p, std::ios::binary);
-    if (!file->stream) return fail();
-    file->stream.seekg(0, std::ios::end); auto length = file->stream.tellg(); if (length < 0) return fail();
-    file->length = static_cast<std::size_t>(length); file->stream.seekg(0);
+    std::string error;
+    auto file = content::Open(p, error);
+    if (!file || file->Size() > std::numeric_limits<std::size_t>::max()) return fail();
     if (collecting && (p.extension() == ".rml" || p.extension() == ".rmlt")) {
-        std::string source(file->length, '\0'); file->stream.read(source.data(), static_cast<std::streamsize>(source.size())); file->stream.clear(); file->stream.seekg(0);
-        std::string error;
+        std::string source(static_cast<std::size_t>(file->Size()), '\0');
+        source.resize(file->Read(source.data(), source.size())); file->Seek(0, SEEK_SET);
         if (!InspectMarkup(source, modelNames, error)) diagnostics.push_back(error + ": " + logical);
     }
     if (next_ == std::numeric_limits<Rml::FileHandle>::max()) return fail();
     auto handle = ++next_; files_.emplace(handle, std::move(file)); return handle;
 }
 void Files::Close(Rml::FileHandle f) { files_.erase(f); }
-std::size_t Files::Read(void* out, std::size_t size, Rml::FileHandle f) { auto it = files_.find(f); if (it == files_.end()) return 0; auto& s = it->second->stream; s.read(static_cast<char*>(out), static_cast<std::streamsize>(size)); return static_cast<std::size_t>(s.gcount()); }
-bool Files::Seek(Rml::FileHandle f, long offset, int origin) { auto it = files_.find(f); if (it == files_.end()) return false; auto& s = it->second->stream; s.clear(); if (origin != SEEK_SET && origin != SEEK_CUR && origin != SEEK_END) return false; s.seekg(offset, origin == SEEK_SET ? std::ios::beg : origin == SEEK_CUR ? std::ios::cur : std::ios::end); return !!s; }
-std::size_t Files::Tell(Rml::FileHandle f) { auto it = files_.find(f); if (it == files_.end()) return 0; auto pos = it->second->stream.tellg(); return pos < 0 ? it->second->length : static_cast<std::size_t>(pos); }
-std::size_t Files::Length(Rml::FileHandle f) { auto it = files_.find(f); return it == files_.end() ? 0 : it->second->length; }
+std::size_t Files::Read(void* out, std::size_t size, Rml::FileHandle f) { auto it = files_.find(f); return it == files_.end() ? 0 : it->second->Read(out, size); }
+bool Files::Seek(Rml::FileHandle f, long offset, int origin) { auto it = files_.find(f); return it != files_.end() && it->second->Seek(offset, origin); }
+std::size_t Files::Tell(Rml::FileHandle f) { auto it = files_.find(f); return it == files_.end() ? 0 : static_cast<std::size_t>(it->second->Tell()); }
+std::size_t Files::Length(Rml::FileHandle f) { auto it = files_.find(f); return it == files_.end() ? 0 : static_cast<std::size_t>(it->second->Size()); }
 void System::JoinPath(Rml::String& out, const Rml::String& source, const Rml::String& path) { out = JoinAsset(source, path); }
 bool System::LogMessage(Rml::Log::Type type, const Rml::String& message) {
     auto& logger = log::Channel("UI");
@@ -150,7 +149,7 @@ public:
     Rml::TextureHandle LoadTexture(Rml::Vector2i& dimensions, const Rml::String& source) override {
         // Read PNG dimensions without introducing a platform/GPU dependency.
         std::filesystem::path path; std::string name; if (!ResolveAsset(source, path, name)) return 0;
-        std::ifstream file(path, std::ios::binary); unsigned char header[24]{}; if (!file.read(reinterpret_cast<char*>(header), 24)) return 0;
+        std::string error; auto file = content::Open(path, error); unsigned char header[24]{}; if (!file || file->Read(header, 24) != 24) return 0;
         static const unsigned char png[] = {137,80,78,71,13,10,26,10}; if (std::memcmp(header, png, 8)) return 0;
         auto read = [&](int i) { return (unsigned(header[i]) << 24) | (unsigned(header[i+1]) << 16) | (unsigned(header[i+2]) << 8) | header[i+3]; };
         auto w = read(16), h = read(20); if (!w || !h || w > INT_MAX || h > INT_MAX) return 0; dimensions = {int(w), int(h)}; return ++next_;

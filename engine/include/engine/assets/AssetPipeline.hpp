@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <cstddef>
 #include <filesystem>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -178,6 +180,13 @@ public:
                    GpuPayload& result, std::string& error) const override;
 };
 
+/// The file a material's hooks compile; version 2 names it by UUID through the catalog.
+[[nodiscard]] ENGINE_API bool MaterialShaderFile(const MaterialDefinition& definition, const AssetCatalog* catalog,
+                                                 std::filesystem::path& file, std::string& error);
+/// One variant per hook stage in MaterialCpu::shaders order; empty where the hook is not declared.
+[[nodiscard]] ENGINE_API std::array<std::optional<ShaderVariant>, 5> MaterialShaderVariants(
+    const std::filesystem::path& file, MaterialHook hooks);
+
 class MaterialInstanceImporter final : public IAssetImporter {
 public:
     static MaterialInstance::Overrides MakeOverrides(const MaterialParameterOverrides& authored,
@@ -186,6 +195,21 @@ public:
                  std::string& error) const override;
     bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
                    GpuPayload& result, std::string& error) const override;
+};
+
+/// Loads what sri-build cooked from a source importer's CPU payload (see AssetCooking.hpp).
+/// `uploader` is that source importer: the decoded payload uploads exactly like an imported one.
+class CookedAssetImporter final : public IAssetImporter {
+public:
+    CookedAssetImporter(AssetKind kind, std::unique_ptr<IAssetImporter> uploader);
+    ~CookedAssetImporter() override;
+    bool ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPayload& payload,
+                 std::string& error) const override;
+    bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
+                   GpuPayload& result, std::string& error) const override;
+private:
+    AssetKind kind_;
+    std::unique_ptr<IAssetImporter> uploader_;
 };
 
 /// CPU phase of one asset load, queued on the engine task scheduler. ExecuteRange runs on a

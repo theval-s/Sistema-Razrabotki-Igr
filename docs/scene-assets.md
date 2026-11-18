@@ -39,7 +39,8 @@ Run separately for the shipped engine asset directory when authoring engine
 assets. Keep `.meta` with its source when moving it; do not copy one sidecar to
 another asset. A catalog scan rejects missing/orphaned metadata, duplicate UUIDs,
 wrong kinds and case-insensitive path collisions. Engine built-ins and ExampleGame
-assets include checked-in sidecars.
+assets include checked-in sidecars. Built games ship no sidecars: `sri-build` gathers them
+into a manifest ([building-games.md](building-games.md)).
 
 ## Scene JSON
 

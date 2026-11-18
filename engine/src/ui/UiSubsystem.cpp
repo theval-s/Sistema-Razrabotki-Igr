@@ -571,7 +571,7 @@ bool UiSubsystem::Initialize() {
         std::filesystem::path font; std::string name;
         if (auto entry = catalog.FindPath("engine/ui/fonts/DejaVuSans.ttf")) { auto copy = *entry; name = copy.path; }
         else name = "engine/ui/fonts/DejaVuSans.ttf";
-        if (ui_detail::ResolveAsset(name, font, name) && std::filesystem::is_regular_file(font)) { if (!Rml::LoadFontFace(name, true)) Logger().warn("Default UI font failed: {}", name); else p.fonts.insert(name); }
+        if (ui_detail::ResolveAsset(name, font, name) && content::IsFile(font)) { if (!Rml::LoadFontFace(name, true)) Logger().warn("Default UI font failed: {}", name); else p.fonts.insert(name); }
         else Logger().warn("Default UI font is unavailable: {}", name);
         p.context->GetRootElement()->SetProperty("font-family", "DejaVu Sans");
         p.context->GetRootElement()->SetProperty("font-size", "16dp");

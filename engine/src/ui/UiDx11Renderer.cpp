@@ -2,6 +2,7 @@
 #include "UiInterfaces.hpp"
 #include <RmlUi_Renderer_DX11.h>
 #include <engine/rendering/RenderingContext.hpp>
+#include <engine/core/FileSystem.hpp>
 #include <engine/core/Log.hpp>
 #include <wincodec.h>
 #include <wrl/client.h>
@@ -36,11 +37,18 @@ public:
         std::filesystem::path path;
         std::string logical;
         if (!ui_detail::ResolveAsset(source, path, logical)) return TextureError(source, "outside asset roots");
+        std::vector<std::uint8_t> bytes;
+        std::string error;
+        if (!ReadBinaryFile(path, bytes, error) || bytes.empty() || bytes.size() > (std::numeric_limits<DWORD>::max)())
+            return TextureError(source, error.empty() ? "unsupported image file" : error.c_str());
+        ComPtr<IWICStream> stream;
         ComPtr<IWICBitmapDecoder> decoder;
         ComPtr<IWICBitmapFrameDecode> frame;
         ComPtr<IWICFormatConverter> converter;
-        if (FAILED(factory_->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ,
-                    WICDecodeMetadataCacheOnLoad, decoder.GetAddressOf())) ||
+        if (FAILED(factory_->CreateStream(stream.GetAddressOf())) ||
+            FAILED(stream->InitializeFromMemory(bytes.data(), static_cast<DWORD>(bytes.size()))) ||
+            FAILED(factory_->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnLoad,
+                    decoder.GetAddressOf())) ||
             FAILED(decoder->GetFrame(0, frame.GetAddressOf())) ||
             FAILED(factory_->CreateFormatConverter(converter.GetAddressOf())) ||
             FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppPRGBA,

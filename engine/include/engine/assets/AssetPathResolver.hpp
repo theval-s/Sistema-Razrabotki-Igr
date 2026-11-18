@@ -44,6 +44,13 @@ public:
     static void SetGameRoot(std::filesystem::path directory);
     [[nodiscard]] static std::filesystem::path GetGameRoot();
 
+    /// Builds made by sri-build ship cooked assets and this manifest instead of sources and
+    /// .meta files. Empty (the default, and always in the editor) means source content.
+    /// Not synchronized: call before the first asset is requested.
+    static void SetManifest(std::filesystem::path manifest);
+    [[nodiscard]] static std::filesystem::path GetManifest();
+    [[nodiscard]] static bool IsCooked() { return !GetManifest().empty(); }
+
     /// A relative path starting with game/ resolves against the game root, any other one
     /// against the executable directory. Absolute paths are returned as they are.
     [[nodiscard]] static std::filesystem::path ToAbsolute(const std::filesystem::path& path);

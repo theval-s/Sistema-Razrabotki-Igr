@@ -3,6 +3,7 @@
 #include <span>
 #include <string>
 #include <type_traits>
+#include <engine/rendering/EngineShaders.hpp>
 #include <engine/engine_export.hpp>
 
 #include <engine/rendering/resources/Buffer.hpp>
@@ -35,6 +36,7 @@ struct ENGINE_API RenderingResourceManager {
     /// File names use executable-relative engine/... or game/... shader roots.
     ShaderHandle CompileShader(const std::wstring& fileName, ShaderType shaderType,
                                const ShaderCompileOptions& options = {});
+    ShaderHandle CompileShader(EngineShader shader);
     /// Uploads a CPU-compiled shader to the device and registers it; main thread only.
     /// Throws RenderingException with the compiled shader's source/variant on failure.
     ShaderHandle RegisterCompiledShader(const CompiledShader& compiled);

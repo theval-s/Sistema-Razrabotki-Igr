@@ -8,9 +8,11 @@
 #include <GameWindow.hpp>
 #include <engine/engine.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
+#include <engine/core/Content.hpp>
 #include <engine/core/DefaultSubsystems.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/Log.hpp>
+#include <engine/core/Pak.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/core/Utf.hpp>
 #include <engine/input/InputSubsystem.hpp>
@@ -113,12 +115,8 @@ namespace {
 
 } // namespace
 
-int WINAPI wWinMain(
-    HINSTANCE,
-    HINSTANCE,
-    PWSTR,
-    int
-) {
+// Exported as runtime_entry::RunGameExport; the launcher calls it once bin\ is on the DLL search path.
+extern "C" __declspec(dllexport) int SriRunGame() {
     try {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
@@ -126,10 +124,24 @@ int WINAPI wWinMain(
 
         std::string error;
 
+        // A packed build keeps everything but the executables and the settings file in the pack.
+        if (const fs::path pak = exeDir / engine::PakFileName; fs::is_regular_file(pak)) {
+            auto source = engine::PakSource::Load(pak, error);
+            if (!source) {
+                return Fail(error);
+            }
+            engine::content::Mount(exeDir, std::move(source));
+        }
+
         auto project = engine::Project::Load(exeDir / L"game.sriproject", error);
 
         if (!project) {
             return Fail(error);
+        }
+
+        // sri-build output is cooked; a folder without the manifest still runs from sources.
+        if (const fs::path manifest = exeDir / L"manifest.json"; engine::content::IsFile(manifest)) {
+            engine::AssetPathResolver::SetManifest(manifest);
         }
 
         engine::RuntimeSettings settings;
