@@ -53,10 +53,7 @@ long ParticleTextures::Resolve(ID3D11ShaderResourceView* source, std::uint32_t& 
     if(desc.ViewDimension!=D3D11_SRV_DIMENSION_TEXTURE2D) return E_INVALIDARG;
     ComPtr<ID3D11Device> owner,device; source->GetDevice(&owner); a.ctx->GetDevice(&device);
     if(owner.Get()!=device.Get()) return E_INVALIDARG;
-    if(a.sources.size()==ParticleTextureLayers) {
-        OutputDebugStringA("ParticleTextures: 64-layer cache exhausted; particle texture rejected.\n");
-        return HRESULT_FROM_WIN32(ERROR_NO_MORE_ITEMS);
-    }
+    if(a.sources.size()==ParticleTextureLayers) return HRESULT_FROM_WIN32(ERROR_NO_MORE_ITEMS); // caller logs
     layer=static_cast<UINT>(a.sources.size()); a.sources.emplace_back(source); a.Upload(source,layer); return S_OK;
 }
 ID3D11ShaderResourceView* ParticleTextures::View() const { return impl_ ? impl_->srv.Get() : nullptr; }
