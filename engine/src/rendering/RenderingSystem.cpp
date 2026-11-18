@@ -8,7 +8,8 @@
 
 namespace engine {
 namespace {
-constexpr const char* PassNames[] = {"ShadowCSMPass", "GBufferPass", "LightPass", "ParticlePass", "SelectionMaskPass", "PresentPass"};
+constexpr const char* PassNames[] = {"ShadowCSMPass", "ParticleShadowPass", "GBufferPass", "LightPass", "ParticlePass",
+                                     "SelectionMaskPass", "PresentPass"};
 }
 
 void RenderingSystem::RecordFailure(RenderingFailure failure) {
@@ -101,11 +102,12 @@ void RenderingSystem::InitializePasses(const uint32_t width, const uint32_t heig
     resources_ = RenderingResources(width, height);
     resources_.Initialize(manager);
     // Each pass enters ownership before its Initialize can acquire partial resources.
-    renderPasses_.push_back(std::make_unique<ShadowCSMPass>());
-    renderPasses_.push_back(std::make_unique<GBufferPass>());
-    renderPasses_.push_back(std::make_unique<LightPass>());
     auto particles = std::make_unique<ParticlePass>(particleBudget_, particleStats_);
     particlePass_ = particles.get();
+    renderPasses_.push_back(std::make_unique<ShadowCSMPass>());
+    renderPasses_.push_back(std::make_unique<ParticleShadowPass>(*particlePass_));
+    renderPasses_.push_back(std::make_unique<GBufferPass>());
+    renderPasses_.push_back(std::make_unique<LightPass>());
     renderPasses_.push_back(std::move(particles));
     renderPasses_.push_back(std::make_unique<SelectionMaskPass>());
     renderPasses_.push_back(std::make_unique<PresentPass>());
@@ -147,16 +149,6 @@ void RenderingSystem::RenderFrame(const FrameContext& frame, const OverlayCallba
             rendering_detail::InPass(PassNames[i], [&] { renderPasses_[i]->Render(world_, renderingContext_, resources_); });
             if (i + 1 == renderPasses_.size() && overlay) overlay(renderingContext_, frame);
             renderingContext_.ClearHazardousState();
-            if (i == 0) {
-                rendering_detail::InPass("ParticleShadows", [&] {
-                    particlePass_->RenderShadows(world_, renderingContext_, resources_);
-                });
-                // The particle light-view pass owns raw D3D state, including multiplicative
-                // blending. Restore all defaults, not just SRVs, before opaque G-buffer draws.
-                renderingContext_.ClearState();
-                resources_.BindCBuffers(renderingContext_);
-                renderingContext_.BindSamplers();
-            }
         }
         renderingContext_.Present();
     } catch (const RenderingException& error) {

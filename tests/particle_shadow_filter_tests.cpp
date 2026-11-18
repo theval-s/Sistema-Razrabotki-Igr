@@ -30,7 +30,7 @@ protected:
     ComPtr<ID3D11PixelShader> ps;
     ComPtr<ID3D11Texture2D> target, staging;
     ComPtr<ID3D11RenderTargetView> rtv;
-    std::array<ComPtr<ID3D11ShaderResourceView>, 6> views;
+    std::array<ComPtr<ID3D11ShaderResourceView>, 7> views; // LightPass t0..t6; t5 unused
     std::array<ComPtr<ID3D11SamplerState>, 5> samplers;
 
     ComPtr<ID3D11ShaderResourceView> Texture(UINT size, UINT layers, DXGI_FORMAT format,
@@ -126,7 +126,7 @@ protected:
                 pixels[(layer * MapSize + y) * MapSize + x] = uint16_t((std::bit_cast<uint32_t>(value) >> 13) - 0x1c000);
             }
         }
-        views[5] = Texture(MapSize, 4, DXGI_FORMAT_R16_FLOAT, pixels.data(), MapSize * 2, true, MapSize * MapSize * 2);
+        views[6] = Texture(MapSize, 4, DXGI_FORMAT_R16_FLOAT, pixels.data(), MapSize * 2, true, MapSize * MapSize * 2);
     }
 
     std::vector<float> Render(UINT cascade, bool edge = false) {
@@ -149,7 +149,7 @@ protected:
         light[0] = light[1] = light[2] = light[3] = 1;
         light[14] = -1;
         Constants(5, light);
-        std::array<ID3D11ShaderResourceView*, 6> resources{};
+        std::array<ID3D11ShaderResourceView*, 7> resources{};
         for (size_t i = 0; i < views.size(); ++i) resources[i] = views[i].Get();
         ctx->PSSetShaderResources(0, UINT(resources.size()), resources.data());
         std::array<ID3D11SamplerState*, 5> states{};

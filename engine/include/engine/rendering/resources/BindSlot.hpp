@@ -71,6 +71,8 @@ struct BindSlots {
         constexpr static BindSlot Depth{3, ShaderStage::Pixel};
         constexpr static BindSlot Shadow{4, ShaderStage::Pixel};
         constexpr static BindSlot SceneResult{5, ShaderStage::Pixel};
+        // Particle transmittance cascades read by LightPass.
+        constexpr static BindSlot ParticleShadow{6, ShaderStage::Pixel};
         
         constexpr static BindSlot Pass0{16, ShaderStage::Pixel};
         constexpr static BindSlot Pass1{17, ShaderStage::Pixel};

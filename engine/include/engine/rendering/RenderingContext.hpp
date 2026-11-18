@@ -64,6 +64,8 @@ struct ENGINE_API RenderingContext {
     void SetRenderTargets(std::initializer_list<TextureHandle> targets, TextureHandle depth,
                           bool depthReadOnly = false);
     void SetShaderResources(BindSlot slot, TextureHandle h);
+    /// Binds a borrowed native view; null unbinds the slot.
+    void SetShaderResources(BindSlot slot, ID3D11ShaderResourceView* view);
     void BindSamplers();
     void SetBlendState(BlendState state, const float* blendFactor = nullptr,
                        UINT sampleMask = 0xffffffff) const;

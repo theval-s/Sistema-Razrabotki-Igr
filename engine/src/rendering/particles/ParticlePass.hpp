@@ -61,4 +61,16 @@ private:
     std::unordered_set<std::uint64_t> textureFailures_;
     std::uint64_t step_{}, lastBirthRequest_{};
 };
+
+/// Particle transmittance from the directional light. Runs right after ShadowCSMPass, which it
+/// reads, and restores engine state for the passes that follow.
+class ParticleShadowPass final : public RenderPass {
+public:
+    explicit ParticleShadowPass(ParticlePass& particles) : particles_(particles) {}
+    void Initialize(RenderingResourceManager&, RenderingContext&, RenderingResources&) override {}
+    void Destroy(RenderingResourceManager&, RenderingContext&, RenderingResources&) override {}
+    void Render(RenderWorld&, RenderingContext&, RenderingResources&) override;
+private:
+    ParticlePass& particles_;
+};
 }
