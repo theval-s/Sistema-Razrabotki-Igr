@@ -15,12 +15,15 @@ sri-build --project <file.sriproject> --out <folder> [--runtime <dir>] [--title 
 
 ~~~text
 MyGame/
-  MyGame.exe         the runtime, named after the project
-  *.dll, licenses/   engine and third-party libraries with their notices
+  MyGame.exe         starts the game; named after the project
+  bin/               the game runtime, the engine and third-party libraries
+  licenses/          notices for the third-party libraries
   game.json          window title, size, fullscreen, mouse capture; safe to edit
   game.sripak        everything else
   .sri-build         marks the folder as a build, so the next build may replace it
 ~~~
+
+`MyGame.exe` is a small launcher that loads the game from `bin/`, so ship the folder as a whole.
 
 `sri-build` only replaces an output folder that is empty or carries `.sri-build`. If the project
 has errors it reports them and leaves the previous build as it was.

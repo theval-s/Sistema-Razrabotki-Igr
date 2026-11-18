@@ -138,7 +138,7 @@ TEST(AnimationBuild, ValidatesBeforeReplacingStagedOutput) {
     const fs::path fixture = fs::path(SRI_SOURCE_ROOT) / "example_game";
     fs::create_directories(content / L"models");
     fs::create_directories(content / L"scenes");
-    fs::create_directories(runtime);
+    fs::create_directories(runtime / L"bin");
     fs::copy(fixture / "models" / "TestBot", content / L"models" / L"TestBot", fs::copy_options::recursive);
     for (const auto* name : {"animation.scene.json", "animation.scene.json.meta"}) {
         fs::copy_file(fixture / "scenes" / name, content / L"scenes" / name);
@@ -150,8 +150,9 @@ TEST(AnimationBuild, ValidatesBeforeReplacingStagedOutput) {
     project.startupScene = "game/scenes/animation.scene.json";
     std::string error;
     ASSERT_TRUE(project.Save(error)) << error;
-    // sri-build checks only that this file exists; this test validates staging, not execution.
+    // sri-build checks only that the launcher exists; this test validates staging, not execution.
     ASSERT_TRUE(engine::WriteFileAtomic(runtime / L"sri_runtime.exe", "runtime marker", error)) << error;
+    ASSERT_TRUE(engine::WriteFileAtomic(runtime / L"bin" / L"sri_game.dll", "library marker", error)) << error;
     const fs::path tool = engine::AssetPathResolver::GetRoot() / L"sri-build.exe";
     ASSERT_TRUE(fs::is_regular_file(tool));
 
@@ -175,8 +176,9 @@ TEST(AnimationBuild, ValidatesBeforeReplacingStagedOutput) {
     const auto validExit = RunBuild(tool, project.file, output, runtime);
     ASSERT_TRUE(validExit.has_value());
     ASSERT_EQ(*validExit, 0u);
-    // Only the executables, the runtime settings and the pack are left on disk.
+    // Only the launcher, its libraries, the runtime settings and the pack are left on disk.
     EXPECT_TRUE(fs::is_regular_file(output / L"AnimationBuildTest.exe"));
+    EXPECT_TRUE(fs::is_regular_file(output / L"bin" / L"sri_game.dll"));
     EXPECT_TRUE(fs::is_regular_file(output / engine::RuntimeSettings::FileName));
     EXPECT_FALSE(fs::exists(output / L"game"));
     EXPECT_FALSE(fs::exists(output / L"engine"));

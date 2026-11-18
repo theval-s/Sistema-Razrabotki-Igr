@@ -115,12 +115,8 @@ namespace {
 
 } // namespace
 
-int WINAPI wWinMain(
-    HINSTANCE,
-    HINSTANCE,
-    PWSTR,
-    int
-) {
+// Exported as runtime_entry::RunGameExport; the launcher calls it once bin\ is on the DLL search path.
+extern "C" __declspec(dllexport) int SriRunGame() {
     try {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
