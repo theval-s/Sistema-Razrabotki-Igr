@@ -127,11 +127,12 @@ scene/project changes, entering Play, simulation reset and shutdown end preview.
 In **Play**, the same transport controls runtime playback; pausing the game also
 freezes animation. Playback state, clocks and fades never dirty the scene.
 
-The viewport toolbar's **Skeleton** toggle shows the selected loaded skeleton hierarchy,
-joint names and animated pose (or compatible rest pose). **Audio** shows scene
-emitter/listener markers. Selecting a 3D emitter adds green minimum-distance and
-orange maximum-distance spheres, measured in world units regardless of entity
-scale. Maximum distance is an attenuation bound, not an audio culling radius.
+The viewport toolbar's **Show** menu turns editor overlays on and off. **Skeletons**
+shows the selected loaded skeleton hierarchy, joint names and animated pose (or
+compatible rest pose). **Audio Sources** shows scene emitter/listener markers.
+Selecting a 3D emitter adds green minimum-distance and orange maximum-distance
+spheres, measured in world units regardless of entity scale. Maximum distance is
+an attenuation bound, not an audio culling radius.
 
 For a working editor setup, copy `example_game/models/TestBot/` into the project's
 `content/models/TestBot/` and `example_game/scenes/animation.scene.json` (with its

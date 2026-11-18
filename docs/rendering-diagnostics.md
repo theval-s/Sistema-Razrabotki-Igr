@@ -1,6 +1,6 @@
 # Rendering diagnostics and debug views
 
-The viewport status area reports renderer startup and runtime problems, scene asset issues and useful loading information. Use **Details** for the original operation and error, and **Show Log** to inspect the existing Log dock. Startup errors appear even when the engine tick never starts.
+The status bar at the bottom of the editor reports renderer startup and runtime problems, scene asset issues and useful loading information, and shows nothing while there is nothing to report. Hover it for the full message; click it for the details window with the original operation and error, whose **Show Log** opens the existing Log dock. Startup errors appear even when the engine tick never starts.
 
 ## Reading status
 
@@ -25,7 +25,7 @@ Selection outlines appear only in Final. Gizmos, host diagnostic labels and engi
 
 ## Session log
 
-**Open Log File** and **Open Log Folder** use the active sink path. The preferred location is `logs/editor.log` beside the editor executable; if that cannot be opened, the editor tries `logs/editor.log` under the writable application-local data location and reports the fallback. Paths support non-ASCII characters. Logs rotate with bounded retention, and each session records a boundary, engine version, executable and selected project. Warnings and errors are flushed promptly.
+**Log File > Open File** and **Open Folder** in the Log panel use the active sink path. The preferred location is `logs/editor.log` beside the editor executable; if that cannot be opened, the editor tries `logs/editor.log` under the writable application-local data location and reports the fallback. Paths support non-ASCII characters. Logs rotate with bounded retention, and each session records a boundary, engine version, executable and selected project. Warnings and errors are flushed promptly.
 
 If neither location opens, the status reports the problem and the editor remains usable. If a previously opened file sink later fails during writing, rotation or flushing, it disables itself and reports the error to stderr; other sinks continue receiving messages.
 

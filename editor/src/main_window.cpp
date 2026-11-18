@@ -7,17 +7,12 @@
 #include <QActionGroup>
 #include <QCoreApplication>
 #include <QComboBox>
-#include <QDesktopServices>
 #include <QDialog>
-#include <QFileInfo>
-#include <QHBoxLayout>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
-#include <QUrl>
 #include <QDir>
 #include <QCloseEvent>
-#include <QCheckBox>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenuBar>
@@ -28,7 +23,9 @@
 #include <QStatusBar>
 #include <QString>
 #include <QTimer>
+#include <QStyle>
 #include <QToolBar>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <string>
@@ -52,6 +49,7 @@
 #include <editor/editor_context.hpp>
 #include <editor/log_model.hpp>
 #include <editor/log_panel.hpp>
+#include <editor/menu_button.hpp>
 #include <editor/module_loader.hpp>
 #include <editor/paths.hpp>
 #include <editor/play_session.hpp>
@@ -100,6 +98,14 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     : QMainWindow(parent), project_(std::move(project)), engine_(makeEngineConfig()) {
     resize(1280, 720);
 
+    rendering_status_button_ = new QToolButton(this);
+    rendering_status_button_->setObjectName(QStringLiteral("renderingStatusSummary"));
+    rendering_status_button_->setAutoRaise(true);
+    rendering_status_button_->setFocusPolicy(Qt::NoFocus);
+    rendering_status_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    rendering_status_button_->setIconSize({16, 16});
+    statusBar()->addPermanentWidget(rendering_status_button_);
+    rendering_status_button_->hide();
     status_label_ = new QLabel(this);
     statusBar()->addPermanentWidget(status_label_);
     play_hint_ = new QLabel(this);
@@ -136,39 +142,35 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
         }
     });
     tool_bar->section(ViewportToolBar::Section::Right)->addWidget(debug_view_);
-    // Qt controls belong outside the native flip-model swap-chain surface.
-    for (const auto& entry : {std::pair{"showSkeletonOverlay", tr("Skeleton")},
-                             std::pair{"showAudioOverlay", tr("Audio")}}) {
-        auto* toggle = new QCheckBox(entry.second);
-        toggle->setObjectName(QString::fromUtf8(entry.first));
-        toggle->setFocusPolicy(Qt::NoFocus);
+    // Qt controls belong outside the native flip-model swap-chain surface. The overlays read
+    // these viewport properties each frame.
+    auto* overlays = new QMenu(this);
+    overlays->setToolTipsVisible(true);
+    const struct { const char* property; QString text; QString tooltip; } overlay_entries[] = {
+        {"showSkeletonOverlay", tr("Skeletons"), tr("Bones of the selected skinned meshes")},
+        {"showAudioOverlay", tr("Audio Sources"), tr("Audio sources and listeners, with their ranges")},
+    };
+    for (const auto& entry : overlay_entries) {
+        auto* toggle = overlays->addAction(entry.text);
+        toggle->setObjectName(QString::fromUtf8(entry.property));
+        toggle->setToolTip(entry.tooltip);
+        toggle->setCheckable(true);
         toggle->setChecked(true);
-        viewport_->setProperty(entry.first, true);
-        connect(toggle, &QCheckBox::toggled, viewport_, [viewport = viewport_, property = entry.first](bool checked) {
+        viewport_->setProperty(entry.property, true);
+        connect(toggle, &QAction::toggled, viewport_, [viewport = viewport_, property = entry.property](bool checked) {
             viewport->setProperty(property, checked);
         });
-        tool_bar->section(ViewportToolBar::Section::Right)->addWidget(toggle);
     }
+    auto* show_overlays = makeMenuButton(tr("Show"), overlays);
+    show_overlays->setObjectName(QStringLiteral("viewportShowMenu"));
+    show_overlays->setFocusPolicy(Qt::NoFocus);
+    show_overlays->setToolTip(tr("Editor overlays drawn over the viewport"));
+    tool_bar->section(ViewportToolBar::Section::Right)->addWidget(show_overlays);
     auto* viewport_panel = new QWidget;
     auto* viewport_layout = new QVBoxLayout(viewport_panel);
     viewport_layout->setContentsMargins(0, 0, 0, 0);
     viewport_layout->setSpacing(0);
     viewport_layout->addWidget(tool_bar);
-    auto* rendering_status_bar = new QWidget;
-    rendering_status_bar->setObjectName(QStringLiteral("renderingStatusBar"));
-    auto* rendering_status_layout = new QHBoxLayout(rendering_status_bar);
-    rendering_status_layout->setContentsMargins(6, 2, 6, 2);
-    rendering_status_label_ = new QLabel;
-    rendering_status_label_->setObjectName(QStringLiteral("renderingStatusSummary"));
-    rendering_status_label_->setTextFormat(Qt::PlainText);
-    rendering_status_label_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    rendering_status_layout->addWidget(rendering_status_label_, 1);
-    const auto statusAction = [&](const QString& title, auto slot) {
-        auto* button = new QPushButton(title);
-        connect(button, &QPushButton::clicked, this, slot);
-        rendering_status_layout->addWidget(button);
-        return button;
-    };
     rendering_details_dialog_ = new QDialog(this);
     rendering_details_dialog_->setWindowTitle(tr("Rendering diagnostics"));
     rendering_details_dialog_->resize(760, 440);
@@ -178,28 +180,14 @@ MainWindow::MainWindow(engine::Project project, QWidget* parent)
     detail_layout->addWidget(rendering_details_);
     auto* detail_buttons = new QDialogButtonBox(QDialogButtonBox::Close);
     auto* detail_log = detail_buttons->addButton(tr("Show Log"), QDialogButtonBox::ActionRole);
+    detail_log->setObjectName(QStringLiteral("showRenderingLog"));
     connect(detail_log, &QPushButton::clicked, this, &MainWindow::showRenderingLog);
     connect(detail_buttons, &QDialogButtonBox::rejected, rendering_details_dialog_, &QDialog::hide);
     detail_layout->addWidget(detail_buttons);
-    statusAction(tr("Details"), [this] {
+    connect(rendering_status_button_, &QToolButton::clicked, this, [this] {
         rendering_details_dialog_->show();
         rendering_details_dialog_->raise();
     });
-    statusAction(tr("Show Log"), &MainWindow::showRenderingLog)->setObjectName(QStringLiteral("showRenderingLog"));
-    const auto openLog = [this](bool folder) {
-        const auto file = activeLogFile();
-        if (file.isEmpty()) {
-            QMessageBox::information(this, tr("Session Log"), fileLogError().isEmpty()
-                ? tr("No active session log file is available.") : fileLogError());
-            return;
-        }
-        const auto target = folder ? QFileInfo(file).absolutePath() : file;
-        if (!QDesktopServices::openUrl(QUrl::fromLocalFile(target)))
-            QMessageBox::warning(this, tr("Session Log"), tr("Could not open %1").arg(target));
-    };
-    statusAction(tr("Open Log File"), [openLog] { openLog(false); });
-    statusAction(tr("Open Log Folder"), [openLog] { openLog(true); });
-    viewport_layout->addWidget(rendering_status_bar);
     viewport_layout->addWidget(viewport_, 1);
     auto* viewport_dock = new ads::CDockWidget(dock_manager_, tr("Viewport"));
     viewport_dock->setObjectName(QStringLiteral("Viewport"));
@@ -558,9 +546,18 @@ void MainWindow::refreshStatus() {
         status.detail += tr("\nSession file log: %1").arg(fileLogError());
         status.warning = true;
     }
-    rendering_status_label_->setText(status.summary);
-    rendering_status_label_->setToolTip(status.summary);
-    rendering_status_label_->setStyleSheet(status.warning ? QStringLiteral("color: #e6a15a;") : QString());
+    if (rendering_summary_ != status.summary || rendering_warning_ != status.warning) {
+        rendering_summary_ = status.summary;
+        rendering_warning_ = status.warning;
+        // A renderer failure names its pass, operation and path: the tooltip keeps the full text.
+        const int width = rendering_status_button_->fontMetrics().averageCharWidth() * 80;
+        rendering_status_button_->setText(
+            rendering_status_button_->fontMetrics().elidedText(status.summary, Qt::ElideRight, width));
+        rendering_status_button_->setToolTip(status.summary);
+        rendering_status_button_->setIcon(status.warning ? style()->standardIcon(QStyle::SP_MessageBoxWarning) : QIcon());
+        rendering_status_button_->setStyleSheet(status.warning ? QStringLiteral("color: #e6a15a;") : QString());
+        rendering_status_button_->setVisible(!status.summary.isEmpty());
+    }
     rendering_log_search_ = status.logSearch;
     if (rendering_detail_text_ != status.detail) {
         rendering_detail_text_ = status.detail;

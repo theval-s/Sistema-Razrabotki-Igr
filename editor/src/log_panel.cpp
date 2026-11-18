@@ -2,6 +2,8 @@
 
 #include <QAction>
 #include <QClipboard>
+#include <QDesktopServices>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include <QGuiApplication>
@@ -10,6 +12,7 @@
 #include <QKeySequence>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QScrollBar>
 #include <QSettings>
@@ -20,6 +23,7 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -29,6 +33,7 @@
 
 #include <editor/log_model.hpp>
 #include <editor/menu_button.hpp>
+#include <editor/session_log.hpp>
 #include <editor/shortcut_registry.hpp>
 
 namespace editor {
@@ -194,6 +199,26 @@ QWidget* LogPanel::buildToolBar() {
     auto* spacer = new QWidget;
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     bar->addWidget(spacer);
+
+    // The session's file on disk keeps what this panel has dropped, and survives the editor.
+    const auto openLog = [this](const bool folder) {
+        const QString file = activeLogFile();
+        if (file.isEmpty()) {
+            QMessageBox::information(this, tr("Session Log"), fileLogError().isEmpty()
+                ? tr("No active session log file is available.") : fileLogError());
+            return;
+        }
+        const QString target = folder ? QFileInfo(file).absolutePath() : file;
+        if (!QDesktopServices::openUrl(QUrl::fromLocalFile(target)))
+            QMessageBox::warning(this, tr("Session Log"), tr("Could not open %1").arg(target));
+    };
+    auto* file_menu = new QMenu(this);
+    file_menu->addAction(tr("Open File"), this, [openLog] { openLog(false); })->setObjectName(QStringLiteral("openLogFile"));
+    file_menu->addAction(tr("Open Folder"), this, [openLog] { openLog(true); })->setObjectName(QStringLiteral("openLogFolder"));
+    auto* file_button = makeMenuButton(tr("Log File"), file_menu);
+    file_button->setToolTip(tr("The session log on disk"));
+    bar->addWidget(file_button);
+
     bar->addAction(follow_);
     bar->addAction(clear_);
     return bar;

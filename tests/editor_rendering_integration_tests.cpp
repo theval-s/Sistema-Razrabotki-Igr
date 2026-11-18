@@ -18,13 +18,13 @@
 #include <DockWidget.h>
 #include <DockManager.h>
 #include <QApplication>
-#include <QCheckBox>
+#include <QAction>
 #include <QComboBox>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
-#include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScreen>
@@ -33,6 +33,7 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QTest>
+#include <QToolButton>
 #include <gtest/gtest.h>
 
 namespace editor {
@@ -133,22 +134,29 @@ protected:
     }
 };
 
-TEST_F(EditorRenderingIntegration, StatusAndExistingControlsAreSiblingsOutsideNativeViewport) {
+TEST_F(EditorRenderingIntegration, StatusAndViewportControlsStayOutsideNativeViewport) {
     editor::MainWindow window(project);
     auto* viewport = window.findChild<editor::ViewportWidget*>();
-    auto* status = window.findChild<QWidget*>(QStringLiteral("renderingStatusBar"));
+    auto* status = window.findChild<QToolButton*>(QStringLiteral("renderingStatusSummary"));
     auto* selector = window.findChild<QComboBox*>(QStringLiteral("renderDebugView"));
+    auto* show = window.findChild<QToolButton*>(QStringLiteral("viewportShowMenu"));
     ASSERT_NE(viewport, nullptr);
     ASSERT_NE(status, nullptr);
     ASSERT_NE(selector, nullptr);
-    EXPECT_EQ(status->parentWidget(), viewport->parentWidget());
-    EXPECT_FALSE(viewport->isAncestorOf(status));
+    ASSERT_NE(show, nullptr);
+    // The status lives in the window's status bar: it never takes a row from the viewport.
+    EXPECT_FALSE(viewport->parentWidget()->isAncestorOf(status));
     EXPECT_FALSE(viewport->isAncestorOf(selector));
+    EXPECT_FALSE(viewport->isAncestorOf(show));
     EXPECT_TRUE(viewport->findChildren<QWidget*>().empty());
     for (const auto* name : {"showSkeletonOverlay", "showAudioOverlay"}) {
-        auto* control = window.findChild<QCheckBox*>(QString::fromUtf8(name));
-        ASSERT_NE(control, nullptr);
-        EXPECT_FALSE(viewport->isAncestorOf(control));
+        auto* toggle = window.findChild<QAction*>(QString::fromUtf8(name));
+        ASSERT_NE(toggle, nullptr);
+        EXPECT_TRUE(show->menu()->actions().contains(toggle));
+        EXPECT_TRUE(toggle->isChecked());
+        EXPECT_TRUE(viewport->property(name).toBool());
+        toggle->setChecked(false);
+        EXPECT_FALSE(viewport->property(name).toBool());
     }
     EXPECT_FALSE(selector->isEnabled());
     EXPECT_EQ(selector->count(), 4);
@@ -180,10 +188,12 @@ TEST_F(EditorRenderingIntegration, FatalStartupShowsBannerAndUnfilteredLogBefore
     auto* timer = window.findChild<QTimer*>(QStringLiteral("engineTickTimer"));
     ASSERT_NE(timer, nullptr);
     EXPECT_FALSE(timer->isActive());
-    auto* summary = window.findChild<QLabel*>(QStringLiteral("renderingStatusSummary"));
+    auto* summary = window.findChild<QToolButton*>(QStringLiteral("renderingStatusSummary"));
     ASSERT_NE(summary, nullptr);
-    EXPECT_TRUE(summary->text().startsWith(QStringLiteral("Renderer failed:")));
-    EXPECT_TRUE(summary->text().contains(QStringLiteral("ValidateSurface")));
+    EXPECT_FALSE(summary->isHidden());
+    // The button's text is elided; the tooltip has the whole summary.
+    EXPECT_TRUE(summary->toolTip().startsWith(QStringLiteral("Renderer failed:")));
+    EXPECT_TRUE(summary->toolTip().contains(QStringLiteral("ValidateSurface")));
 
     const auto& catalogError = engine.GetSceneAssets().GetCatalogError();
     ASSERT_FALSE(catalogError.empty());
@@ -201,8 +211,10 @@ TEST_F(EditorRenderingIntegration, FatalStartupShowsBannerAndUnfilteredLogBefore
     filter->setLevelShown(spdlog::level::critical, false);
     filter->setSourceShown(QStringLiteral("Render"), false);
     panel->findChild<QLineEdit*>()->setText(QStringLiteral("hiding the startup failure"));
+    summary->click(); // The status opens the details, whose Show Log reveals the failure.
     auto* showLog = window.findChild<QPushButton*>(QStringLiteral("showRenderingLog"));
     ASSERT_NE(showLog, nullptr);
+    EXPECT_TRUE(showLog->window()->isVisible());
     showLog->click(); // Actual MainWindow action -> existing dock -> existing panel.
     EXPECT_FALSE(dock->isClosed());
     EXPECT_TRUE(filter->isLevelShown(spdlog::level::err));
@@ -264,20 +276,20 @@ TEST_F(EditorRenderingIntegration, SuspendedStartupRecoversOnceAndSelectorIsTran
     EXPECT_EQ(counter->initializations, 1);
     auto* timer = window.findChild<QTimer*>(QStringLiteral("engineTickTimer"));
     auto* selector = window.findChild<QComboBox*>(QStringLiteral("renderDebugView"));
-    auto* summary = window.findChild<QLabel*>(QStringLiteral("renderingStatusSummary"));
+    auto* summary = window.findChild<QToolButton*>(QStringLiteral("renderingStatusSummary"));
     ASSERT_NE(timer, nullptr);
     ASSERT_NE(selector, nullptr);
     ASSERT_NE(summary, nullptr);
     EXPECT_FALSE(timer->isActive());
     EXPECT_FALSE(selector->isEnabled());
-    EXPECT_TRUE(summary->text().contains(QStringLiteral("suspended")));
+    EXPECT_TRUE(summary->toolTip().contains(QStringLiteral("suspended")));
     viewport->surfaceResized(0, 0);
     EXPECT_EQ(counter->initializations, 1);
 
     // No tick and no manual engine initialization: the real viewport resize
     // connection must restart initialization, preserving registered objects.
     viewport->surfaceResized(640, 480);
-    ASSERT_TRUE(engine.IsInitialized()) << summary->text().toStdString();
+    ASSERT_TRUE(engine.IsInitialized()) << summary->toolTip().toStdString();
     EXPECT_EQ(engine.GetSubsystem<engine::RenderingSubsystem>(), rendering);
     EXPECT_NE(engine.GetSubsystem<editor::EditorCameraSubsystem>(), nullptr);
     EXPECT_EQ(counter->initializations, 2);

@@ -322,6 +322,7 @@ if(SRI_BUILD_EDITOR)
         ../editor/include/editor/log_model.hpp
         ../editor/src/log_panel.cpp
         ../editor/include/editor/log_panel.hpp
+        ../editor/src/session_log.cpp
     )
     target_include_directories(editor_rendering_status_tests PRIVATE ../editor/include)
     target_link_libraries(editor_rendering_status_tests PRIVATE editor_core Engine::Engine

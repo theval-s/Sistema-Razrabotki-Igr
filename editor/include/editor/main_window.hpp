@@ -19,6 +19,7 @@ class QPlainTextEdit;
 class QDialog;
 class QMenu;
 class QTimer;
+class QToolButton;
 
 namespace spdlog::sinks {
 class sink;
@@ -91,7 +92,10 @@ private:
     EditorCameraSubsystem* camera_ = nullptr;
     QLabel* status_label_ = nullptr;
     QLabel* play_hint_ = nullptr;
-    QLabel* rendering_status_label_ = nullptr;
+    /// In the status bar while the renderer or the scene's assets have something to report; opens the details.
+    QToolButton* rendering_status_button_ = nullptr;
+    QString rendering_summary_;
+    bool rendering_warning_ = false;
     QComboBox* debug_view_ = nullptr;
     LogPanel* log_panel_ = nullptr;
     QDialog* rendering_details_dialog_ = nullptr;
