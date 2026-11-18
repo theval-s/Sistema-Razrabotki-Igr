@@ -83,6 +83,7 @@ struct ParticleSimulation::Impl {
     Buffer pool[2], count[2], indices, args, births, inputs, stats, cb, settings;
     std::vector<Style> styles;
     UINT capacity{}, current{}, read{}, pending{}, upperAlive{};
+    bool casts{};
     std::uint64_t frame{};
     std::vector<Slot> slots;
     std::vector<GpuEmitter> upload;
@@ -213,6 +214,9 @@ long ParticleSimulation::Step(float dt, std::span<const Emitter> emitters) {
                      {e.tint[0],e.tint[1],e.tint[2],e.radius},{e.spread,0,0,0},
                      {e.requested,e.maxAlive,e.appearance,e.seed}};
     }
+    // Draining slots keep their styles, so their particles still count as casters.
+    a.casts = false;
+    for (UINT j=0;j<n;++j) a.casts |= a.slots[j].owner && a.styles[j].flags[2];
     auto* c=a.ctx.Get();
     Frame f{dt,a.capacity,n,static_cast<UINT>(a.frame)};
     c->UpdateSubresource(a.cb.data.Get(),0,nullptr,&f,0,0);
@@ -269,7 +273,7 @@ long ParticleSimulation::Step(float dt, std::span<const Emitter> emitters) {
 ParticleSimulation::Views ParticleSimulation::RenderViews() const {
     if (!impl_) return {};
     auto& a=*impl_;
-    return {a.pool[a.current].srv.Get(),a.indices.srv.Get(),a.count[a.current].srv.Get(),a.args.data.Get(),a.upperAlive,a.settings.srv.Get()};
+    return {a.pool[a.current].srv.Get(),a.indices.srv.Get(),a.count[a.current].srv.Get(),a.args.data.Get(),a.upperAlive,a.settings.srv.Get(),a.casts};
 }
 const ParticleSimulation::Snapshot* ParticleSimulation::Latest() {
     if (!impl_ || FAILED(impl_->Poll()) || !impl_->latest.frame) return nullptr;
