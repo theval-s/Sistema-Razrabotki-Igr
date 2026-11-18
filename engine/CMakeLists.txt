@@ -228,9 +228,7 @@ add_custom_target(EngineRuntimeAssets
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/shaders" "${SRI_ENGINE_ASSET_DIR}/shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/primitives" "${SRI_ENGINE_ASSET_DIR}/primitives"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/ui" "${SRI_ENGINE_ASSET_DIR}/ui"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/scenes" "${SRI_ENGINE_ASSET_DIR}/scenes"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/particles" "${SRI_ENGINE_ASSET_DIR}/particles"
-    COMMAND ${CMAKE_COMMAND} -E rm -f "${SRI_ENGINE_ASSET_DIR}/scenes/fire.scene.json" "${SRI_ENGINE_ASSET_DIR}/scenes/fire.scene.json.meta"
     COMMENT "Copying engine runtime assets"
     VERBATIM
 )

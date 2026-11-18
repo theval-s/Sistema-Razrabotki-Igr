@@ -136,7 +136,6 @@ install(DIRECTORY
         "${PROJECT_SOURCE_DIR}/engine/shaders"
         "${PROJECT_SOURCE_DIR}/engine/primitives"
         "${PROJECT_SOURCE_DIR}/engine/ui"
-        "${PROJECT_SOURCE_DIR}/engine/scenes"
         "${PROJECT_SOURCE_DIR}/engine/particles"
     DESTINATION engine
     COMPONENT editor
