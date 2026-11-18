@@ -25,6 +25,7 @@
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/assets/MaterialDefinition.hpp>
 #include <engine/assets/ParticleEffectDefinition.hpp>
+#include <engine/assets/SkyboxDefinition.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <editor/play_session.hpp>
 #include <engine/assets/ModelImport.hpp>
@@ -178,7 +179,7 @@ std::pair<QString, QString> splitAssetName(const QString& name, const bool dir) 
     }
     // The engine's multi-part suffixes (CatalogKindForFile).
     //TODO: add if we get more suffixes?
-    for (const QLatin1String suffix : {QLatin1String(".particle-effect.json"), QLatin1String(".material-instance.json"), QLatin1String(".material.json"),
+    for (const QLatin1String suffix : {QLatin1String(".skybox.json"), QLatin1String(".particle-effect.json"), QLatin1String(".material-instance.json"), QLatin1String(".material.json"),
                                         QLatin1String(".skinned-mesh.json"), QLatin1String(".skeleton.json"),
                                         QLatin1String(".animation.json"),
                                         QLatin1String(".scene.json")}) {
@@ -411,6 +412,40 @@ bool AssetOperations::updateParticleEffect(const QString& path, const engine::Pa
     }
     if (auto* rendering = context_.engine().GetSubsystem<engine::RenderingSubsystem>();
         rendering && rendering->GetRendering().GetParticlePreview().enabled) rendering->GetRendering().RestartParticlePreview();
+    return true;
+}
+
+bool AssetOperations::createSkybox(const QString& path, const engine::SkyboxDefinition& definition) {
+    if (context_.playSession().isPlaying()) return false;
+    if (!isWithin(cleanPath(path), cleanPath(editor::toQString(context_.project().ContentDir())))) {
+        report(tr("New Skybox"), {tr("Choose a writable project content folder.")});
+        return false;
+    }
+    std::string text, error;
+    if (!engine::SerializeSkyboxDefinition(definition, text, error)) {
+        report(tr("New Skybox"), {fromUtf8(error)});
+        return false;
+    }
+    if (!createFile(tr("New Skybox"), path, text, engine::CatalogAssetKind::Skybox)) return false;
+    if (!context_.engine().GetSceneAssets().Reload(assetName(path).toStdString(), engine::AssetKind::Skybox, error)) {
+        report(tr("New Skybox"), {tr("File saved, but live reload failed: %1").arg(fromUtf8(error))});
+        return false;
+    }
+    return true;
+}
+
+bool AssetOperations::updateSkybox(const QString& path, const engine::SkyboxDefinition& definition) {
+    if (context_.playSession().isPlaying()) return false;
+    std::string text, error;
+    if (!engine::SerializeSkyboxDefinition(definition, text, error)) {
+        report(tr("Edit Skybox"), {fromUtf8(error)});
+        return false;
+    }
+    if (!updateFile(tr("Edit Skybox"), path, text, engine::CatalogAssetKind::Skybox)) return false;
+    if (!context_.engine().GetSceneAssets().Reload(assetName(path).toStdString(), engine::AssetKind::Skybox, error)) {
+        report(tr("Edit Skybox"), {tr("File saved, but live reload failed: %1").arg(fromUtf8(error))});
+        return false;
+    }
     return true;
 }
 

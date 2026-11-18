@@ -36,6 +36,8 @@ Style styleOf(const engine::CatalogAssetKind kind) {
         return {"MAT", QColor(0x2f, 0x7f, 0xc1)};
     case engine::CatalogAssetKind::ParticleEffect:
         return {"VFX", QColor(0xc4, 0x70, 0xa2)};
+    case engine::CatalogAssetKind::Skybox:
+        return {"SKY", QColor(0x47, 0x91, 0xc4)};
     case engine::CatalogAssetKind::MaterialInstance:
         return {"INST", QColor(0x3a, 0xa3, 0xc9)};
     case engine::CatalogAssetKind::Scene:
@@ -125,6 +127,8 @@ QString assetKindName(const engine::CatalogAssetKind kind) {
         return QObject::tr("Materials");
     case engine::CatalogAssetKind::ParticleEffect:
         return QObject::tr("Particle Effects");
+    case engine::CatalogAssetKind::Skybox:
+        return QObject::tr("Skyboxes");
     case engine::CatalogAssetKind::MaterialInstance:
         return QObject::tr("Material Instances");
     case engine::CatalogAssetKind::Scene:

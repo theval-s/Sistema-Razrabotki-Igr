@@ -14,6 +14,7 @@
 #include <engine/assets/AssetCommon.hpp>
 #include <engine/assets/MaterialDefinition.hpp>
 #include <engine/assets/ParticleEffectDefinition.hpp>
+#include <engine/assets/SkyboxDefinition.hpp>
 
 namespace engine {
 
@@ -100,6 +101,14 @@ struct TextureAsset {
     TextureHandle texture;
 };
 
+/// Published only after cubemap is Ready and its actual DDS SRV/resource shape is validated.
+/// The dependency is a non-owning, generation-checked handle into the texture asset table;
+/// the resource manager owns GPU memory. Retaining this value does not survive UnloadAll.
+struct SkyboxAsset {
+    SkyboxDefinition definition;
+    AssetHandle<TextureAsset> cubemap;
+};
+
 struct ParticleEffectAsset {
     ParticleEffectDefinition definition;
     AssetHandle<TextureAsset> texture;
@@ -124,6 +133,11 @@ struct MaterialInstanceAsset {
 /// Which table each asset type lives in; used by the templated lookup helpers.
 template <typename T>
 struct AssetValueKind;
+
+template <>
+struct AssetValueKind<SkyboxAsset> {
+    static constexpr AssetKind value = AssetKind::Skybox;
+};
 
 template <>
 struct AssetValueKind<ParticleEffectAsset> {

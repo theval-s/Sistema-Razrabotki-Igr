@@ -35,6 +35,8 @@ Smoke/fire emitters, GPU budgets, delayed counts, and custom HLSL: [particle gui
 Code-only scene saving/loading, UUID sidecars, asset scope, render extraction and
 metadata generation: [scene and asset guide](docs/scene-assets.md).
 
+DDS cubemap authoring and scene backgrounds: [skybox guide](docs/skyboxes.md).
+
 Skeletal animation assets, editor workflow, Lua and C++ playback, and the TestBot
 example: [animation guide](docs/animation.md).
 

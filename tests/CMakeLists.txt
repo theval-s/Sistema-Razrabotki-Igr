@@ -46,7 +46,8 @@ add_custom_command(TARGET rendering_skinning_tests POST_BUILD
 add_test(NAME rendering_skinning_tests COMMAND rendering_skinning_tests)
 
 foreach(render_target IN ITEMS rendering_diagnostics_tests rendering_resource_tests render_debug_view_tests
-        render_debug_native_tests asset_event_tests particle_simulation_tests particle_tiles_tests)
+        render_debug_native_tests asset_event_tests particle_simulation_tests particle_tiles_tests
+        skybox_assets_tests skybox_render_tests)
     add_executable(${render_target} ${render_target}.cpp)
     target_link_libraries(${render_target} PRIVATE Engine::EngineStatic GTest::gtest_main d3d11 d3dcompiler dxgi user32)
     target_compile_definitions(${render_target} PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
@@ -116,6 +117,25 @@ add_test(NAME project_tests COMMAND project_tests)
 if(SRI_BUILD_EDITOR)
     find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Test)
     find_package(spdlog CONFIG REQUIRED)
+    add_executable(skybox_editor_tests
+        skybox_editor_tests.cpp
+        ../editor/modules/content/asset_dialogs.cpp
+        ../editor/modules/content/asset_dialogs.hpp
+        ../editor/modules/content/asset_operations.cpp
+        ../editor/modules/scene/environment_panel.cpp
+        ../editor/modules/scene/environment_panel.hpp
+        ../editor/modules/scene/property_form.cpp
+    )
+    target_include_directories(skybox_editor_tests PRIVATE ../editor/modules/content ../editor/modules/scene)
+    target_link_libraries(skybox_editor_tests PRIVATE editor_core Engine::Engine GTest::gtest
+        Qt6::Widgets ads::qtadvanceddocking-qt6)
+    set_project_warnings(skybox_editor_tests)
+    set_target_properties(skybox_editor_tests PROPERTIES FOLDER tests AUTOMOC ON)
+    add_custom_command(TARGET skybox_editor_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:skybox_editor_tests> $<TARGET_FILE_DIR:skybox_editor_tests>
+        COMMAND_EXPAND_LISTS VERBATIM)
+    add_test(NAME skybox_editor_tests COMMAND skybox_editor_tests)
     add_executable(content_browser_drop_tests
         content_browser_drop_tests.cpp
         content_rig_dialog_tests.cpp
@@ -510,15 +530,23 @@ target_link_libraries(file_system_tests PRIVATE Engine::EngineStatic GTest::gtes
 set_project_warnings(file_system_tests)
 set_target_properties(file_system_tests PROPERTIES FOLDER tests)
 
-add_executable(scene_document_tests scene_document_tests.cpp)
+add_executable(scene_document_tests scene_document_tests.cpp skybox_scene_tests.cpp)
 target_link_libraries(scene_document_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 target_compile_definitions(scene_document_tests PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
 set_project_warnings(scene_document_tests)
+# Catalog scans must not see scratch assets created by other tests in bin/game.
+set_target_properties(scene_document_tests PROPERTIES FOLDER tests
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/scene-tests")
+add_test(NAME scene_document_tests COMMAND scene_document_tests)
 add_custom_command(TARGET scene_document_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:scene_document_tests> $<TARGET_FILE_DIR:scene_document_tests>
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${PROJECT_SOURCE_DIR}/engine/primitives" "$<TARGET_FILE_DIR:scene_document_tests>/engine/primitives"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${PROJECT_SOURCE_DIR}/engine/shaders" "$<TARGET_FILE_DIR:scene_document_tests>/engine/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${PROJECT_SOURCE_DIR}/engine/particles" "$<TARGET_FILE_DIR:scene_document_tests>/engine/particles"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${PROJECT_SOURCE_DIR}/example_game/models" "$<TARGET_FILE_DIR:scene_document_tests>/game/models"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -527,7 +555,7 @@ add_custom_command(TARGET scene_document_tests POST_BUILD
         "${PROJECT_SOURCE_DIR}/example_game/shaders" "$<TARGET_FILE_DIR:scene_document_tests>/game/shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${PROJECT_SOURCE_DIR}/example_game/scenes" "$<TARGET_FILE_DIR:scene_document_tests>/game/scenes"
-    VERBATIM
+    COMMAND_EXPAND_LISTS VERBATIM
 )
 
 add_executable(material_assets_tests material_assets_tests.cpp)

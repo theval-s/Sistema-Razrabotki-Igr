@@ -86,6 +86,7 @@ struct Engine::Impl {
     // Resolve only when the authored reference changes; transform edits must not retry broken effects.
     // Outlives Scene, whose destruction still dispatches lifecycle observers.
     std::unordered_map<entt::entity, AssetReference> particleEffectRequests;
+    AssetReference environmentRequest;
     Scene scene;
     SceneDocument sceneBaseline;
     AssetReference sceneReference;
@@ -130,6 +131,14 @@ Engine::Engine(EngineConfig config) : impl_(std::make_unique<Impl>(std::move(con
     // Initialize() regardless of registration order.
     impl_->assets = std::make_unique<AssetSystem>(*this);
     impl_->sceneAssets = std::make_unique<AssetSystem>(*this);
+    [[maybe_unused]] const auto environmentObserver = impl_->scene.AddChangeObserver(
+        [this](Scene::ChangeKind kind, entt::entity) {
+            if (!impl_->initialized || kind != Scene::ChangeKind::Settings) return;
+            const auto& reference = impl_->scene.GetEnvironment().skybox;
+            if (impl_->environmentRequest == reference) return;
+            impl_->environmentRequest = reference;
+            if (reference.id.IsValid()) impl_->sceneAssets->RequestSkybox(reference);
+        });
     [[maybe_unused]] const auto particleObserver = impl_->scene.AddChangeObserver(
         [this](Scene::ChangeKind kind, entt::entity entity) {
             if (!impl_->initialized || kind != Scene::ChangeKind::Modified) return;
@@ -220,6 +229,8 @@ bool Engine::Initialize() {
     // Size is re-read every iteration: a subsystem may register others from its
     // Initialize(), those get initialized by this same loop.
     impl_->initialized = true;
+    impl_->environmentRequest = impl_->scene.GetEnvironment().skybox;
+    if (impl_->environmentRequest.id.IsValid()) impl_->sceneAssets->RequestSkybox(impl_->environmentRequest);
     impl_->particleEffectRequests.clear();
     impl_->scene.ForEach<ParticleEmitter>([this](entt::entity entity, const ParticleEmitter& emitter) {
         if (emitter.effect.id.IsValid() || !emitter.effect.path.empty()) {
@@ -273,6 +284,7 @@ void Engine::Shutdown() {
         rendering->GetWorld().renderItems.clear();
         rendering->GetWorld().selectedSceneItems.clear();
         rendering->GetWorld().debugDraw.Clear();
+        rendering->GetWorld().environment = {};
     }
     // Wait for both worker queues and evict Ready GPU records before invalidating
     // their handles. Global assets must also be evicted for a supported fresh start.
@@ -695,6 +707,7 @@ bool Engine::RequestOpenLevel(std::string_view name, std::string& error) {
 }
 
 void Engine::ResetSimulation() {
+    if (auto* rendering = GetSubsystem<RenderingSubsystem>()) rendering->GetWorld().environment = {};
     impl_->fixedAccumulator = 0;
     impl_->fixedStep = {0, impl_->config.fixedStepSeconds, 0};
     ++impl_->simulationRevision;
@@ -729,10 +742,12 @@ void Engine::CommitScene(const SceneDocument& document) {
     if (auto* rendering = GetSubsystem<RenderingSubsystem>()) {
         rendering->GetWorld().sceneItems.clear();
         rendering->GetWorld().selectedSceneItems.clear();
+        rendering->GetWorld().environment = {};
     }
     impl_->scene.SetControllerInstantiationEnabled(false);
     impl_->scene.Clear();
     impl_->sceneAssets->UnloadAll();
+    impl_->environmentRequest = {};
     PopulateScene(document, *impl_->sceneAssets, impl_->scene);
     LoadNavigation(impl_->scene, impl_->sceneAssets->GetCatalog(), impl_->navigation);
     impl_->sceneBaseline = document;
@@ -1010,7 +1025,8 @@ bool Engine::LoadGame(const std::filesystem::path& file, std::string& error) {
     for (const auto& id : game.deleted) {
         if (const auto entity = impl_->scene.FindByUuid(id); entity != entt::null) impl_->scene.DestroyEntity(entity);
     }
-    PopulateScene(game.spawned, *impl_->sceneAssets, impl_->scene);
+    // A save's spawned document contains entities, not overrides for baseline scene settings.
+    static_cast<void>(InstantiateEntities(game.spawned.entities, *impl_->sceneAssets, impl_->scene, false));
     for (const auto& [id, parent] : game.spawnParents)
         if (!impl_->scene.SetParent(impl_->scene.FindByUuid(id), impl_->scene.FindByUuid(parent)))
             diagnostics += "cannot restore parent for " + id.ToString() + "\n";

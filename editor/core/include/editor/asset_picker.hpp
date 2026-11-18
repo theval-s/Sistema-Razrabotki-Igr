@@ -44,6 +44,12 @@ public:
     void showPopup() override;
 
 protected:
+    /// Additional dependency constraints, applied to both catalog choices and drops.
+    /// Default accepts every entry of the requested kind. Overrides must not mutate
+    /// the catalog or retain entry pointers. Call reload() in the derived constructor:
+    /// initial population in the base constructor cannot dispatch to this override.
+    /// Call reload() again after changing any state used by the predicate.
+    [[nodiscard]] virtual bool acceptsEntry(const engine::CatalogEntry& entry) const;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;

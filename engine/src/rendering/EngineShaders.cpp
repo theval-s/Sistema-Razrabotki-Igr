@@ -40,6 +40,8 @@ const ShaderVariant& GetEngineShader(const EngineShader shader) {
         {L"engine/ParticleTextures.hlsl", Compute, {}},
         {L"engine/ParticleShadows.hlsl", Vertex, {}},
         {L"engine/ParticleShadows.hlsl", Pixel, {}},
+        {L"engine/SkyboxPass.hlsl", Vertex, {}},
+        {L"engine/SkyboxPass.hlsl", Pixel, {}},
     }};
     return variants.at(static_cast<std::size_t>(shader));
 }

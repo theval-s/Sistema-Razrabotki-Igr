@@ -51,6 +51,8 @@ public:
     void clear();
     /// Off during Play: nothing is recorded, and changes to the running copy don't count.
     void setEnabled(bool enabled);
+    /// Whether history recording/change tracking is enabled; not the undo stack's availability.
+    [[nodiscard]] bool isEnabled() const noexcept { return enabled_; }
 
 signals:
     /// isClean() may have changed.

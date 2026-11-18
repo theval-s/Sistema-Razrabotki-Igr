@@ -137,6 +137,8 @@ set(ENGINE_SOURCES
     src/rendering/RenderingResourceManager.cpp
     src/rendering/RenderingSystem.cpp
     src/rendering/RenderWorld.cpp
+    src/rendering/SkyboxPass.cpp
+    src/rendering/SkyboxPass.hpp
     src/rendering/particles/ParticlePass.cpp
     src/rendering/particles/ParticleSimulation.cpp
     src/rendering/particles/ParticleTiles.cpp
@@ -176,6 +178,8 @@ set(ENGINE_SHADERS
     shaders/GBufferVS.hlsl
     shaders/GBufferPS.hlsl
     shaders/PresentPass.hlsl
+    shaders/SkyboxPass.hlsl
+    shaders/SkyboxConstants.hlsli
     shaders/ParticleSim.hlsl
     shaders/ParticleTiles.hlsl
     shaders/ParticleTextures.hlsl
@@ -406,6 +410,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/assets/AssetPipeline.hpp
     include/engine/assets/MaterialDefinition.hpp
     include/engine/assets/ParticleEffectDefinition.hpp
+    include/engine/assets/SkyboxDefinition.hpp
     include/engine/core/CoreEvents.hpp
     include/engine/core/DefaultSubsystems.hpp
     include/engine/core/Content.hpp
@@ -422,6 +427,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/scene/StateValue.hpp
     include/engine/scene/SceneQueries.hpp
     include/engine/scene/Scene.hpp
+    include/engine/scene/EnvironmentSettings.hpp
     include/engine/scene/SceneDocument.hpp
     include/engine/scene/GameDocument.hpp
     include/engine/physics/PhysicsComponents.hpp
@@ -451,6 +457,8 @@ set(ENGINE_CORE_SOURCES
     src/assets/MaterialDefinition.cpp
     src/assets/ParticleEffectDefinition.cpp
     src/assets/ParticleEffectImporter.cpp
+    src/assets/SkyboxDefinition.cpp
+    src/assets/SkyboxImporter.cpp
     src/assets/MaterialImporter.cpp
     src/core/DefaultSubsystems.cpp
     src/core/Content.cpp

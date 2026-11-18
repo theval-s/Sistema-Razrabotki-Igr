@@ -126,6 +126,22 @@ Json Encode(const AssetReference& reference) {
     return Json::parse(json);
 }
 
+AssetReference EnvironmentReference(const Json& j) {
+    Fields(j, {"id", "path"});
+    AssetReference result;
+    result.id = AssetUuid(j.at("id").get<std::string>());
+    if (!result.id.IsValid()) throw std::invalid_argument("environment skybox requires a valid UUID");
+    if (j.contains("path")) result.path = j.at("path").get<std::string>();
+    return result;
+}
+
+Json EncodeEnvironmentReference(const AssetReference& reference) {
+    if (!reference.id.IsValid()) return nullptr; // validated environment permits only an empty hint here
+    Json result = {{"id", reference.id.ToString()}};
+    if (!reference.path.empty()) result["path"] = reference.path;
+    return result;
+}
+
 // Drops trailing slots without a material, so equal renderers compare equal.
 void TrimSlotMaterials(std::vector<AssetReference>& slots) {
     while (!slots.empty() && !slots.back().id.IsValid()) slots.pop_back();
@@ -439,6 +455,9 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
 }
 
 void Validate(const SceneDocument& document) {
+    std::string environmentError;
+    if (!ValidateEnvironmentSettings(document.environment, environmentError))
+        throw std::invalid_argument(environmentError);
     std::size_t enabledListeners = 0;
     for (const auto& entity : document.entities) {
         std::string error;
@@ -508,9 +527,26 @@ void Validate(const SceneDocument& document) {
 }
 
 SceneDocument Decode(const Json& j) {
-    Fields(j, {"version", "entities", "activeCamera", "directionalLight", "editorFolders"});
+    Fields(j, {"version", "entities", "activeCamera", "directionalLight", "editorFolders", "environment"});
     if (j.at("version") != 1) throw std::invalid_argument("unsupported scene version");
     SceneDocument result;
+    if (j.contains("environment")) {
+        const auto& environment = j.at("environment");
+        Fields(environment, {"skybox", "yawRadians", "brightness", "tint", "fallbackColor"});
+        auto& value = result.environment;
+        if (environment.contains("skybox") && !environment.at("skybox").is_null())
+            value.skybox = EnvironmentReference(environment.at("skybox"));
+        if (environment.contains("yawRadians")) value.yawRadians = Number(environment.at("yawRadians"));
+        if (environment.contains("brightness")) value.brightness = Number(environment.at("brightness"));
+        if (environment.contains("tint")) {
+            const auto color = Numbers<3>(environment.at("tint"));
+            value.tint = {color[0], color[1], color[2]};
+        }
+        if (environment.contains("fallbackColor")) {
+            const auto color = Numbers<3>(environment.at("fallbackColor"));
+            value.fallbackColor = {color[0], color[1], color[2]};
+        }
+    }
     if (!j.at("entities").is_array()) throw std::invalid_argument("entities must be an array");
     for (const auto& item : j.at("entities")) result.entities.push_back(DecodeEntity(item));
     if (j.contains("activeCamera")) result.activeCamera = OptionalId(j.at("activeCamera"));
@@ -527,8 +563,17 @@ SceneDocument Decode(const Json& j) {
 }
 
 Json Encode(const SceneDocument& document) {
+    std::string environmentError;
+    if (!ValidateEnvironmentSettings(document.environment, environmentError))
+        throw std::invalid_argument(environmentError);
     Json root = {{"version", 1}, {"entities", Json::array()}, {"activeCamera", Encode(document.activeCamera)},
                  {"directionalLight", Encode(document.directionalLight)}};
+    if (document.environment != EnvironmentSettings{}) {
+        const auto& value = document.environment;
+        root["environment"] = {{"skybox", EncodeEnvironmentReference(value.skybox)},
+            {"yawRadians", value.yawRadians}, {"brightness", value.brightness},
+            {"tint", Encode(value.tint)}, {"fallbackColor", Encode(value.fallbackColor)}};
+    }
     for (const auto& entity : document.entities) {
         Json components = {{"Transform", {{"position", Encode(entity.transform.position)},
                                             {"rotation", Encode(entity.transform.rotation)},
@@ -871,6 +916,7 @@ bool CaptureSceneDocument(const Scene& scene, const AssetSystem& assets, SceneDo
         captured.activeCamera = settings.activeCamera;
         captured.directionalLight = settings.directionalLight;
         captured.editorFolders = std::move(settings.editorFolders);
+        captured.environment = settings.environment;
         auto visit = [&](auto&& self, const entt::entity entity) -> void {
             captured.entities.push_back(CaptureDefinition(scene, assets, entity));
             for (const auto child : scene.GetChildren(entity)) self(self, child);
@@ -895,6 +941,8 @@ void PopulateScene(const SceneDocument& document, AssetSystem& assets, Scene& de
     if (document.activeCamera) destination.SetActiveCamera(destination.FindByUuid(*document.activeCamera));
     if (document.directionalLight) destination.SetDirectionalLight(destination.FindByUuid(*document.directionalLight));
     destination.SetEditorFolders(document.editorFolders);
+    std::string error;
+    static_cast<void>(destination.SetEnvironment(document.environment, error));
 }
 
 bool CaptureEntities(const Scene& scene, const AssetSystem& assets, std::span<const entt::entity> entities,
@@ -991,6 +1039,7 @@ SceneSettings CaptureSceneSettings(const Scene& scene) {
     if (const auto light = scene.GetDirectionalLight(); light != entt::null) settings.directionalLight = scene.GetId(light);
     const auto folders = scene.GetEditorFolders();
     settings.editorFolders.assign(folders.begin(), folders.end());
+    settings.environment = scene.GetEnvironment();
     return settings;
 }
 
@@ -1000,5 +1049,7 @@ void ApplySceneSettings(const SceneSettings& settings, Scene& scene) {
     if (current.activeCamera != settings.activeCamera) scene.SetActiveCamera(find(settings.activeCamera));
     if (current.directionalLight != settings.directionalLight) scene.SetDirectionalLight(find(settings.directionalLight));
     scene.SetEditorFolders(settings.editorFolders);
+    std::string error;
+    static_cast<void>(scene.SetEnvironment(settings.environment, error));
 }
 } // namespace engine

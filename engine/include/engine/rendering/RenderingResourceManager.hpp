@@ -29,6 +29,10 @@ struct ENGINE_API RenderingResourceManager {
                                 std::span<const D3D11_SUBRESOURCE_DATA> data = {});
     TextureHandle RegisterTexture(Texture&& texture);
     bool DestroyTexture(TextureHandle texture);
+    /// Main-thread, generation-checked lookup; null for empty or stale handles.
+    /// Borrowed pointer: do not retain across texture registration/destruction or shutdown.
+    /// Inspect GetSRV() for imported resource shape; Texture::desc may be default-initialized.
+    [[nodiscard]] const Texture* TryGetTexture(TextureHandle texture) const;
     MeshHandle CreateMesh(BufferHandle vertexBuffer, BufferHandle indexBuffer, VertexLayout&& layout,
                           uint32_t vertexCount);
     /// Meshes own their vertex and index buffers by default. Pass false if the buffers are shared.
