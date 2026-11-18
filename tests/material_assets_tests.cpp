@@ -961,11 +961,11 @@ TEST(ParticleEffectAssetsIntegration, ExtractionUsesReadyTextureDefinitionOverri
     });
     extraction->LateUpdate({});
     EXPECT_TRUE(sources.empty());
-    scene.Modify<ParticleEmitter>(entity, [](ParticleEmitter& changed) { changed.effect = {}; changed.appearance = 1; });
+    scene.Modify<ParticleEmitter>(entity, [](ParticleEmitter& changed) { changed.effect = {}; changed.appearance = 3; });
     extraction->LateUpdate({});
     ASSERT_EQ(sources.size(), 1u);
-    EXPECT_EQ(sources[0].effect.appearance, 0u);
-    EXPECT_EQ(sources[0].settings.appearance, 0u);
+    EXPECT_EQ(sources[0].effect.appearance, 3u);
+    EXPECT_EQ(sources[0].settings.appearance, 3u);
     EXPECT_FALSE(sources[0].texture);
 }
 } // namespace

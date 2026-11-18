@@ -80,7 +80,7 @@ bool ParticlePass::Collect(const RenderWorld& world, RenderingContext& context, 
             continue;
         }
         textureFailures_.erase(source.owner);
-        requests_.push_back({source.owner, count, p.maxAlive, p.appearance == 1 ? 0 : p.appearance, p.seed,
+        requests_.push_back({source.owner, count, p.maxAlive, p.appearance, p.seed,
             {source.position.x, source.position.y, source.position.z}, p.lifetime,
             {source.direction.x, source.direction.y, source.direction.z}, p.speed,
             {p.tint.x, p.tint.y, p.tint.z}, p.radius, p.spread, source.effect, layer});
