@@ -1,7 +1,11 @@
 #include "ParticlePass.hpp"
 #include "../LifecycleFailure.hpp"
+#include <engine/assets/AssetPathResolver.hpp>
+#include <engine/core/Content.hpp>
 #include <engine/core/Log.hpp>
+#include <engine/core/PathUtils.hpp>
 #include <engine/assets/ParticleEffectDefinition.hpp>
+#include <engine/rendering/EngineShaders.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -13,13 +17,18 @@ void ParticlePass::Reset() {
     sim_.reset();
     textures_.reset();
     shadows_.reset();
-    tilePrograms_ = {};
     stats_ = {};
     requests_.clear();
     emission_.clear();
     bursts_.clear();
     textureFailures_.clear();
     step_ = lastBirthRequest_ = 0;
+}
+
+void ParticlePass::Destroy(RenderingResourceManager&, RenderingContext&, RenderingResources&) {
+    Reset();
+    programs_.reset();
+    programHooks_.reset();
 }
 
 bool ParticlePass::PreReinitialize(RenderingResourceManager&, RenderingContext&, RenderingResources&) {
@@ -78,25 +87,56 @@ bool ParticlePass::Collect(const RenderWorld& world, RenderingContext& context, 
     return births;
 }
 
-void ParticlePass::Start(RenderingContext& context) {
+bool ParticlePass::EnsurePrograms(RenderingContext& context) {
+    // Cooked builds read baked bytecode. Source builds watch the project hook so edits apply live.
+    HookStamp hooks;
+    const auto path = GetProjectParticleHooksPath();
+    if (!AssetPathResolver::IsCooked() && content::IsFile(path)) {
+        std::error_code error;
+        hooks = {true, std::filesystem::last_write_time(path, error), std::filesystem::file_size(path, error)};
+    }
+    if (programHooks_ == hooks) return programs_.has_value();
+    const bool reload = programHooks_.has_value();
+    programHooks_ = hooks;
+    if (reload) Reset(); // the live helpers hold the previous programs
+    programs_.reset();
     auto& manager = context.GetResourceManager();
-    auto program = [&](EngineShader variant) {
+    const auto compile = [&](EngineShader variant) {
         const auto handle = manager.CompileShader(variant);
-        auto shader = manager.shaders_.Get(handle).shader.computeShader;
+        auto shader = manager.shaders_.Get(handle).shader;
         manager.DestroyShader(handle);
         return shader;
     };
-    auto update = program(EngineShader::ParticleUpdate), admit = program(EngineShader::ParticleAdmit),
-         spawn = program(EngineShader::ParticleSpawn);
-    tilePrograms_ = {program(EngineShader::ParticleBuild), program(EngineShader::ParticleMerge),
-                     program(EngineShader::ParticleBin), program(EngineShader::ParticleShade)};
-    sim_ = std::make_unique<ParticleSimulation>();
+    try {
+        Programs programs;
+        programs.update = compile(EngineShader::ParticleUpdate).computeShader;
+        programs.admit = compile(EngineShader::ParticleAdmit).computeShader;
+        programs.spawn = compile(EngineShader::ParticleSpawn).computeShader;
+        programs.resample = compile(EngineShader::ParticleTextureResample).computeShader;
+        programs.tiles = {compile(EngineShader::ParticleBuild).computeShader, compile(EngineShader::ParticleMerge).computeShader,
+                          compile(EngineShader::ParticleBin).computeShader, compile(EngineShader::ParticleShade).computeShader};
+        programs.shadowVS = compile(EngineShader::ParticleShadowVS).vertexShader;
+        programs.shadowPS = compile(EngineShader::ParticleShadowPS).pixelShader;
+        programs_ = std::move(programs);
+    } catch (const RenderingException& error) {
+        // Particles include project HLSL: a mistake there disables particles, not the renderer.
+        const auto& failure = error.GetFailure();
+        log::Render().error("Particle shaders failed to compile; particles are off until {} changes.\n{}\n{}",
+            ToUtf8(path), failure.summary, failure.detail);
+        return false;
+    }
+    if (reload) log::Render().info("Recompiled particle shaders for {}", ToUtf8(path));
+    return true;
+}
+
+void ParticlePass::Start(RenderingContext& context) {
     auto* device = context.GetDevice();
-    rendering_detail::Check(sim_->Initialize(device, {update.Get(), admit.Get(), spawn.Get()},
+    const auto& programs = *programs_;
+    sim_ = std::make_unique<ParticleSimulation>();
+    rendering_detail::Check(sim_->Initialize(device, {programs.update.Get(), programs.admit.Get(), programs.spawn.Get()},
         budget_.maxParticles, budget_.maxEmitters), "CreateParticleSimulation", device);
     textures_ = std::make_unique<ParticleTextures>();
-    const auto resample = program(EngineShader::ParticleTextureResample);
-    rendering_detail::Check(textures_->Initialize(device, resample.Get()), "CreateParticleTextures", device);
+    rendering_detail::Check(textures_->Initialize(device, programs.resample.Get()), "CreateParticleTextures", device);
 }
 
 void ParticlePass::PollSimulation() {
@@ -124,8 +164,12 @@ void ParticlePass::Advance(const RenderWorld& world, RenderingContext& context, 
             bursts_.clear(); // requests for absent owners expire even before the first allocation
             return;
         }
-        Start(context);
     }
+    if (!EnsurePrograms(context)) {
+        bursts_.clear();
+        return;
+    }
+    if (!sim_) Start(context);
     PollSimulation();
     const bool births = Collect(world, context, dt, preview);
     // A completed zero only proves there's nothing to simulate if no newer birth was requested.
@@ -138,19 +182,16 @@ void ParticlePass::Advance(const RenderWorld& world, RenderingContext& context, 
 void ParticlePass::RenderShadows(const RenderWorld& world, RenderingContext& context, RenderingResources& resources) {
     resources.particleShadowView = nullptr;
     if (!sim_ || Drained() || world.directionalLight.intensity <= 0) return;
+    const auto views = sim_->RenderViews();
+    if (!views.castsShadows) return;
     auto* device = context.GetDevice();
     auto& manager = context.GetResourceManager();
     if (!shadows_) {
-        auto vsHandle = manager.CompileShader(EngineShader::ParticleShadowVS);
-        auto vs = manager.shaders_.Get(vsHandle).shader.vertexShader;
-        manager.DestroyShader(vsHandle);
-        auto psHandle = manager.CompileShader(EngineShader::ParticleShadowPS);
-        auto ps = manager.shaders_.Get(psHandle).shader.pixelShader;
-        manager.DestroyShader(psHandle);
         shadows_ = std::make_unique<ParticleShadows>();
-        rendering_detail::Check(shadows_->Initialize(device, {vs.Get(), ps.Get()}, budget_.maxParticles), "CreateParticleShadows", device);
+        rendering_detail::Check(shadows_->Initialize(device, {programs_->shadowVS.Get(), programs_->shadowPS.Get()},
+            budget_.maxParticles), "CreateParticleShadows", device);
     }
-    rendering_detail::Check(shadows_->Render(sim_->RenderViews(), textures_->View(), resources.cascadeInfo,
+    rendering_detail::Check(shadows_->Render(views, textures_->View(), resources.cascadeInfo,
         manager.textures_.Get(resources.shadowTexture).GetSRV()), "RenderParticleShadows", device);
     resources.particleShadowView = shadows_->View();
 }
@@ -170,9 +211,10 @@ void ParticlePass::Render(RenderWorld&, RenderingContext& context, RenderingReso
     auto* device = context.GetDevice();
     if (resources.debugView != RenderDebugView::Final) return;
     if (!tiles_) {
+        const auto& programs = programs_->tiles;
         tiles_ = std::make_unique<ParticleTiles>();
         rendering_detail::Check(tiles_->Initialize(device,
-            {tilePrograms_[0].Get(), tilePrograms_[1].Get(), tilePrograms_[2].Get(), tilePrograms_[3].Get()},
+            {programs[0].Get(), programs[1].Get(), programs[2].Get(), programs[3].Get()},
             budget_.maxParticles, resources.screenWith, resources.screenHeight), "CreateParticleTiles", device);
     }
     ParticleTiles::Camera camera;

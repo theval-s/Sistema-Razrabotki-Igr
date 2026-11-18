@@ -1,5 +1,6 @@
 #include <engine/rendering/EngineShaders.hpp>
 
+#include <engine/assets/AssetPathResolver.hpp>
 #include <engine/rendering/RenderingResources.hpp>
 
 #include <array>
@@ -41,6 +42,10 @@ const ShaderVariant& GetEngineShader(const EngineShader shader) {
         {L"engine/ParticleShadows.hlsl", Pixel, {}},
     }};
     return variants.at(static_cast<std::size_t>(shader));
+}
+
+std::filesystem::path GetProjectParticleHooksPath() {
+    return AssetPathResolver::GetGameRoot() / "shaders" / "ParticleHooks.hlsli";
 }
 
 } // namespace engine

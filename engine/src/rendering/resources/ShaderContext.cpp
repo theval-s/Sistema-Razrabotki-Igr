@@ -12,6 +12,7 @@
 #include <engine/core/Content.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
+#include <engine/rendering/EngineShaders.hpp>
 #include "../RenderingFailureUtils.hpp"
 
 namespace engine {
@@ -34,7 +35,7 @@ public:
             if (includeName == "sri/project/ParticleHooks.hlsli") {
                 // Resolve during source compilation only. In a cooked build the selected
                 // implementation is already baked into the pass's shader-library entry.
-                path = AssetPathResolver::GetGameRoot() / "shaders" / "ParticleHooks.hlsli";
+                path = GetProjectParticleHooksPath();
                 if (!content::IsFile(path)) path = includingFile.parent_path() / "DefaultParticleHooks.hlsli";
             } else if (includeName.starts_with("engine/") || includeName.starts_with("game/")) {
                 path = AssetPathResolver::ToAbsolute(AssetPathResolver::DefaultPath(includeName, AssetKind::Shader));

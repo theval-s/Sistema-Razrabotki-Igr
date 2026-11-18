@@ -774,6 +774,70 @@ TEST(RenderDebugNative, ParticlePopulationSurvivesPauseAndResizeAndHonorsBurstBu
     EXPECT_TRUE(hdr.pixels == resizedEmpty) << "Reset must discard both live particles and pending bursts";
 }
 
+TEST(RenderDebugNative, BrokenProjectParticleHookDisablesParticlesUntilTheFileIsFixed) {
+    NativeFiles files;
+    ASSERT_NE(files.window, nullptr);
+    struct HookFiles {
+        std::filesystem::path oldGameRoot = AssetPathResolver::GetGameRoot();
+        std::filesystem::path root = std::filesystem::temp_directory_path() / ("sri-particle-hook-" + NewUuid());
+        HookFiles() {
+            std::filesystem::create_directories(root / "shaders");
+            AssetPathResolver::SetGameRoot(root);
+        }
+        ~HookFiles() {
+            AssetPathResolver::SetGameRoot(oldGameRoot);
+            std::error_code ignored;
+            std::filesystem::remove_all(root, ignored);
+        }
+    } temporary;
+    std::string error;
+    const auto hook = temporary.root / "shaders" / "ParticleHooks.hlsli";
+    ASSERT_TRUE(WriteFileAtomic(hook, "void ParticleSpawn(inout Particle p) { not hlsl }\n", error)) << error;
+
+    RenderingSystem renderer;
+    const bool initialized = renderer.Initialize({files.window, InitialWidth, InitialHeight}, true);
+    const auto startup = renderer.GetDiagnostics();
+    if (!initialized && startup.failure && startup.failure->operation == "D3D11CreateDeviceAndSwapChain")
+        GTEST_SKIP() << "Native D3D11 unavailable: " << startup.failure->summary;
+    ASSERT_TRUE(initialized) << (startup.failure ? startup.failure->detail : "");
+    auto& world = renderer.GetWorld();
+    world.camera = FPSCamera{1, float(InitialWidth) / InitialHeight, 0.1f, 100};
+    world.camera.position = {0, 1, 0};
+    world.particleEmitters.push_back({.owner = 0x10000002aULL,
+        .settings = {.appearance = 2, .maxAlive = 8, .rate = 4, .lifetime = 10, .speed = 0, .radius = 0.5f, .spread = 0},
+        .position = {0, 1, -3}, .direction = {0, 1, 0}});
+
+    FrameContext frame;
+    const auto render = [&] {
+        ++frame.frameIndex;
+        SCOPED_TRACE(frame.frameIndex);
+        frame.realDeltaSeconds = frame.deltaSeconds = 0.25;
+        frame.realTimeSeconds += frame.realDeltaSeconds;
+        frame.simulationTimeSeconds += frame.deltaSeconds;
+        renderer.RenderFrame(frame, {});
+        const auto diagnostics = renderer.GetDiagnostics();
+        ASSERT_EQ(diagnostics.lifecycle, RenderingLifecycle::Ready)
+            << (diagnostics.failure ? diagnostics.failure->pass + "/" + diagnostics.failure->operation +
+                                          ": " + diagnostics.failure->detail : "");
+    };
+    for (int i = 0; i < 3; ++i) ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_EQ(renderer.GetParticleStats().simulationStep, 0u) << "A broken hook must leave particles off";
+
+    // Saving a working hook applies on the next advancing frame, without restarting the renderer.
+    ASSERT_TRUE(WriteFileAtomic(hook, R"(void ParticleSpawn(inout Particle p) {}
+void ParticleUpdate(inout Particle p, float dt) {}
+float4 ParticleAppearance(Particle p, float2 uv, float life01) { return float4(p.colorSize.rgb, 1); }
+)", error)) << error;
+    for (int i = 0; i < 120 && renderer.GetParticleStats().alive == 0; ++i) ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_GT(renderer.GetParticleStats().alive, 0u);
+
+    // Breaking it again stops particles without failing the renderer.
+    ASSERT_TRUE(WriteFileAtomic(hook, "float4 ParticleAppearance( {\n", error)) << error;
+    for (int i = 0; i < 3; ++i) ASSERT_NO_FATAL_FAILURE(render());
+    EXPECT_EQ(renderer.GetParticleStats().simulationStep, 0u);
+    renderer.Shutdown();
+}
+
 TEST(RenderDebugNative, ParticlePreviewUsesRealDeltaFiltersOwnersAndPreservesPausedStateAcrossResize) {
     NativeFiles files;
     ASSERT_NE(files.window, nullptr);

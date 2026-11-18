@@ -34,6 +34,7 @@ public:
         // Safe CPU bound for sizing a sorting network; never an admission result.
         std::uint32_t upperAlive{UINT32_MAX};
         ID3D11ShaderResourceView* settings{}; // borrowed owner styles; null = identity defaults
+        bool castsShadows{}; // some occupied slot's style casts shadows
     };
     struct EmitterStats { std::uint64_t owner; std::uint32_t alive, rejected; };
     struct Snapshot {

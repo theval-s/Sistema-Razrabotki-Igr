@@ -25,4 +25,7 @@ enum class EngineShader : std::uint8_t {
 /// `file` is a logical engine/ shader name, resolved like RenderingResourceManager::CompileShader does.
 [[nodiscard]] ENGINE_API const ShaderVariant& GetEngineShader(EngineShader shader);
 
+/// The project override that source compiles of `<sri/project/ParticleHooks.hlsli>` read when it exists.
+[[nodiscard]] ENGINE_API std::filesystem::path GetProjectParticleHooksPath();
+
 } // namespace engine
