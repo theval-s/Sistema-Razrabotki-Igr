@@ -26,7 +26,7 @@ Texture2D depthMap : register(t3);
 
 
 Texture2DArray shadowMap : register(t4);
-Texture2DArray<float> translucencyMap : register(t5);
+Texture2DArray<float> translucencyMap : register(t6); // BindSlots::Texture::ParticleShadow
 
 struct VS_IN {
     float4 pos : POSITION0;

@@ -226,4 +226,13 @@ void ParticlePass::Render(RenderWorld&, RenderingContext& context, RenderingReso
         textures.Get(resources.gBuffer.depthTexture).GetSRV(), textures.Get(resources.gBuffer.resultTexture).GetSRV(), textures_->View()),
         "RenderParticleTiles", device);
 }
+
+void ParticleShadowPass::Render(RenderWorld& world, RenderingContext& context, RenderingResources& resources) {
+    particles_.RenderShadows(world, context, resources);
+    // The light-view draws own raw D3D state, including multiplicative blending. Restore all
+    // defaults, not just SRVs, before the opaque G-buffer draws.
+    context.ClearState();
+    resources.BindCBuffers(context);
+    context.BindSamplers();
+}
 }
