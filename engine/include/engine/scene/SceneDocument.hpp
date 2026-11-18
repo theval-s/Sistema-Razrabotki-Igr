@@ -12,6 +12,7 @@
 #include <engine/assets/AssetCatalog.hpp>
 #include <engine/engine_export.hpp>
 #include <engine/rendering/RenderComponents.hpp>
+#include <engine/rendering/Particles.hpp>
 #include <engine/scene/Transform.hpp>
 #include <engine/physics/PhysicsComponents.hpp>
 #include <engine/audio/AudioComponents.hpp>
@@ -48,6 +49,7 @@ struct SceneEntityDefinition {
     std::optional<DirectionalLight> directionalLight;
     std::optional<PointLight> pointLight;
     std::optional<SpotLight> spotLight;
+    std::optional<ParticleEmitter> particleEmitter;
     std::optional<ControllerDefinition> controller;
     std::optional<Bounds> bounds;
     std::optional<RigidBody> rigidBody;

@@ -106,6 +106,7 @@ struct ENGINE_API RenderingResourceManager {
     bool DestroyBuffer(BufferHandle bufferHandle);
 
     friend RenderingContext;
+    friend class ParticlePass;
     friend ShaderContext;
 
 private:

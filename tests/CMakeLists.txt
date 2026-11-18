@@ -46,7 +46,7 @@ add_custom_command(TARGET rendering_skinning_tests POST_BUILD
 add_test(NAME rendering_skinning_tests COMMAND rendering_skinning_tests)
 
 foreach(render_target IN ITEMS rendering_diagnostics_tests rendering_resource_tests render_debug_view_tests
-        render_debug_native_tests asset_event_tests)
+        render_debug_native_tests asset_event_tests particle_simulation_tests particle_tiles_tests)
     add_executable(${render_target} ${render_target}.cpp)
     target_link_libraries(${render_target} PRIVATE Engine::EngineStatic GTest::gtest_main d3d11 d3dcompiler dxgi user32)
     target_compile_definitions(${render_target} PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
@@ -58,6 +58,7 @@ foreach(render_target IN ITEMS rendering_diagnostics_tests rendering_resource_te
         COMMAND_EXPAND_LISTS VERBATIM)
     add_test(NAME ${render_target} COMMAND ${render_target})
 endforeach()
+target_include_directories(particle_tiles_tests PRIVATE ../engine/src)
 
 # Exercise both generated export-header modes against the same utility contract.
 foreach(utf_target IN ITEMS utf_tests utf_shared_tests)

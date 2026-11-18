@@ -617,6 +617,7 @@ namespace {
             for (const auto& item : fs::recursive_directory_iterator(root)) {
                 if (!item.is_regular_file() || item.path().extension() == L".meta" ||
                     engine::CatalogKindForFile(item.path()) == engine::CatalogAssetKind::Shader ||
+                    engine::content::FoldCase(engine::ToUtf8(item.path().extension())) == ".hlsli" ||
                     cooked.sources.contains(item.path())) {
                     continue;
                 }

@@ -20,6 +20,8 @@
 
 namespace engine {
 
+class ParticlePass;
+
 struct ENGINE_API RenderingSystem {
     /// Explicit fresh attempt after construction/Shutdown: clears old failure and resets
     /// debug view to Final. Returns true only when Ready. Catches RenderingException.
@@ -47,6 +49,14 @@ struct ENGINE_API RenderingSystem {
     [[nodiscard]] RenderingContext& GetRenderingContext();
     [[nodiscard]] RenderingResourceManager& GetResourceManager();
     [[nodiscard]] RenderWorld& GetWorld();
+    /// Engine thread. Changing either budget clears live particles. Invalid limits leave them intact.
+    [[nodiscard]] bool SetParticleBudget(ParticleBudget budget);
+    [[nodiscard]] ParticleBudget GetParticleBudget() const noexcept { return particleBudget_; }
+    [[nodiscard]] const ParticleStats& GetParticleStats() const noexcept { return particleStats_; }
+    /// Submit additional births for an existing source on its next advancing frame. Excess is dropped.
+    void RequestParticleBurst(std::uint64_t owner, std::uint32_t count);
+    /// Clear simulation, fractional emission, and telemetry at scene/session boundaries.
+    void ResetParticles();
     /// Low-level inspection/readback view; engine thread only. The reference is
     /// borrowed from this renderer, not an owned diagnostics snapshot or GPU lease.
     /// Contents change during rendering and lifecycle calls. Use GPU handles only
@@ -64,6 +74,9 @@ private:
     RenderingContext renderingContext_{};
     RenderWorld world_{};
     RenderingResources resources_{0, 0};
+    ParticleBudget particleBudget_{};
+    ParticleStats particleStats_{};
+    ParticlePass* particlePass_{}; // owned by renderPasses_
     std::vector<std::unique_ptr<RenderPass>> renderPasses_{};
     bool ready_ = false;
     RenderingDiagnostics diagnostics_{};

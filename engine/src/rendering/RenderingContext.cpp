@@ -131,6 +131,9 @@ void RenderingContext::SetShader(const ShaderHandle h) {
     case ShaderType::Geometry:
         deviceContext_->GSSetShader(shader.shader.geometryShader.Get(), nullptr, 0);
         break;
+    case ShaderType::Compute:
+        deviceContext_->CSSetShader(shader.shader.computeShader.Get(), nullptr, 0);
+        break;
     }
 }
 

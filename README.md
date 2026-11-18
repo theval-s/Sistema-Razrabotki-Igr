@@ -30,6 +30,8 @@ examples: [material asset contract](docs/material-assets.md).
 
 Viewport status, render debug views, logs and developer APIs: [rendering diagnostics](docs/rendering-diagnostics.md).
 
+Smoke/fire emitters, GPU budgets, delayed counts, and custom HLSL: [particle guide](docs/particles.md).
+
 Code-only scene saving/loading, UUID sidecars, asset scope, render extraction and
 metadata generation: [scene and asset guide](docs/scene-assets.md).
 

@@ -16,6 +16,8 @@ enum class EngineShader : std::uint8_t {
     PresentVS, PresentPS, OutlinedPresentPS,
     LinesVS, ScreenLinesVS, LinesGS, LinesPS,
     SelectionVisiblePS, SelectionOccludedPS,
+    ParticleUpdate, ParticleAdmit, ParticleSpawn,
+    ParticleBuild, ParticleMerge, ParticleBin, ParticleShade,
     Count
 };
 

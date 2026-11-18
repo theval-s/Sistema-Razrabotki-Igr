@@ -130,6 +130,7 @@ struct RenderingResources {
     uint32_t screenHeight = 0;
     // Per-frame copy of RenderingSystem selection, consumed only by presentation.
     RenderDebugView debugView = RenderDebugView::Final;
+    double simulationDeltaSeconds{};
 
     ConstantBuffer<FrameBufferData> frameCBuffer;
     ConstantBuffer<ViewBufferData> viewCBuffer;

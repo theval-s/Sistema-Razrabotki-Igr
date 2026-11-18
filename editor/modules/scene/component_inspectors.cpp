@@ -46,6 +46,7 @@
 #include <engine/engine.hpp>
 #include <engine/physics/PhysicsComponents.hpp>
 #include <engine/rendering/RenderComponents.hpp>
+#include <engine/rendering/Particles.hpp>
 #include <engine/scene/Scene.hpp>
 
 #include <editor/asset_picker.hpp>
@@ -525,6 +526,19 @@ void buildSkinnedMeshRenderer(PropertyForm& form, editor::EditorContext& context
         }
         diagnostic->setText(text);
     });
+}
+
+void buildParticleEmitter(PropertyForm& form, editor::EditorContext& context, const entt::entity entity) {
+    engine::Scene& scene = context.scene();
+    form.addUInt32(QObject::tr("Appearance"), field(scene, entity, &engine::ParticleEmitter::appearance));
+    form.addUInt32(QObject::tr("Max Alive"), field(scene, entity, &engine::ParticleEmitter::maxAlive), 1);
+    form.addUInt32(QObject::tr("Seed"), field(scene, entity, &engine::ParticleEmitter::seed));
+    form.addFloat(QObject::tr("Rate"), field(scene, entity, &engine::ParticleEmitter::rate), {.minimum = 0.0});
+    form.addFloat(QObject::tr("Lifetime"), field(scene, entity, &engine::ParticleEmitter::lifetime), {.minimum = 0.001});
+    form.addFloat(QObject::tr("Speed"), field(scene, entity, &engine::ParticleEmitter::speed), {.minimum = 0.0});
+    form.addFloat(QObject::tr("Radius"), field(scene, entity, &engine::ParticleEmitter::radius), {.minimum = 0.0});
+    form.addFloat(QObject::tr("Spread"), field(scene, entity, &engine::ParticleEmitter::spread), {.minimum = 0.0});
+    form.addColor(QObject::tr("Tint"), field(scene, entity, &engine::ParticleEmitter::tint));
 }
 
 void addAnimatorReference(PropertyForm& form, editor::EditorContext& context, entt::entity entity,
@@ -1577,6 +1591,8 @@ std::span<const ComponentInspector> componentInspectors() {
          addMeshRenderer, removeComponent<engine::MeshRenderer>},
         {entt::type_hash<engine::SkinnedMeshRenderer>::value(), QObject::tr("Skinned Mesh Renderer"), buildSkinnedMeshRenderer,
          addSkinnedMeshRenderer, removeComponent<engine::SkinnedMeshRenderer>},
+        {entt::type_hash<engine::ParticleEmitter>::value(), QObject::tr("Particle Emitter"), buildParticleEmitter,
+         addComponent<engine::ParticleEmitter>, removeComponent<engine::ParticleEmitter>},
         {entt::type_hash<engine::Animator>::value(), QObject::tr("Animator"), buildAnimator,
          addComponent<engine::Animator>, removeComponent<engine::Animator>},
         {entt::type_hash<engine::NavigationRegion>::value(), QObject::tr("NavMesh"), buildNavigationRegion},

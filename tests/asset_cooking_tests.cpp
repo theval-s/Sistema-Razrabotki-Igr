@@ -2,7 +2,9 @@
 #include <engine/assets/AssetCooking.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
+#include <engine/core/Content.hpp>
 #include <engine/core/FileSystem.hpp>
+#include <engine/core/Pak.hpp>
 #include "animation/AnimationData.hpp"
 
 #include <gtest/gtest.h>
@@ -262,6 +264,87 @@ TEST_F(AssetCooking, CookedBuildReadsShadersFromTheLibraryOnly) {
     EXPECT_EQ(compiled.blob->GetBufferSize(), bytecode->size());
     EXPECT_THROW((void)ShaderContext::CompileCpu(file, ShaderType::Vertex, {.defines = {{"SCALE", "3"}}}),
                  RenderingException);
+}
+
+TEST_F(AssetCooking, CookedComputeShaderLoadsAndReflectsWithoutSource) {
+    const auto file = root / "shaders" / "compute.hlsl";
+    fs::create_directories(file.parent_path());
+    ASSERT_TRUE(WriteFileAtomic(file, R"(
+RWStructuredBuffer<uint> outputData : register(u1);
+[numthreads(4, 1, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID) { outputData[id.x] = id.x; }
+)", error)) << error;
+    const auto bytecode = ShaderContext::CompileForShipping(file, ShaderType::Compute, {}, error);
+    ASSERT_TRUE(bytecode) << error;
+    ShaderLibrary library;
+    const auto key = ShaderLibrary::Key(file, ShaderType::Compute, {});
+    EXPECT_NE(key, ShaderLibrary::Key(file, ShaderType::Geometry, {}));
+    library.Add(key, *bytecode);
+    std::vector<std::uint8_t> bytes;
+    ASSERT_TRUE(library.Serialize(bytes, error)) << error;
+    const auto cooked = root / "cooked";
+    fs::create_directories(cooked);
+    ASSERT_TRUE(WriteFileAtomic(cooked / ShaderLibraryName,
+        std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), error)) << error;
+    fs::remove(file);
+    ManifestScope manifest(cooked / "manifest.json");
+    const auto compiled = ShaderContext::CompileCpu(file, ShaderType::Compute);
+    ASSERT_TRUE(compiled.reflection);
+    ASSERT_EQ(compiled.bindings.size(), 1u);
+    EXPECT_EQ(compiled.bindings[0].name, "outputData");
+    EXPECT_EQ(compiled.bindings[0].slot, 1);
+    EXPECT_EQ(compiled.diagnosticContext.target, "cs_5_0");
+}
+
+TEST_F(AssetCooking, ParticleHooksUseMountedIncludesAndBakeIntoTheShaderLibrary) {
+    const auto shaders = root / "engine-shaders";
+    fs::create_directories(shaders);
+    for (const auto* name : {"ParticleSim.hlsl", "ParticleHooks.hlsli", "Particle.hlsli", "DefaultParticleHooks.hlsli"}) {
+        fs::copy_file(fs::path(SRI_SOURCE_ROOT) / "engine/shaders" / name, shaders / name);
+    }
+    const auto file = shaders / "ParticleSim.hlsl";
+    const ShaderCompileOptions options{.defines = {{"PARTICLE_SIM_UPDATE", "1"}}};
+    const auto stock = ShaderContext::CompileForShipping(file, ShaderType::Compute, options, error);
+    ASSERT_TRUE(stock) << error;
+
+    const auto bytes = [](std::string_view text) { return std::vector<std::uint8_t>(text.begin(), text.end()); };
+    PakWriter writer;
+    writer.AddBytes("shaders/ParticleHooks.hlsli", bytes(R"(
+#include "support/Tuning.hlsli"
+void ParticleSpawn(inout Particle p) {}
+void ParticleUpdate(inout Particle p, float dt) { p.velocityLifetime.y += Lift * dt; }
+float4 ParticleAppearance(Particle p, float2 uv, float life01) { return float4(p.colorSize.rgb, 1); }
+)"), false);
+    writer.AddBytes("shaders/support/Tuning.hlsli", bytes("static const float Lift = 4.0;\n"), false);
+    const auto pack = root / "hooks.sripak";
+    ASSERT_TRUE(writer.Write(pack, error)) << error;
+    const auto source = PakSource::Load(pack, error);
+    ASSERT_TRUE(source) << error;
+
+    std::optional<std::vector<std::uint8_t>> custom;
+    {
+        struct UnmountAtExit {
+            const fs::path& path;
+            ~UnmountAtExit() { content::Unmount(path); }
+        } unmount{root};
+        content::Mount(root, source);
+        EXPECT_NO_THROW((void)ShaderContext::CompileCpu(file, ShaderType::Compute, options));
+        custom = ShaderContext::CompileForShipping(file, ShaderType::Compute, options, error);
+        ASSERT_TRUE(custom) << error;
+        EXPECT_NE(*stock, *custom);
+    }
+    fs::remove_all(shaders);
+
+    ShaderLibrary library;
+    library.Add(ShaderLibrary::Key(file, ShaderType::Compute, options), *custom);
+    std::vector<std::uint8_t> serialized;
+    ASSERT_TRUE(library.Serialize(serialized, error)) << error;
+    ASSERT_TRUE(WriteFileAtomic(root / ShaderLibraryName,
+        {reinterpret_cast<const char*>(serialized.data()), serialized.size()}, error)) << error;
+    ManifestScope manifest(root / "manifest.json");
+    const auto cooked = ShaderContext::CompileCpu(file, ShaderType::Compute, options);
+    ASSERT_EQ(cooked.blob->GetBufferSize(), custom->size());
+    EXPECT_EQ(std::memcmp(cooked.blob->GetBufferPointer(), custom->data(), custom->size()), 0);
 }
 
 TEST_F(AssetCooking, ManifestRestoresTheCatalogUnderNewRoots) {

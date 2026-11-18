@@ -20,6 +20,8 @@ bool RenderingSubsystem::Initialize() {
     return true;
 }
 
+void RenderingSubsystem::ResetSimulation() { renderer_.ResetParticles(); }
+
 void RenderingSubsystem::Shutdown() {
     ClearHostOverlayCallbacks();
     ClearOverlayCallbacks();

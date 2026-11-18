@@ -43,6 +43,7 @@ void RenderExtractionSubsystem::Shutdown() {
     if (rendering_) {
         rendering_->GetWorld().sceneItems.clear();
         rendering_->GetWorld().lights.clear();
+        rendering_->GetWorld().particleEmitters.clear();
     }
     rendering_ = nullptr;
 }
@@ -54,6 +55,14 @@ void RenderExtractionSubsystem::LateUpdate(const FrameContext&) {
     RenderWorld& world = rendering_->GetWorld();
     world.sceneItems.clear();
     world.lights.clear();
+    world.particleEmitters.clear();
+    scene.ForEach<ParticleEmitter>([&](entt::entity entity, const ParticleEmitter& emitter) {
+        const auto matrix = scene.GetWorldMatrix(entity);
+        Vector3 up = matrix.Up();
+        if (up.LengthSquared() > 0) up.Normalize();
+        else up = Vector3::Up;
+        world.particleEmitters.push_back({entt::to_integral(entity), emitter, matrix.Translation(), up});
+    });
     scene.ForEach<MeshRenderer>([&](entt::entity entity, const MeshRenderer& renderer) {
         const auto mesh = assets.Peek(renderer.mesh);
         if (!mesh) return;

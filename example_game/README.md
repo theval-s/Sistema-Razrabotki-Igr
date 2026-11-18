@@ -7,6 +7,12 @@ configured output folder; the executable resolves its adjacent `engine/` and
 
 ## Controls and audio tour
 
+The default scene also contains editable smoke and fire ParticleEmitter entities.
+Their direction is local up; rotating either entity changes its emission direction.
+The standalone engine scene assets `engine/scenes/smoke.scene.json` and
+`engine/scenes/fire.scene.json` can also be parsed and instantiated as entity sets.
+Appearance IDs 0 and 1 select smoke and fire; IDs 2 and above are custom.
+
 - WASD: move; mouse: look; Q/E: down/up; Shift: sprint.
 - P: pause/settings; I: inventory; F5/F9: save/load; R: raycast.
 - T: Lua-triggered mono one-shot at the enchanted cube, independent of its entity.

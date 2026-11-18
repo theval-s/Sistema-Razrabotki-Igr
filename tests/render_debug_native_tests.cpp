@@ -478,6 +478,153 @@ TEST(RenderDebugNative, GizmoHostAndEngineOverlayLeasesShareBackbufferInOrderAcr
     host.Shutdown();
 }
 
+TEST(RenderDebugNative, ParticlePopulationSurvivesPauseAndResizeAndHonorsBurstBudgetAndReset) {
+    NativeFiles files;
+    ASSERT_NE(files.window, nullptr);
+    // Use the engine fallback appearance: stationary, visible from birth, and HDR.
+    AssetPathResolver::SetGameRoot(std::filesystem::path(SRI_SOURCE_ROOT) / "tests");
+    RenderingSystem renderer;
+    const bool initialized = renderer.Initialize({files.window, InitialWidth, InitialHeight}, true);
+    const auto startup = renderer.GetDiagnostics();
+    if (!initialized && startup.failure && startup.failure->operation == "D3D11CreateDeviceAndSwapChain")
+        GTEST_SKIP() << "Native D3D11 unavailable: " << startup.failure->summary;
+    ASSERT_TRUE(initialized) << (startup.failure ? startup.failure->detail : "");
+    ASSERT_TRUE(renderer.SetParticleBudget({.maxParticles = 8, .maxEmitters = 2}));
+
+    auto& world = renderer.GetWorld();
+    auto& context = renderer.GetRenderingContext();
+    auto* const device = context.GetDevice();
+    world.camera = FPSCamera{1, float(InitialWidth) / InitialHeight, 0.1f, 100};
+    world.camera.position = {0, 1, 0};
+    world.directionalLight = {{0, 0, 0}, {0, -1, -1}, {1, 1, 1}, 0, 0, LightInfo::Directional};
+    constexpr uint64_t owner = 0x10000002aULL, overflowOwner = 0x20000002aULL;
+    RenderWorld::EmitterSource source{
+        .owner = owner,
+        .settings = {.appearance = 2, .maxAlive = 8, .rate = 4, .lifetime = 0.5f,
+                     .speed = 0, .radius = 0.5f, .spread = 0, .tint = {4, 0, 0}},
+        .position = {0, 1, -3}, .direction = {0, 1, 0}};
+
+    Image hdr;
+    FrameContext frame;
+    const auto render = [&](bool paused) {
+        ++frame.frameIndex;
+        SCOPED_TRACE(frame.frameIndex);
+        frame.realDeltaSeconds = 0.25;
+        frame.realTimeSeconds += frame.realDeltaSeconds;
+        frame.deltaSeconds = paused ? 0 : frame.realDeltaSeconds;
+        frame.simulationTimeSeconds += frame.deltaSeconds;
+        frame.paused = paused;
+        bool captured = false;
+        renderer.RenderFrame(frame, [&](RenderingContext& ctx, const FrameContext&) {
+            // The blocking test readback follows the telemetry copy in the GPU queue.
+            // The next frame can poll it without advancing simulation or relying on sleeps.
+            ASSERT_NO_FATAL_FAILURE(ReadHandle(ctx, renderer.GetResources().gBuffer.resultTexture, hdr));
+            captured = true;
+        });
+        const auto diagnostics = renderer.GetDiagnostics();
+        ASSERT_EQ(diagnostics.lifecycle, RenderingLifecycle::Ready)
+            << (diagnostics.failure ? diagnostics.failure->pass + "/" + diagnostics.failure->operation +
+                                          ": " + diagnostics.failure->detail : "");
+        ASSERT_TRUE(captured);
+        ASSERT_EQ(context.GetDevice(), device);
+        ASSERT_NO_FATAL_FAILURE(ExpectNoHazards(device));
+    };
+
+    const auto expectSample = [&](uint64_t step, uint32_t alive, uint64_t rejected) {
+        SCOPED_TRACE(step);
+        for (int i = 0; i < 4 && renderer.GetParticleStats().simulationStep < step; ++i)
+            ASSERT_NO_FATAL_FAILURE(render(true));
+        const auto& stats = renderer.GetParticleStats();
+        ASSERT_EQ(stats.simulationStep, step);
+        ASSERT_EQ(stats.alive, alive);
+        ASSERT_EQ(stats.rejected, rejected);
+    };
+
+    ASSERT_NO_FATAL_FAILURE(render(false));
+    EXPECT_EQ(renderer.GetParticleStats().simulationStep, 0u);
+    EXPECT_EQ(renderer.GetParticleStats().tileFrame, 0u);
+    ExpectPixel(hdr.At(hdr.width / 2, hdr.height / 2), {0, 0, 0, 1});
+
+    world.particleEmitters.push_back(source);
+    ASSERT_NO_FATAL_FAILURE(render(false));
+    ASSERT_NO_FATAL_FAILURE(expectSample(1, 1, 0));
+    EXPECT_GT(hdr.At(hdr.width / 2, hdr.height / 2)[0], 1.0f);
+    EXPECT_GT(renderer.GetParticleStats().peakTileOccupancy, 0u);
+    const auto first = hdr.pixels;
+
+    renderer.RequestParticleBurst(owner, 2);
+    // Keep the rate active and run longer than the first particle's lifetime in real time.
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_NO_FATAL_FAILURE(render(true));
+        ASSERT_NO_FATAL_FAILURE(expectSample(1, 1, 0));
+        EXPECT_TRUE(hdr.pixels == first) << "Pause changed particle shading or population";
+    }
+
+    constexpr UINT resizedWidth = 240, resizedHeight = 180;
+    ASSERT_TRUE(SetWindowPos(files.window, nullptr, 20, 20, static_cast<int>(resizedWidth),
+                             static_cast<int>(resizedHeight), SWP_NOZORDER | SWP_NOACTIVATE));
+    ASSERT_TRUE(renderer.Reinitialize({files.window, resizedWidth, resizedHeight}));
+    ASSERT_NO_FATAL_FAILURE(render(true));
+    EXPECT_EQ(hdr.width, resizedWidth);
+    EXPECT_EQ(hdr.height, resizedHeight);
+    EXPECT_GT(hdr.At(hdr.width / 2, hdr.height / 2)[0], 1.0f) << "Resize lost live GPU particles";
+    ASSERT_NO_FATAL_FAILURE(expectSample(1, 1, 0));
+
+    // Only the queued burst adds particles on resume. Extend the new births' lifetime
+    // so the original particle's death is distinguishable on the following step.
+    source.settings.rate = 0;
+    source.settings.lifetime = 1;
+    world.particleEmitters.front() = source;
+    ASSERT_NO_FATAL_FAILURE(render(false));
+    ASSERT_NO_FATAL_FAILURE(expectSample(2, 3, 0));
+    ASSERT_NO_FATAL_FAILURE(render(false));
+    ASSERT_NO_FATAL_FAILURE(expectSample(3, 2, 0));
+
+    ASSERT_TRUE(renderer.SetParticleBudget({.maxParticles = 2, .maxEmitters = 1}));
+    ASSERT_NO_FATAL_FAILURE(render(false));
+    ASSERT_NO_FATAL_FAILURE(expectSample(0, 0, 0));
+    ExpectPixel(hdr.At(hdr.width / 2, hdr.height / 2), {0, 0, 0, 1});
+    const auto resizedEmpty = hdr.pixels;
+
+    source.settings.lifetime = 0.5f;
+    auto overflow = source;
+    overflow.owner = overflowOwner;
+    world.particleEmitters = {source, overflow};
+    renderer.RequestParticleBurst(owner, 5);
+    renderer.RequestParticleBurst(overflowOwner, 3);
+    ASSERT_NO_FATAL_FAILURE(render(false));
+    ASSERT_NO_FATAL_FAILURE(expectSample(1, 2, 6));
+    const auto& rows = renderer.GetParticleStats().emitters;
+    ASSERT_EQ(rows.size(), 2u);
+    for (const auto id : {owner, overflowOwner}) {
+        const auto row = std::find_if(rows.begin(), rows.end(), [id](const auto& entry) { return entry.owner == id; });
+        ASSERT_NE(row, rows.end());
+        EXPECT_EQ(row->alive, id == owner ? 2u : 0u);
+        EXPECT_EQ(row->rejected, 3u);
+    }
+    EXPECT_GT(hdr.At(hdr.width / 2, hdr.height / 2)[0], 1.0f);
+
+    ASSERT_NO_FATAL_FAILURE(render(false));
+    ASSERT_NO_FATAL_FAILURE(expectSample(2, 2, 0)); // Rejections are for the burst step only.
+    ASSERT_NO_FATAL_FAILURE(render(false));
+    ASSERT_NO_FATAL_FAILURE(expectSample(3, 0, 0));
+    EXPECT_TRUE(hdr.pixels == resizedEmpty) << "Dropped births must not respawn when capacity frees up";
+
+    renderer.RequestParticleBurst(owner, 1);
+    ASSERT_NO_FATAL_FAILURE(render(false));
+    ASSERT_NO_FATAL_FAILURE(expectSample(4, 1, 0));
+    renderer.RequestParticleBurst(owner, 1);
+    renderer.ResetParticles();
+    EXPECT_TRUE(world.particleEmitters.empty());
+    world.particleEmitters.push_back(source); // Re-extract the original owner at zero rate.
+    ASSERT_NO_FATAL_FAILURE(render(false));
+    ASSERT_NO_FATAL_FAILURE(render(true));
+    ASSERT_NO_FATAL_FAILURE(expectSample(0, 0, 0));
+    EXPECT_TRUE(renderer.GetParticleStats().emitters.empty());
+    EXPECT_EQ(renderer.GetParticleStats().tileFrame, 0u);
+    EXPECT_TRUE(hdr.pixels == resizedEmpty) << "Reset must discard both live particles and pending bursts";
+}
+
 std::filesystem::path Executable() {
     std::wstring path(32768, L'\0');
     const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
