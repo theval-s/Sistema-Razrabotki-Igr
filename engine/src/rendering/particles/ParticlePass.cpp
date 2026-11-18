@@ -71,8 +71,12 @@ bool ParticlePass::Collect(const RenderWorld& world, RenderingContext& context, 
         if (FAILED(hr)) {
             // An authored texture must never quietly become a different effect. The retained
             // layers still serve draining particles; restart frees them after extensive editing.
-            if (textureFailures_.insert(source.owner).second)
-                log::Render().error("Particle emitter {} texture unavailable (HRESULT {:08X}); restart particles to reclaim texture layers", source.owner, static_cast<std::uint32_t>(hr));
+            if (!textureFailures_.insert(source.owner).second) continue;
+            if (hr == HRESULT_FROM_WIN32(ERROR_NO_MORE_ITEMS))
+                log::Render().error("Particle emitter {}: all {} particle texture layers are in use; restart particles to reclaim them",
+                    source.owner, ParticleTextureLayers - 1);
+            else
+                log::Render().error("Particle emitter {} texture unavailable (HRESULT {:08X})", source.owner, static_cast<std::uint32_t>(hr));
             continue;
         }
         textureFailures_.erase(source.owner);
