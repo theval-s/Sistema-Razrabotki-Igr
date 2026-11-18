@@ -119,7 +119,7 @@ struct Engine::Impl {
 };
 
 std::string_view version() noexcept {
-    return "0.4.0";
+    return "0.5.0";
 }
 
 Engine::Engine(EngineConfig config) : impl_(std::make_unique<Impl>(std::move(config))) {
