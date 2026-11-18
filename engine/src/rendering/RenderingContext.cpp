@@ -135,6 +135,9 @@ void RenderingContext::SetShader(const ShaderHandle h) {
     case ShaderType::Geometry:
         deviceContext_->GSSetShader(shader.shader.geometryShader.Get(), nullptr, 0);
         break;
+    case ShaderType::Compute:
+        deviceContext_->CSSetShader(shader.shader.computeShader.Get(), nullptr, 0);
+        break;
     }
 }
 
@@ -279,6 +282,10 @@ void RenderingContext::SetShaderResources(const BindSlot slot, const TextureHand
     const auto& texture = resourceManager_.textures_.Get(h);
     const auto srv = texture.GetSRV();
     if (!srv) rendering_detail::Check(E_INVALIDARG, "SetShaderResources", device_.Get(), "Required shader-resource view is absent.");
+    SetShaderResources(slot, srv);
+}
+
+void RenderingContext::SetShaderResources(const BindSlot slot, ID3D11ShaderResourceView* srv) {
     if (slot.HasStage(ShaderStage::Vertex)) {
         deviceContext_->VSSetShaderResources(slot.id_, 1, &srv);
     }

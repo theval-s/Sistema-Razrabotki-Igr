@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <limits>
 #include <utility>
 
 #include <DirectXMath.h>
@@ -128,6 +129,19 @@ PropertyForm::PropertyForm(QWidget* parent) : QWidget(parent), layout_(new QForm
 
 void PropertyForm::addFloat(const QString& label, Binding<float> value, const NumberFormat format) {
     addScaledFloat(label, std::move(value), format, 1.0);
+}
+
+void PropertyForm::addUInt32(const QString& label, Binding<std::uint32_t> value, const std::uint32_t minimum) {
+    value.set = recorded(label, std::move(value.set));
+    QDoubleSpinBox* box = makeSpinBox(this, {.step = 1.0, .decimals = 0, .minimum = static_cast<double>(minimum),
+                                             .maximum = static_cast<double>(std::numeric_limits<std::uint32_t>::max())});
+    layout_->addRow(label, box);
+    connect(box, &QDoubleSpinBox::valueChanged, this, [set = value.set](const double shown) {
+        set(static_cast<std::uint32_t>(shown));
+    });
+    refreshers_.push_back([box, get = value.get] {
+        if (const std::uint32_t* current = get()) showValue(box, *current);
+    });
 }
 
 void PropertyForm::addAngle(const QString& label, Binding<float> value, const NumberFormat format) {

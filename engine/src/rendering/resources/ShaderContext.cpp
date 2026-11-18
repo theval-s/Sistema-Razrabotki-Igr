@@ -9,8 +9,10 @@
 
 #include <engine/assets/AssetCooking.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
+#include <engine/core/Content.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
+#include <engine/rendering/EngineShaders.hpp>
 #include "../RenderingFailureUtils.hpp"
 
 namespace engine {
@@ -27,12 +29,17 @@ public:
         try {
             if (!name || !data || !size) return E_POINTER;
             const std::string_view includeName{name};
+            const auto it = files_.find(parent);
+            const auto& includingFile = it == files_.end() ? sourcePath_ : it->second->path;
             std::filesystem::path path;
-            if (includeName.starts_with("engine/") || includeName.starts_with("game/")) {
+            if (includeName == "sri/project/ParticleHooks.hlsli") {
+                // Resolve during source compilation only. In a cooked build the selected
+                // implementation is already baked into the pass's shader-library entry.
+                path = GetProjectParticleHooksPath();
+                if (!content::IsFile(path)) path = includingFile.parent_path() / "DefaultParticleHooks.hlsli";
+            } else if (includeName.starts_with("engine/") || includeName.starts_with("game/")) {
                 path = AssetPathResolver::ToAbsolute(AssetPathResolver::DefaultPath(includeName, AssetKind::Shader));
             } else if (type == D3D_INCLUDE_LOCAL) {
-                const auto it = files_.find(parent);
-                const auto& includingFile = it == files_.end() ? sourcePath_ : it->second->path;
                 path = includingFile.parent_path() / FromUtf8(includeName);
             } else {
                 error_ += "Unsupported system include: " + std::string(name) + "\n";
@@ -86,7 +93,7 @@ namespace {
 ShaderDiagnosticContext DiagnosticContext(ShaderType type, const ShaderCompileOptions& options) {
     ShaderDiagnosticContext context;
     context.stage = type == ShaderType::Vertex ? "vertex" : type == ShaderType::Pixel ? "pixel" :
-                    type == ShaderType::Geometry ? "geometry" : "unknown";
+                    type == ShaderType::Geometry ? "geometry" : type == ShaderType::Compute ? "compute" : "unknown";
     context.entryPoint = options.entryPoint.empty() ? GetEntryPoint(type) : options.entryPoint;
     context.target = GetDX11Target(type);
     for (const auto& define : options.defines) context.defines.emplace_back(define.name, define.value);
@@ -177,6 +184,7 @@ const char* GetEntryPoint(const ShaderType type) {
     case ShaderType::Vertex: return "VSMain";
     case ShaderType::Pixel: return "PSMain";
     case ShaderType::Geometry: return "GSMain";
+    case ShaderType::Compute: return "CSMain";
     }
     return "";
 }
@@ -186,6 +194,7 @@ const char* GetDX11Target(const ShaderType type) {
     case ShaderType::Vertex: return "vs_5_0";
     case ShaderType::Pixel: return "ps_5_0";
     case ShaderType::Geometry: return "gs_5_0";
+    case ShaderType::Compute: return "cs_5_0";
     }
     return "";
 }
@@ -304,6 +313,17 @@ ShaderContext ShaderContext::FinalizeOnDevice(const CompiledShader& compiled,
             CheckShader(r, "CreateGeometryShader", compiled, {}, device);
         }
         result.shader.geometryShader = std::move(gs);
+        break;
+    }
+    case ShaderType::Compute: {
+        ComPtr<ID3D11ComputeShader> cs;
+        if (const auto r = device->CreateComputeShader(
+            result.blob->GetBufferPointer(),
+            result.blob->GetBufferSize(),
+            nullptr, &cs); FAILED(r)) {
+            CheckShader(r, "CreateComputeShader", compiled, {}, device);
+        }
+        result.shader.computeShader = std::move(cs);
         break;
     }
     default:

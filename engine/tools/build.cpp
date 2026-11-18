@@ -291,6 +291,22 @@ namespace {
         validateSkeletal(engine::CatalogAssetKind::AnimationClip, engine::AssetKind::AnimationClip, clips);
         validateSkeletal(engine::CatalogAssetKind::SkinnedMesh, engine::AssetKind::SkinnedMesh, meshes);
 
+        for (const auto* entry : catalog.List(engine::CatalogAssetKind::ParticleEffect)) {
+            engine::CpuPayload payload;
+            engine::AssetDesc desc;
+            desc.name = entry->path;
+            desc.path = entry->source;
+            error.clear();
+            if (!engine::ParticleEffectImporter{}.ReadCpu(desc, nullptr, payload, error)) {
+                errors.push_back(entry->path + ": " + error);
+                continue;
+            }
+            const auto& texture = payload.particleEffect.texture;
+            if (texture.id.IsValid() && !catalog.Find(texture.id, engine::CatalogAssetKind::Texture))
+                errors.push_back(entry->path + ": texture references missing or wrong-kind asset " +
+                    texture.id.ToString() + " (" + texture.path + ")");
+        }
+
         for (const auto* mesh : catalog.List(engine::CatalogAssetKind::Mesh)) {
             for (std::size_t slot = 0; slot < mesh->metadata.materials.size(); ++slot) {
                 const auto& material = mesh->metadata.materials[slot];
@@ -346,6 +362,9 @@ namespace {
                     checkReference(entity.skinnedRenderer->materialInstance, engine::CatalogAssetKind::MaterialInstance,
                                    "SkinnedMeshRenderer.materialInstance");
                 }
+                if (entity.particleEmitter)
+                    checkReference(entity.particleEmitter->effect, engine::CatalogAssetKind::ParticleEffect,
+                                   "ParticleEmitter.effect");
                 if (entity.behaviorTree) {
                     checkReference(entity.behaviorTree->tree, engine::CatalogAssetKind::BehaviorTree, "BehaviorTree.tree");
                 }
@@ -617,6 +636,7 @@ namespace {
             for (const auto& item : fs::recursive_directory_iterator(root)) {
                 if (!item.is_regular_file() || item.path().extension() == L".meta" ||
                     engine::CatalogKindForFile(item.path()) == engine::CatalogAssetKind::Shader ||
+                    engine::content::FoldCase(engine::ToUtf8(item.path().extension())) == ".hlsli" ||
                     cooked.sources.contains(item.path())) {
                     continue;
                 }

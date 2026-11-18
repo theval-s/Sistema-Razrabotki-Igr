@@ -140,6 +140,9 @@ struct RenderingResources {
     ConstantBuffer<SkinningBufferData> skinningCBuffer;
 
     TextureHandle shadowTexture;
+    // Borrowed from ParticleShadows; publisher clears before destroying/resetting helper.
+    // Null is identity transmittance in LightPass.
+    ID3D11ShaderResourceView* particleShadowView{};
     // R = visible selected pixels, G = selected pixels behind scene depth.
     TextureHandle selectionMask;
     GBuffer gBuffer;

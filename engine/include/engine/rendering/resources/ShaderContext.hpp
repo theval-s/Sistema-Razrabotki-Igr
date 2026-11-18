@@ -24,6 +24,7 @@ enum class ShaderType {
     Vertex,
     Pixel,
     Geometry,
+    Compute,
 };
 
 struct ShaderDefine {
@@ -32,7 +33,7 @@ struct ShaderDefine {
 };
 
 struct ShaderCompileOptions {
-    /// Empty selects VSMain, PSMain or GSMain for the requested stage.
+    /// Empty selects VSMain, PSMain, GSMain or CSMain for the requested stage.
     std::string entryPoint;
     std::vector<ShaderDefine> defines;
 };
@@ -57,6 +58,7 @@ struct ENGINE_API DXShader {
     ComPtr<ID3D11VertexShader> vertexShader;
     ComPtr<ID3D11PixelShader> pixelShader;
     ComPtr<ID3D11GeometryShader> geometryShader;
+    ComPtr<ID3D11ComputeShader> computeShader;
 };
 
 /// Bytecode and reflection of one compiled stage. Device-independent: it can be produced

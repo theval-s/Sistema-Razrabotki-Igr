@@ -69,6 +69,7 @@ void LightPass::Render(RenderWorld& world, RenderingContext& context, RenderingR
     context.SetShaderResources(BindSlots::Texture::Material, gBuffer.materialTexture);
     context.SetShaderResources(BindSlots::Texture::Depth, gBuffer.depthTexture);
     context.SetShaderResources(BindSlots::Texture::Shadow, resources.shadowTexture);
+    context.SetShaderResources(BindSlots::Texture::ParticleShadow, resources.particleShadowView);
 
     for (const auto & light : world.lights) {
         UpdateLight(context, resources, light);

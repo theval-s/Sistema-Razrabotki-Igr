@@ -26,7 +26,7 @@ Texture2D depthMap : register(t3);
 
 
 Texture2DArray shadowMap : register(t4);
-//Texture2DArray translucencyMap : register(t5);
+Texture2DArray<float> translucencyMap : register(t6); // BindSlots::Texture::ParticleShadow
 
 struct VS_IN {
     float4 pos : POSITION0;
@@ -66,11 +66,6 @@ float SampleShadowHybridPCF(float2 pixelCoords, int layer, float z, float2 depth
                 float3(pixelCoords + offset, layer),
                 z + dot(float2(x, y), depthPerTexel)
             ).r;
-            // float translucency =  1 - translucencyMap.SampleLevel(translucencySampler,
-            //                                                  float3(pixelCoords + offset / 2, layer),
-            //                                                  0.f).r;
-            // sum += min(shadow, translucency);
-
             sum += shadow;
             samples++;
         }
@@ -101,7 +96,16 @@ float SampleCascadeShadow(float3 worldPos, float3 normal, float3 lightDir, float
         depthPerTexel.x = dot(dx - lightDir * (dot(normal, dx) * invNdotL), zAxis);
         depthPerTexel.y = dot(dy - lightDir * (dot(normal, dy) * invNdotL), zAxis);
     }
-    return SampleShadowHybridPCF(texCoords, cascadeIndex, ndcPos.z, depthPerTexel);
+    uint w, h, layers;
+    translucencyMap.GetDimensions(w, h, layers);
+    float transmission = 1.0f;
+    if (cascadeIndex < layers && all(texCoords >= 0) && all(texCoords < 1)) {
+        // Transmittance is continuous, not a depth comparison. Filter in normalized
+        // cascade UVs so the independent 512 map keeps its own texel footprint.
+        // Clamp prevents opposite-edge leakage; the map has only mip level zero.
+        transmission = translucencyMap.SampleLevel(LinearClampSampler, float3(texCoords, cascadeIndex), 0);
+    }
+    return SampleShadowHybridPCF(texCoords, cascadeIndex, ndcPos.z, depthPerTexel)*transmission;
 }
 
 float CalculateShadow(float3 worldPos, float3 normal, float3 lightDir) {

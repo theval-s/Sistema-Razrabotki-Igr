@@ -43,6 +43,7 @@ void RenderExtractionSubsystem::Shutdown() {
     if (rendering_) {
         rendering_->GetWorld().sceneItems.clear();
         rendering_->GetWorld().lights.clear();
+        rendering_->GetWorld().particleEmitters.clear();
     }
     rendering_ = nullptr;
 }
@@ -54,6 +55,41 @@ void RenderExtractionSubsystem::LateUpdate(const FrameContext&) {
     RenderWorld& world = rendering_->GetWorld();
     world.sceneItems.clear();
     world.lights.clear();
+    world.particleEmitters.clear();
+    scene.ForEach<ParticleEmitter>([&](entt::entity entity, const ParticleEmitter& emitter) {
+        ParticleEmitter effective = emitter;
+        ParticleEffectSettings effect;
+        TextureHandle texture;
+        if (emitter.effect.id.IsValid() || !emitter.effect.path.empty()) {
+            const auto* entry = assets.GetCatalog().Find(emitter.effect.id, CatalogAssetKind::ParticleEffect);
+            if (!entry) return; // resolution reports missing/wrong-kind UUIDs when authored components change
+            const auto asset = assets.Peek<ParticleEffectAsset>(entry->path);
+            if (!asset) return;
+            effect = asset->definition.settings;
+            if (asset->definition.texture.id.IsValid()) {
+                const auto image = assets.Peek(asset->texture);
+                if (!image) return;
+                texture = image->texture;
+                if (!texture) return;
+            }
+            if (!emitter.overrideEmission) {
+                effective.maxAlive = effect.maxAlive;
+                effective.rate = effect.rate;
+                effective.lifetime = effect.lifetime;
+                effective.speed = effect.speed;
+                effective.radius = effect.radius;
+                effective.spread = effect.spread;
+            }
+            effective.appearance = effect.appearance;
+        } else {
+            effect.appearance = emitter.appearance; // reserved 1 fails validation and isn't simulated
+        }
+        const auto matrix = scene.GetWorldMatrix(entity);
+        Vector3 up = matrix.Up();
+        if (up.LengthSquared() > 0) up.Normalize();
+        else up = Vector3::Up;
+        world.particleEmitters.push_back({entt::to_integral(entity), effective, matrix.Translation(), up, effect, texture});
+    });
     scene.ForEach<MeshRenderer>([&](entt::entity entity, const MeshRenderer& renderer) {
         const auto mesh = assets.Peek(renderer.mesh);
         if (!mesh) return;

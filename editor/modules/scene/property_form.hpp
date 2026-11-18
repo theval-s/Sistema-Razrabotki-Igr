@@ -3,6 +3,7 @@
 #include <QWidget>
 
 #include <functional>
+#include <cstdint>
 #include <vector>
 
 #include <SimpleMath.h>
@@ -39,6 +40,7 @@ public:
     void setRecorder(Recorder recorder) { recorder_ = std::move(recorder); }
 
     void addFloat(const QString& label, Binding<float> value, NumberFormat format = {});
+    void addUInt32(const QString& label, Binding<std::uint32_t> value, std::uint32_t minimum = 0);
     /// Stored in radians, edited in degrees: `format` is in degrees.
     void addAngle(const QString& label, Binding<float> value, NumberFormat format);
     void addVec3(const QString& label, Binding<DirectX::SimpleMath::Vector3> value, NumberFormat format = {});

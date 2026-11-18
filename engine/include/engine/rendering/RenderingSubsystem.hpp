@@ -17,6 +17,7 @@ public:
     [[nodiscard]] std::string_view GetName() const override;
     [[nodiscard]] bool Initialize() override;
     void Shutdown() override;
+    void ResetSimulation() override;
     void Render(const FrameContext& frame) override;
 
     [[nodiscard]] RenderingSystem& GetRendering() noexcept;

@@ -836,6 +836,138 @@ TEST(MaterialAssetsIntegration, LoadsDependenciesAndSurvivesEngineRestart) {
         if (::testing::Test::IsSkipped()) return;
     }
 }
+
+TEST(ParticleEffectAssetsIntegration, ExtractionUsesReadyTextureDefinitionOverridesAndReload) {
+    Fixture fixture;
+    ASSERT_NE(fixture.window, nullptr);
+    std::string text, error;
+    AssetMetadata image;
+    ASSERT_TRUE(ReadAssetMetadata(AssetPathResolver::GetRoot() / "engine/primitives/white/texture.png", image, error)) << error;
+    const AssetReference textureA{image.id, "engine/primitives/white/texture.png"};
+    const AssetReference textureB{NewUuid(), fixture.prefix + "/second.png"};
+    std::filesystem::copy_file(AssetPathResolver::GetRoot() / textureA.path, fixture.root / "second.png");
+    ASSERT_TRUE(WriteAssetMetadata(fixture.root / "second.png",
+        {textureB.id, CatalogAssetKind::Texture}, error)) << error;
+    ParticleEffectDefinition definition;
+    definition.texture = {image.id, "engine/primitives/white/texture.png"};
+    definition.settings.appearance = 2;
+    definition.settings.rate = 73;
+    definition.settings.maxAlive = 321;
+    definition.settings.lifetime = 4;
+    definition.settings.speed = 3;
+    definition.settings.radius = 2;
+    definition.settings.spread = 1;
+    const AssetReference reference{NewUuid(), fixture.prefix + "/smoke.particle-effect.json"};
+    const auto save = [&] {
+        return SerializeParticleEffectDefinition(definition, text, error) &&
+            WriteFileAtomic(fixture.root / "smoke.particle-effect.json", text, error);
+    };
+    ASSERT_TRUE(save()) << error;
+    ASSERT_TRUE(WriteAssetMetadata(fixture.root / "smoke.particle-effect.json",
+        {reference.id, CatalogAssetKind::ParticleEffect}, error)) << error;
+    Engine engine({.applicationName = "Particle effect extraction", .surface = {fixture.window, 64, 64}, .taskThreads = 1});
+    auto* rendering = engine.AddSubsystem<RenderingSubsystem>();
+    auto* extraction = engine.AddSubsystem<RenderExtractionSubsystem>();
+    if (!engine.Initialize()) GTEST_SKIP() << "D3D11 hardware/debug layer unavailable";
+    auto& scene = engine.GetScene();
+    auto& assets = engine.GetSceneAssets();
+    const auto entity = scene.CreateEntity("Smoke");
+    ParticleEmitter emitter;
+    emitter.effect = reference;
+    emitter.rate = 7;
+    emitter.seed = 42;
+    emitter.tint = {2, 3, 4};
+    ASSERT_NE(scene.AddComponent<ParticleEmitter>(entity, emitter), nullptr);
+    extraction->LateUpdate({});
+    EXPECT_TRUE(rendering->GetWorld().particleEmitters.empty()); // CPU completion alone is not publication
+    const auto loaded = assets.LoadParticleEffect(reference.path);
+    ASSERT_TRUE(loaded);
+    ASSERT_TRUE(assets.IsReady(loaded->texture));
+    extraction->LateUpdate({});
+    auto& sources = rendering->GetWorld().particleEmitters;
+    ASSERT_EQ(sources.size(), 1u);
+    EXPECT_EQ(sources[0].effect, definition.settings);
+    EXPECT_EQ(sources[0].texture, assets.Peek(loaded->texture)->texture);
+    EXPECT_EQ(sources[0].settings.appearance, 2u);
+    EXPECT_EQ(sources[0].settings.rate, 73);
+    EXPECT_EQ(sources[0].settings.maxAlive, 321u);
+    EXPECT_EQ(sources[0].settings.lifetime, 4);
+    EXPECT_EQ(sources[0].settings.speed, 3);
+    EXPECT_EQ(sources[0].settings.radius, 2);
+    EXPECT_EQ(sources[0].settings.spread, 1);
+    EXPECT_EQ(sources[0].settings.seed, emitter.seed);
+    EXPECT_EQ(sources[0].settings.tint, emitter.tint);
+    scene.Modify<ParticleEmitter>(entity, [](ParticleEmitter& changed) { changed.overrideEmission = true; });
+    extraction->LateUpdate({});
+    ASSERT_EQ(sources.size(), 1u);
+    EXPECT_EQ(sources[0].settings.rate, emitter.rate);
+    EXPECT_EQ(sources[0].settings.lifetime, emitter.lifetime);
+    EXPECT_EQ(sources[0].settings.appearance, definition.settings.appearance);
+    definition.settings.appearance = 3;
+    definition.settings.colorStart = {4, 2, 1};
+    ASSERT_TRUE(save()) << error;
+    ASSERT_TRUE(assets.Reload(reference.path, AssetKind::ParticleEffect, error)) << error;
+    extraction->LateUpdate({});
+    ASSERT_EQ(sources.size(), 1u);
+    EXPECT_EQ(sources[0].effect, definition.settings);
+    EXPECT_EQ(sources[0].settings.appearance, 3u);
+    definition.texture = {NewUuid(), "game/missing.png"};
+    ASSERT_TRUE(save()) << error;
+    EXPECT_FALSE(assets.Reload(reference.path, AssetKind::ParticleEffect, error));
+    extraction->LateUpdate({});
+    ASSERT_EQ(sources.size(), 1u); // last ready definition remains live after failed save
+    EXPECT_EQ(sources[0].settings.appearance, 3u);
+
+    // Standard appearance must replace the texture dependency on the same live
+    // asset, including while inline emission overrides the effect's emission.
+    const auto effectHandle = assets.RequestParticleEffect(reference);
+    definition.settings.appearance = 0;
+    definition.texture = textureA;
+    ASSERT_TRUE(save()) << error;
+    ASSERT_TRUE(assets.Reload(reference.path, AssetKind::ParticleEffect, error)) << error;
+    extraction->LateUpdate({});
+    ASSERT_EQ(sources.size(), 1u);
+    const auto firstTexture = loaded->texture;
+    ASSERT_TRUE(firstTexture);
+    EXPECT_EQ(sources[0].texture, assets.Peek(firstTexture)->texture);
+    EXPECT_EQ(sources[0].settings.appearance, 0u);
+    for (const bool overrideEmission : {false, true}) {
+        scene.Modify<ParticleEmitter>(entity, [=](ParticleEmitter& changed) { changed.overrideEmission = overrideEmission; });
+        for (const auto& texture : {textureB, AssetReference{}, textureA}) {
+            definition.texture = texture;
+            ASSERT_TRUE(save()) << error;
+            ASSERT_TRUE(assets.Reload(reference.path, AssetKind::ParticleEffect, error)) << error;
+            EXPECT_EQ(assets.RequestParticleEffect(reference), effectHandle);
+            EXPECT_EQ(&*assets.Peek(effectHandle), &*loaded);
+            EXPECT_EQ(loaded->definition.texture, texture);
+            extraction->LateUpdate({});
+            ASSERT_EQ(sources.size(), 1u);
+            EXPECT_EQ(sources[0].settings.appearance, 0u);
+            EXPECT_EQ(sources[0].settings.rate, overrideEmission ? emitter.rate : definition.settings.rate);
+            if (texture.id.IsValid()) {
+                const auto dependency = assets.RequestTexture(texture);
+                EXPECT_EQ(loaded->texture, dependency);
+                ASSERT_TRUE(assets.Peek(dependency));
+                EXPECT_EQ(sources[0].texture, assets.Peek(dependency)->texture);
+                if (texture.id == textureB.id) EXPECT_NE(dependency, firstTexture);
+            } else {
+                EXPECT_FALSE(loaded->texture);
+                EXPECT_FALSE(sources[0].texture);
+            }
+        }
+    }
+    scene.Modify<ParticleEmitter>(entity, [](ParticleEmitter& changed) {
+        changed.effect = {NewUuid(), "game/missing.particle-effect.json"};
+    });
+    extraction->LateUpdate({});
+    EXPECT_TRUE(sources.empty());
+    scene.Modify<ParticleEmitter>(entity, [](ParticleEmitter& changed) { changed.effect = {}; changed.appearance = 3; });
+    extraction->LateUpdate({});
+    ASSERT_EQ(sources.size(), 1u);
+    EXPECT_EQ(sources[0].effect.appearance, 3u);
+    EXPECT_EQ(sources[0].settings.appearance, 3u);
+    EXPECT_FALSE(sources[0].texture);
+}
 } // namespace
 
 int main(int argc, char** argv) {

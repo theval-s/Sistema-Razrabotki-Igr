@@ -63,6 +63,7 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/engine.hpp
     include/engine/rendering/DebugDraw.hpp
     include/engine/rendering/EngineShaders.hpp
+    include/engine/rendering/Particles.hpp
     include/engine/rendering/FPSCamera.hpp
     include/engine/rendering/GraphicalState.hpp
     include/engine/rendering/MaterialDrawList.hpp
@@ -136,6 +137,11 @@ set(ENGINE_SOURCES
     src/rendering/RenderingResourceManager.cpp
     src/rendering/RenderingSystem.cpp
     src/rendering/RenderWorld.cpp
+    src/rendering/particles/ParticlePass.cpp
+    src/rendering/particles/ParticleSimulation.cpp
+    src/rendering/particles/ParticleTiles.cpp
+    src/rendering/particles/ParticleTextures.cpp
+    src/rendering/particles/ParticleShadows.cpp
     src/rendering/resources/BindSlot.cpp
     src/rendering/resources/Buffer.cpp
     src/rendering/resources/RenderedMesh.cpp
@@ -170,6 +176,15 @@ set(ENGINE_SHADERS
     shaders/GBufferVS.hlsl
     shaders/GBufferPS.hlsl
     shaders/PresentPass.hlsl
+    shaders/ParticleSim.hlsl
+    shaders/ParticleTiles.hlsl
+    shaders/ParticleTextures.hlsl
+    shaders/ParticleShadows.hlsl
+    shaders/ParticleStyle.hlsli
+    shaders/ParticleAppearance.hlsli
+    shaders/Particle.hlsli
+    shaders/ParticleHooks.hlsli
+    shaders/DefaultParticleHooks.hlsli
     shaders/SelectionMask.hlsl
     shaders/LightPass.hlsl
     shaders/MaterialTemplate.hlsl
@@ -213,6 +228,7 @@ add_custom_target(EngineRuntimeAssets
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/shaders" "${SRI_ENGINE_ASSET_DIR}/shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/primitives" "${SRI_ENGINE_ASSET_DIR}/primitives"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/ui" "${SRI_ENGINE_ASSET_DIR}/ui"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/particles" "${SRI_ENGINE_ASSET_DIR}/particles"
     COMMENT "Copying engine runtime assets"
     VERBATIM
 )
@@ -389,6 +405,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/assets/AssetTypes.hpp
     include/engine/assets/AssetPipeline.hpp
     include/engine/assets/MaterialDefinition.hpp
+    include/engine/assets/ParticleEffectDefinition.hpp
     include/engine/core/CoreEvents.hpp
     include/engine/core/DefaultSubsystems.hpp
     include/engine/core/Content.hpp
@@ -432,6 +449,8 @@ set(ENGINE_CORE_SOURCES
     src/assets/ShaderImporter.cpp
     src/assets/TextureImporter.cpp
     src/assets/MaterialDefinition.cpp
+    src/assets/ParticleEffectDefinition.cpp
+    src/assets/ParticleEffectImporter.cpp
     src/assets/MaterialImporter.cpp
     src/core/DefaultSubsystems.cpp
     src/core/Content.cpp

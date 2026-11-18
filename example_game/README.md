@@ -7,6 +7,11 @@ configured output folder; the executable resolves its adjacent `engine/` and
 
 ## Controls and audio tour
 
+The default scene also contains two ParticleEmitter entities: smoke from the engine's
+`engine/particles/smoke.particle-effect.json`, and a blue ring drawn by this project's
+`shaders/ParticleHooks.hlsli` (custom appearance ID 2). Particles leave along the
+entity's local up axis, so rotating an entity changes its emission direction.
+
 - WASD: move; mouse: look; Q/E: down/up; Shift: sprint.
 - P: pause/settings; I: inventory; F5/F9: save/load; R: raycast.
 - T: Lua-triggered mono one-shot at the enchanted cube, independent of its entity.

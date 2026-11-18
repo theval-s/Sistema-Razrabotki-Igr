@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
@@ -18,6 +19,23 @@ namespace {
 using Json = nlohmann::json;
 using Vector3 = DirectX::SimpleMath::Vector3;
 using Quaternion = DirectX::SimpleMath::Quaternion;
+
+void ValidateEmitter(const ParticleEmitter& value) {
+    if (!value.maxAlive || !std::isfinite(value.rate) || value.rate < 0 ||
+        !std::isfinite(value.lifetime) || value.lifetime <= 0 ||
+        !std::isfinite(value.speed) || value.speed < 0 || !std::isfinite(value.radius) || value.radius < 0 ||
+        !std::isfinite(value.spread) || value.spread < 0 ||
+        !std::isfinite(value.tint.x) || !std::isfinite(value.tint.y) || !std::isfinite(value.tint.z) ||
+        value.tint.x < 0 || value.tint.y < 0 || value.tint.z < 0)
+        throw std::invalid_argument("invalid ParticleEmitter values");
+    if (value.appearance == 1) throw std::invalid_argument("ParticleEmitter appearance 1 is reserved");
+}
+
+std::uint32_t Unsigned32(const Json& value) {
+    if (!value.is_number_integer() || value < 0 || value > std::numeric_limits<std::uint32_t>::max())
+        throw std::invalid_argument("expected unsigned 32-bit integer");
+    return value.get<std::uint32_t>();
+}
 
 void Fields(const Json& j, std::initializer_list<std::string_view> allowed) {
     if (!j.is_object()) throw std::invalid_argument("expected JSON object");
@@ -146,7 +164,27 @@ SceneEntityDefinition DecodeEntity(const Json& j) {
         entity.editorFolder = j.at("editorFolder").get<std::string>();
     }
     const auto& components = j.at("components");
-    Fields(components, {"Transform", "MeshRenderer", "SkinnedMeshRenderer", "Animator", "Camera", "DirectionalLight", "PointLight", "SpotLight", "Controller", "Bounds", "GamePersistence", "Script", "BehaviorTree", "RigidBody", "Collider", "NavigationRegion", "NavigationSource", "AudioSource", "AudioListener"});
+    Fields(components, {"Transform", "MeshRenderer", "SkinnedMeshRenderer", "Animator", "Camera", "DirectionalLight", "PointLight", "SpotLight", "ParticleEmitter", "Controller", "Bounds", "GamePersistence", "Script", "BehaviorTree", "RigidBody", "Collider", "NavigationRegion", "NavigationSource", "AudioSource", "AudioListener"});
+    if (components.contains("ParticleEmitter")) {
+        const auto& json = components.at("ParticleEmitter");
+        Fields(json, {"appearance", "maxAlive", "seed", "rate", "lifetime", "speed", "radius", "spread", "tint",
+                      "effect", "overrideEmission"});
+        ParticleEmitter value;
+        value.appearance = Unsigned32(json.at("appearance"));
+        if (json.contains("effect") && !json.at("effect").is_null()) value.effect = Reference(json.at("effect"));
+        if (json.contains("overrideEmission")) value.overrideEmission = Boolean(json.at("overrideEmission"));
+        value.maxAlive = Unsigned32(json.at("maxAlive"));
+        value.seed = Unsigned32(json.at("seed"));
+        value.rate = Number(json.at("rate"));
+        value.lifetime = Number(json.at("lifetime"));
+        value.speed = Number(json.at("speed"));
+        value.radius = Number(json.at("radius"));
+        value.spread = Number(json.at("spread"));
+        const auto tint = Numbers<3>(json.at("tint"));
+        value.tint = {tint[0], tint[1], tint[2]};
+        ValidateEmitter(value);
+        entity.particleEmitter = value;
+    }
     if (components.contains("AudioSource")) {
         const auto& json = components.at("AudioSource");
         Fields(json, {"clip", "enabled", "playOnStart", "looping", "loading", "bus", "volume", "pitch",
@@ -404,6 +442,7 @@ void Validate(const SceneDocument& document) {
     std::size_t enabledListeners = 0;
     for (const auto& entity : document.entities) {
         std::string error;
+        if (entity.particleEmitter) ValidateEmitter(*entity.particleEmitter);
         if (entity.audioSource && !ValidateAudioSource(*entity.audioSource, error)) throw std::invalid_argument(error);
         if (entity.audioListener && entity.audioListener->enabled && ++enabledListeners > 1)
             throw std::invalid_argument("multiple enabled explicit audio listeners");
@@ -538,6 +577,17 @@ Json Encode(const SceneDocument& document) {
                                         {"intensity", entity.spotLight->intensity}, {"range", entity.spotLight->range},
                                         {"innerHalfAngle", entity.spotLight->innerHalfAngle},
                                         {"outerHalfAngle", entity.spotLight->outerHalfAngle}};
+        if (entity.particleEmitter) {
+            const auto& emitter = *entity.particleEmitter;
+            ValidateEmitter(emitter);
+            if (!emitter.effect.id.IsValid() && !emitter.effect.path.empty())
+                throw std::invalid_argument("invalid ParticleEmitter effect reference");
+            components["ParticleEmitter"] = {{"appearance", emitter.appearance}, {"maxAlive", emitter.maxAlive},
+                {"seed", emitter.seed}, {"rate", emitter.rate}, {"lifetime", emitter.lifetime},
+                {"speed", emitter.speed}, {"radius", emitter.radius}, {"spread", emitter.spread},
+                {"tint", Encode(emitter.tint)}, {"effect", emitter.effect.id.IsValid() ? Encode(emitter.effect) : Json(nullptr)},
+                {"overrideEmission", emitter.overrideEmission}};
+        }
         if (entity.controller)
             components["Controller"] = {{"type", entity.controller->type}, {"version", entity.controller->version},
                                          {"enabled", entity.controller->enabled}, {"data", [&] {
@@ -713,6 +763,7 @@ SceneEntityDefinition CaptureDefinition(const Scene& scene, const AssetSystem& a
     if (const auto* component = scene.TryGetComponent<DirectionalLight>(entity)) definition.directionalLight = *component;
     if (const auto* component = scene.TryGetComponent<PointLight>(entity)) definition.pointLight = *component;
     if (const auto* component = scene.TryGetComponent<SpotLight>(entity)) definition.spotLight = *component;
+    if (const auto* component = scene.TryGetComponent<ParticleEmitter>(entity)) definition.particleEmitter = *component;
     return definition;
 }
 
@@ -760,6 +811,9 @@ void ApplyEntity(const SceneEntityDefinition& definition, AssetSystem& assets, S
     MatchComponent(destination, entity, definition.directionalLight);
     MatchComponent(destination, entity, definition.pointLight);
     MatchComponent(destination, entity, definition.spotLight);
+    MatchComponent(destination, entity, definition.particleEmitter);
+    if (definition.particleEmitter && definition.particleEmitter->effect.id.IsValid())
+        assets.RequestParticleEffect(definition.particleEmitter->effect);
     MatchComponent(destination, entity, definition.rigidBody);
     MatchComponent(destination, entity, definition.collider);
     MatchComponent(destination, entity, definition.navigationRegion);

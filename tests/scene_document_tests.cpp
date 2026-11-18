@@ -119,6 +119,79 @@ TEST(SceneDocument, ScriptSlotsRoundTripEmptyDisabledAndMissingAssets) {
     EXPECT_FALSE(engine::ParseSceneDocument(text, parsed, error));
 }
 
+TEST(SceneDocument, ParticleEmitterCaptureRoundTripAndEntityOperations) {
+    engine::Engine host;
+    auto& scene = host.GetScene();
+    auto& assets = host.GetSceneAssets();
+    const auto entity = scene.CreateEntity("Particles");
+    engine::ParticleEmitter emitter;
+    emitter.appearance = 42; emitter.maxAlive = 17; emitter.seed = 0;
+    emitter.rate = 0; emitter.lifetime = 3; emitter.speed = 4; emitter.radius = 0.5f;
+    emitter.spread = 0.75f; emitter.tint = {0.2f, 0.4f, 2.0f};
+    scene.AddComponent<engine::ParticleEmitter>(entity, emitter);
+    EXPECT_FALSE(scene.HasUnsupportedComponents());
+    engine::SceneDocument captured, parsed;
+    std::string text, error;
+    ASSERT_TRUE(engine::CaptureSceneDocument(scene, assets, captured, error)) << error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(captured, text, error)) << error;
+    ASSERT_TRUE(engine::ParseSceneDocument(text, parsed, error)) << error;
+    EXPECT_EQ(parsed.entities, captured.entities);
+    engine::GameDocument save, loaded;
+    save.scene = {engine::NewUuid(), "game/scenes/test.scene.json"};
+    save.spawned = captured;
+    ASSERT_TRUE(engine::SerializeGameDocument(save, text, error)) << error;
+    ASSERT_TRUE(engine::ParseGameDocument(text, loaded, error)) << error;
+    EXPECT_EQ(loaded.spawned.entities, captured.entities);
+    engine::Scene restored;
+    engine::PopulateScene(parsed, assets, restored);
+    engine::SceneDocument recaptured;
+    ASSERT_TRUE(engine::CaptureSceneDocument(restored, assets, recaptured, error)) << error;
+    EXPECT_EQ(recaptured.entities, captured.entities);
+    std::vector<engine::SceneEntityDefinition> definitions;
+    const std::vector<entt::entity> selected{entity};
+    ASSERT_TRUE(engine::CaptureEntities(scene, assets, selected, definitions, error)) << error;
+    const auto copies = engine::InstantiateEntities(definitions, assets, scene, true);
+    ASSERT_EQ(copies.size(), 1u);
+    ASSERT_NE(scene.TryGetComponent<engine::ParticleEmitter>(copies[0]), nullptr);
+    EXPECT_EQ(scene.TryGetComponent<engine::ParticleEmitter>(copies[0])->appearance, 42u);
+    scene.RemoveComponent<engine::ParticleEmitter>(entity);
+    engine::ApplyEntityDefinitions(definitions, assets, scene);
+    ASSERT_NE(scene.TryGetComponent<engine::ParticleEmitter>(entity), nullptr);
+    const auto revision = scene.GetRevision();
+    engine::ApplyEntityDefinitions(definitions, assets, scene);
+    EXPECT_EQ(scene.GetRevision(), revision);
+    definitions[0].particleEmitter.reset();
+    engine::ApplyEntityDefinitions(definitions, assets, scene);
+    EXPECT_FALSE(scene.HasComponent<engine::ParticleEmitter>(entity));
+}
+
+TEST(SceneDocument, ParticleEmitterRejectsMalformedValuesTransactionally) {
+    engine::SceneDocument document, parsed;
+    document.entities.push_back({.id = engine::NewUuid(), .name = "Particles", .particleEmitter = engine::ParticleEmitter{}});
+    std::string text, error;
+    ASSERT_TRUE(engine::SerializeSceneDocument(document, text, error)) << error;
+    ASSERT_TRUE(engine::ParseSceneDocument(text, parsed, error)) << error;
+    const auto original = parsed.entities;
+    const auto reject = [&](std::string_view from, std::string_view to) {
+        auto invalid = text;
+        const auto at = invalid.find(from);
+        ASSERT_NE(at, std::string::npos);
+        invalid.replace(at, from.size(), to);
+        EXPECT_FALSE(engine::ParseSceneDocument(invalid, parsed, error));
+        EXPECT_EQ(parsed.entities, original);
+    };
+    reject("\"appearance\": 0", "\"appearance\": -1");
+    reject("\"appearance\": 0", "\"appearance\": 1"); // reserved
+    reject("\"appearance\": 0", "\"appearance\": 4294967296");
+    reject("\"seed\": 1", "\"seed\": 1.5");
+    reject("\"maxAlive\": 256", "\"maxAlive\": 0");
+    reject("\"lifetime\": 2.0", "\"lifetime\": 0");
+    reject("\"rate\": 30.0", "\"rate\": -1");
+    reject("\"radius\": 0.25", "\"radius\": -1");
+    document.entities[0].particleEmitter->tint.x = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(engine::SerializeSceneDocument(document, text, error));
+}
+
 TEST(SceneDocument, AudioCaptureRoundTripPopulateDuplicateAndApplyPreserveAuthoredState) {
     engine::Engine host;
     auto& scene = host.GetScene();

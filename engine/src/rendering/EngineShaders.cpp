@@ -1,5 +1,6 @@
 #include <engine/rendering/EngineShaders.hpp>
 
+#include <engine/assets/AssetPathResolver.hpp>
 #include <engine/rendering/RenderingResources.hpp>
 
 #include <array>
@@ -29,8 +30,22 @@ const ShaderVariant& GetEngineShader(const EngineShader shader) {
         {L"engine/DebugDraw.hlsl", Pixel, {}},
         {L"engine/SelectionMask.hlsl", Pixel, {}},
         {L"engine/SelectionMask.hlsl", Pixel, {.defines = {{"OCCLUDED"}}}},
+        {L"engine/ParticleSim.hlsl", Compute, {.defines = {{"PARTICLE_SIM_UPDATE"}}}},
+        {L"engine/ParticleSim.hlsl", Compute, {.defines = {{"PARTICLE_SIM_ADMIT"}}}},
+        {L"engine/ParticleSim.hlsl", Compute, {.defines = {{"PARTICLE_SIM_SPAWN"}}}},
+        {L"engine/ParticleTiles.hlsl", Compute, {.defines = {{"PARTICLE_TILES_BUILD"}}}},
+        {L"engine/ParticleTiles.hlsl", Compute, {.defines = {{"PARTICLE_TILES_MERGE"}}}},
+        {L"engine/ParticleTiles.hlsl", Compute, {.defines = {{"PARTICLE_TILES_BIN"}}}},
+        {L"engine/ParticleTiles.hlsl", Compute, {.defines = {{"PARTICLE_TILES_SHADE"}}}},
+        {L"engine/ParticleTextures.hlsl", Compute, {}},
+        {L"engine/ParticleShadows.hlsl", Vertex, {}},
+        {L"engine/ParticleShadows.hlsl", Pixel, {}},
     }};
     return variants.at(static_cast<std::size_t>(shader));
+}
+
+std::filesystem::path GetProjectParticleHooksPath() {
+    return AssetPathResolver::GetGameRoot() / "shaders" / "ParticleHooks.hlsli";
 }
 
 } // namespace engine

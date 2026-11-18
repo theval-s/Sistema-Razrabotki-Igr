@@ -2,10 +2,14 @@
 #include <engine/core/Log.hpp>
 #include <engine/core/PathUtils.hpp>
 #include "LifecycleFailure.hpp"
+#include "particles/ParticlePass.hpp"
+#include <algorithm>
+#include <cmath>
 
 namespace engine {
 namespace {
-constexpr const char* PassNames[] = {"ShadowCSMPass", "GBufferPass", "LightPass", "SelectionMaskPass", "PresentPass"};
+constexpr const char* PassNames[] = {"ShadowCSMPass", "ParticleShadowPass", "GBufferPass", "LightPass", "ParticlePass",
+                                     "SelectionMaskPass", "PresentPass"};
 }
 
 void RenderingSystem::RecordFailure(RenderingFailure failure) {
@@ -98,9 +102,13 @@ void RenderingSystem::InitializePasses(const uint32_t width, const uint32_t heig
     resources_ = RenderingResources(width, height);
     resources_.Initialize(manager);
     // Each pass enters ownership before its Initialize can acquire partial resources.
+    auto particles = std::make_unique<ParticlePass>(particleBudget_, particleStats_);
+    particlePass_ = particles.get();
     renderPasses_.push_back(std::make_unique<ShadowCSMPass>());
+    renderPasses_.push_back(std::make_unique<ParticleShadowPass>(*particlePass_));
     renderPasses_.push_back(std::make_unique<GBufferPass>());
     renderPasses_.push_back(std::make_unique<LightPass>());
+    renderPasses_.push_back(std::move(particles));
     renderPasses_.push_back(std::make_unique<SelectionMaskPass>());
     renderPasses_.push_back(std::make_unique<PresentPass>());
     for (size_t i = 0; i < renderPasses_.size(); ++i)
@@ -114,6 +122,24 @@ void RenderingSystem::RenderFrame(const FrameContext& frame, const OverlayCallba
         rendering_detail::Check(device->GetDeviceRemovedReason(), "GetDeviceRemovedReason", device);
         renderingContext_.ClearState();
         resources_.debugView = debugView_;
+        resources_.particleShadowView = nullptr;
+        rendering_detail::InPass("ParticleSimulation", [&] {
+            if (particlePreview_.enabled) {
+                // Warm-up is bounded per displayed frame so the editor remains responsive.
+                // Even a paused preview can explicitly request prewarm.
+                constexpr float warmStep = 1.0f / 60.0f;
+                for (int i = 0; i < 8 && particlePrewarmRemaining_ > 0; ++i) {
+                    const float dt = std::min(warmStep, particlePrewarmRemaining_);
+                    particlePass_->Advance(world_, renderingContext_, dt, &particlePreview_);
+                    particlePrewarmRemaining_ = std::max(0.0f, particlePrewarmRemaining_ - dt);
+                }
+                if (!particlePreview_.paused)
+                    particlePass_->Advance(world_, renderingContext_, frame.realDeltaSeconds * particlePreview_.speed, &particlePreview_);
+            } else {
+                particlePass_->Advance(world_, renderingContext_, frame.deltaSeconds, nullptr);
+            }
+        });
+        renderingContext_.ClearState();
         resources_.BindCBuffers(renderingContext_);
         resources_.frameCBuffer.Update(renderingContext_, [&](FrameBufferData& data) {
             data.simulationTimeSeconds = static_cast<float>(frame.simulationTimeSeconds);
@@ -139,6 +165,12 @@ void RenderingSystem::Shutdown() noexcept {
         catch (...) { /* Cleanup cannot replace the initiating failure. */ }
     }
     renderPasses_.clear();
+    particlePass_ = nullptr;
+    particleStats_ = {};
+    world_.particleEmitters.clear();
+    particlePreview_ = {};
+    particlePrewarmRemaining_ = 0;
+    resources_.particleShadowView = nullptr;
     try { resources_.Destroy(renderingContext_.GetResourceManager()); } catch (...) {}
     world_.sceneItems.clear();
     world_.renderItems.clear();
@@ -151,6 +183,48 @@ void RenderingSystem::Shutdown() noexcept {
 }
 
 RenderingDiagnostics RenderingSystem::GetDiagnostics() const { return diagnostics_; }
+void RenderingSystem::RequestParticleBurst(std::uint64_t owner, std::uint32_t count) {
+    if (particlePass_ && count) particlePass_->Burst(owner, count);
+}
+void RenderingSystem::ResetParticles() {
+    resources_.particleShadowView = nullptr;
+    if (particlePass_) particlePass_->Reset();
+    world_.particleEmitters.clear();
+    particlePreview_ = {};
+    particlePrewarmRemaining_ = 0;
+}
+void RenderingSystem::SetParticlePreview(ParticlePreview preview) {
+    if (!std::isfinite(preview.speed) || preview.speed <= 0 || preview.speed > 4) return;
+    const bool restart = preview.enabled != particlePreview_.enabled ||
+        preview.allEmitters != particlePreview_.allEmitters ||
+        (!preview.allEmitters && preview.owner != particlePreview_.owner);
+    particlePreview_ = preview;
+    if (restart) {
+        resources_.particleShadowView = nullptr;
+        if (particlePass_) particlePass_->Reset();
+        particlePrewarmRemaining_ = 0;
+    }
+}
+void RenderingSystem::RestartParticlePreview() {
+    if (!particlePreview_.enabled) return;
+    resources_.particleShadowView = nullptr;
+    if (particlePass_) particlePass_->Reset();
+    particlePrewarmRemaining_ = 0;
+}
+void RenderingSystem::PrewarmParticlePreview(float seconds) {
+    if (particlePreview_.enabled && std::isfinite(seconds) && seconds > 0)
+        particlePrewarmRemaining_ = std::min(seconds, 10.0f);
+}
+bool RenderingSystem::SetParticleBudget(ParticleBudget budget) {
+    if (!budget.maxParticles || budget.maxParticles > 65536 || !budget.maxEmitters || budget.maxEmitters > 4096)
+        return false;
+    if (budget != particleBudget_) {
+        resources_.particleShadowView = nullptr;
+        if (particlePass_) particlePass_->Reset();
+        particleBudget_ = budget;
+    }
+    return true;
+}
 RenderDebugView RenderingSystem::GetDebugView() const noexcept { return debugView_; }
 bool RenderingSystem::SetDebugView(RenderDebugView view) noexcept {
     if (!IsValidRenderDebugView(view)) return false;

@@ -24,12 +24,14 @@ add_custom_command(TARGET sri_runtime POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/engine/shaders" "$<TARGET_FILE_DIR:sri_runtime>/engine/shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/engine/primitives" "$<TARGET_FILE_DIR:sri_runtime>/engine/primitives"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/engine/ui" "$<TARGET_FILE_DIR:sri_runtime>/engine/ui"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/engine/particles" "$<TARGET_FILE_DIR:sri_runtime>/engine/particles"
     VERBATIM)
 
 # The portable folder is the template sri-build copies: deploy_sri_runtime.
 sri_add_deploy(sri_runtime LIBRARIES engine sri_game LIBRARY_DIR bin)
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/engine/shaders" "${PROJECT_SOURCE_DIR}/engine/primitives"
     "${PROJECT_SOURCE_DIR}/engine/ui"
+    "${PROJECT_SOURCE_DIR}/engine/particles"
     DESTINATION engine COMPONENT sri_runtime)
 
 if(TARGET sri-build)

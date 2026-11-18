@@ -16,6 +16,7 @@ class QWidget;
 
 namespace engine {
 struct MaterialDefinition;
+struct ParticleEffectDefinition;
 struct MaterialInstanceDefinition;
 }  // namespace engine
 
@@ -68,6 +69,8 @@ public:
     bool extractMaterials(const QString& model, const engine::ModelMaterialSettings& settings);
     /// Write a new .material.json / .material-instance.json at `path`, with its meta. False on failure.
     bool createMaterial(const QString& path, const engine::MaterialDefinition& definition);
+    bool createParticleEffect(const QString& path, const engine::ParticleEffectDefinition& definition);
+    bool updateParticleEffect(const QString& path, const engine::ParticleEffectDefinition& definition);
     bool createMaterialInstance(const QString& path, const engine::MaterialInstanceDefinition& definition);
     /// Replaces an existing definition without touching its metadata/UUID.
     bool updateMaterial(const QString& path, const engine::MaterialDefinition& definition);

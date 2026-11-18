@@ -30,6 +30,7 @@ void RenderingResources::Initialize(RenderingResourceManager& resourceManager) t
 }
 
 void RenderingResources::Destroy(RenderingResourceManager& resourceManager) {
+    particleShadowView = nullptr;
     frameCBuffer.Destroy(resourceManager);
     viewCBuffer.Destroy(resourceManager);
     materialCBuffer.Destroy(resourceManager);

@@ -86,7 +86,7 @@ struct MaterialCpu {
 
 struct CpuPayload {
     enum class Kind : uint8_t { None, Mesh, Texture, Shader, Material, MaterialInstance,
-                               Skeleton, AnimationClip, SkinnedMesh };
+                               Skeleton, AnimationClip, SkinnedMesh, ParticleEffect };
 
     Kind kind = Kind::None;
     MeshCpu mesh;
@@ -97,6 +97,7 @@ struct CpuPayload {
     SkeletonAsset skeleton;
     AnimationClipAsset animationClip;
     SkinnedMeshCpu skinnedMesh;
+    ParticleEffectDefinition particleEffect;
 };
 
 /// Output of the GPU phase (main thread): handles of the resources that were created.
@@ -170,6 +171,14 @@ public:
                                std::string& error) const override;
     [[nodiscard]] bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
                                  GpuPayload& result, std::string& error) const override;
+};
+
+class ParticleEffectImporter final : public IAssetImporter {
+public:
+    bool ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPayload& payload,
+                 std::string& error) const override;
+    bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
+                   GpuPayload& result, std::string& error) const override;
 };
 
 class MaterialImporter final : public IAssetImporter {

@@ -13,6 +13,7 @@
 #include <engine/rendering/resources/Texture.hpp>
 #include <engine/assets/AssetCommon.hpp>
 #include <engine/assets/MaterialDefinition.hpp>
+#include <engine/assets/ParticleEffectDefinition.hpp>
 
 namespace engine {
 
@@ -99,6 +100,11 @@ struct TextureAsset {
     TextureHandle texture;
 };
 
+struct ParticleEffectAsset {
+    ParticleEffectDefinition definition;
+    AssetHandle<TextureAsset> texture;
+};
+
 /// One compiled shader variant and stage, owned by the RenderingResourceManager.
 struct ShaderAsset {
     ShaderHandle shader;
@@ -118,6 +124,11 @@ struct MaterialInstanceAsset {
 /// Which table each asset type lives in; used by the templated lookup helpers.
 template <typename T>
 struct AssetValueKind;
+
+template <>
+struct AssetValueKind<ParticleEffectAsset> {
+    static constexpr AssetKind value = AssetKind::ParticleEffect;
+};
 
 template <>
 struct AssetValueKind<MeshAsset> {

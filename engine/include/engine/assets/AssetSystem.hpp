@@ -67,6 +67,9 @@ public:
     entt::resource<MaterialAsset> LoadMaterial(std::string_view name);
     entt::resource<MaterialInstanceAsset> LoadMaterialInstance(std::string_view name);
     entt::resource<SkeletonAsset> LoadSkeleton(std::string_view name);
+    entt::resource<ParticleEffectAsset> LoadParticleEffect(std::string_view name);
+    AssetHandle<ParticleEffectAsset> RequestParticleEffect(std::string_view name);
+    AssetHandle<ParticleEffectAsset> RequestParticleEffect(const AssetReference& reference);
     entt::resource<AnimationClipAsset> LoadAnimationClip(std::string_view name);
     entt::resource<SkinnedMeshAsset> LoadSkinnedMesh(std::string_view name);
     AssetHandle<SkeletonAsset> RequestSkeleton(std::string_view name);
@@ -76,7 +79,8 @@ public:
     AssetHandle<AnimationClipAsset> RequestAnimationClip(const AssetReference& reference);
     AssetHandle<SkinnedMeshAsset> RequestSkinnedMesh(const AssetReference& reference);
     /// Reimport a saved asset and atomically replace its live GPU contents on the main thread.
-    /// Unloaded names are read on their next request. A failure leaves ready values untouched.
+    /// Unloaded materials are read on their next request; unloaded effects are queued again.
+    /// A failure leaves ready values untouched.
     bool Reload(std::string_view name, AssetKind kind, std::string& error);
     /// Names use game/... or engine/...; each stage/entry point/define set is a separate asset.
     entt::resource<ShaderAsset> LoadShader(std::string_view name, ShaderType stage,
@@ -206,6 +210,8 @@ private:
             return materialInstances_;
         } else if constexpr (std::is_same_v<T, SkeletonAsset>) {
             return skeletons_;
+        } else if constexpr (std::is_same_v<T, ParticleEffectAsset>) {
+            return particleEffects_;
         } else if constexpr (std::is_same_v<T, AnimationClipAsset>) {
             return animationClips_;
         } else if constexpr (std::is_same_v<T, SkinnedMeshAsset>) {
@@ -226,6 +232,7 @@ private:
     AssetTable<MaterialAsset> materials_;
     AssetTable<MaterialInstanceAsset> materialInstances_;
     AssetTable<SkeletonAsset> skeletons_;
+    AssetTable<ParticleEffectAsset> particleEffects_;
     AssetTable<AnimationClipAsset> animationClips_;
     AssetTable<SkinnedMeshAsset> skinnedMeshes_;
     AssetCatalog catalog_;

@@ -6,6 +6,7 @@
 
 #include <engine/rendering/DebugDraw.hpp>
 #include <engine/rendering/FPSCamera.hpp>
+#include <engine/rendering/Particles.hpp>
 #include <engine/rendering/RenderingContext.hpp>
 #include <engine/rendering/RenderingResources.hpp>
 
@@ -38,6 +39,15 @@ struct RenderItem {
 };
 
 struct RenderWorld {
+    struct EmitterSource {
+        std::uint64_t owner;
+        ParticleEmitter settings;
+        Vector3 position, direction;
+        ParticleEffectSettings effect;
+        TextureHandle texture;
+    };
+    // World-space sources for this frame; replaced by scene extraction, even while paused.
+    std::vector<EmitterSource> particleEmitters;
     FPSCamera camera;
     std::vector<RenderItem> renderItems;
     // Scene extraction replaces only this list. Host-owned procedural draw

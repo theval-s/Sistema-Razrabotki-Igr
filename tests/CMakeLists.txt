@@ -46,7 +46,7 @@ add_custom_command(TARGET rendering_skinning_tests POST_BUILD
 add_test(NAME rendering_skinning_tests COMMAND rendering_skinning_tests)
 
 foreach(render_target IN ITEMS rendering_diagnostics_tests rendering_resource_tests render_debug_view_tests
-        render_debug_native_tests asset_event_tests)
+        render_debug_native_tests asset_event_tests particle_simulation_tests particle_tiles_tests)
     add_executable(${render_target} ${render_target}.cpp)
     target_link_libraries(${render_target} PRIVATE Engine::EngineStatic GTest::gtest_main d3d11 d3dcompiler dxgi user32)
     target_compile_definitions(${render_target} PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
@@ -58,6 +58,15 @@ foreach(render_target IN ITEMS rendering_diagnostics_tests rendering_resource_te
         COMMAND_EXPAND_LISTS VERBATIM)
     add_test(NAME ${render_target} COMMAND ${render_target})
 endforeach()
+target_include_directories(particle_tiles_tests PRIVATE ../engine/src)
+
+# Native shader regression: intentionally independent of an engine rebuild.
+add_executable(particle_shadow_filter_tests particle_shadow_filter_tests.cpp)
+target_link_libraries(particle_shadow_filter_tests PRIVATE GTest::gtest_main d3d11 d3dcompiler)
+target_compile_definitions(particle_shadow_filter_tests PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+set_project_warnings(particle_shadow_filter_tests)
+set_target_properties(particle_shadow_filter_tests PROPERTIES FOLDER tests)
+add_test(NAME particle_shadow_filter_tests COMMAND particle_shadow_filter_tests)
 
 # Exercise both generated export-header modes against the same utility contract.
 foreach(utf_target IN ITEMS utf_tests utf_shared_tests)
@@ -469,6 +478,16 @@ add_custom_command(TARGET asset_catalog_tests POST_BUILD
         $<TARGET_RUNTIME_DLLS:asset_catalog_tests> $<TARGET_FILE_DIR:asset_catalog_tests>
     COMMAND_EXPAND_LISTS VERBATIM)
 add_test(NAME asset_catalog_tests COMMAND asset_catalog_tests)
+
+add_executable(particle_effect_assets_tests particle_effect_assets_tests.cpp)
+target_link_libraries(particle_effect_assets_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
+set_project_warnings(particle_effect_assets_tests)
+set_target_properties(particle_effect_assets_tests PROPERTIES FOLDER tests)
+add_custom_command(TARGET particle_effect_assets_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:particle_effect_assets_tests> $<TARGET_FILE_DIR:particle_effect_assets_tests>
+    COMMAND_EXPAND_LISTS VERBATIM)
+add_test(NAME particle_effect_assets_tests COMMAND particle_effect_assets_tests)
 
 add_executable(asset_authoring_tests asset_authoring_tests.cpp)
 target_link_libraries(asset_authoring_tests PRIVATE Engine::EngineStatic GTest::gtest_main)

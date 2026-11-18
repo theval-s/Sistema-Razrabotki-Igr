@@ -142,6 +142,8 @@ extern "C" __declspec(dllexport) int SriRunGame() {
         // sri-build output is cooked; a folder without the manifest still runs from sources.
         if (const fs::path manifest = exeDir / L"manifest.json"; engine::content::IsFile(manifest)) {
             engine::AssetPathResolver::SetManifest(manifest);
+        } else if (const auto content = project->ContentDir(); engine::content::IsDirectory(content)) {
+            engine::AssetPathResolver::SetGameRoot(content);
         }
 
         engine::RuntimeSettings settings;

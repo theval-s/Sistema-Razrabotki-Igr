@@ -24,6 +24,9 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/assets/MaterialDefinition.hpp>
+#include <engine/assets/ParticleEffectDefinition.hpp>
+#include <engine/rendering/RenderingSubsystem.hpp>
+#include <editor/play_session.hpp>
 #include <engine/assets/ModelImport.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/engine.hpp>
@@ -175,7 +178,7 @@ std::pair<QString, QString> splitAssetName(const QString& name, const bool dir) 
     }
     // The engine's multi-part suffixes (CatalogKindForFile).
     //TODO: add if we get more suffixes?
-    for (const QLatin1String suffix : {QLatin1String(".material-instance.json"), QLatin1String(".material.json"),
+    for (const QLatin1String suffix : {QLatin1String(".particle-effect.json"), QLatin1String(".material-instance.json"), QLatin1String(".material.json"),
                                         QLatin1String(".skinned-mesh.json"), QLatin1String(".skeleton.json"),
                                         QLatin1String(".animation.json"),
                                         QLatin1String(".scene.json")}) {
@@ -370,6 +373,44 @@ bool AssetOperations::extractMaterials(const QString& model, const engine::Model
     }
     warn(command, warnings);
     rescan();  // loaded meshes take the materials their metas name now
+    return true;
+}
+
+bool AssetOperations::createParticleEffect(const QString& path, const engine::ParticleEffectDefinition& definition) {
+    if (context_.playSession().isPlaying()) return false;
+    if (!isWithin(cleanPath(path), cleanPath(editor::toQString(context_.project().ContentDir())))) {
+        report(tr("New Particle Effect"), {tr("Choose a writable project content folder.")});
+        return false;
+    }
+    std::string text, error;
+    if (!engine::SerializeParticleEffectDefinition(definition, text, error)) {
+        report(tr("New Particle Effect"), {fromUtf8(error)});
+        return false;
+    }
+    if (!createFile(tr("New Particle Effect"), path, text, engine::CatalogAssetKind::ParticleEffect)) return false;
+    if (!context_.engine().GetSceneAssets().Reload(assetName(path).toStdString(), engine::AssetKind::ParticleEffect, error)) {
+        report(tr("New Particle Effect"), {tr("File saved, but live reload failed: %1").arg(fromUtf8(error))});
+        return false;
+    }
+    if (auto* rendering = context_.engine().GetSubsystem<engine::RenderingSubsystem>();
+        rendering && rendering->GetRendering().GetParticlePreview().enabled) rendering->GetRendering().RestartParticlePreview();
+    return true;
+}
+
+bool AssetOperations::updateParticleEffect(const QString& path, const engine::ParticleEffectDefinition& definition) {
+    if (context_.playSession().isPlaying()) return false;
+    std::string text, error;
+    if (!engine::SerializeParticleEffectDefinition(definition, text, error)) {
+        report(tr("Edit Particle Effect"), {fromUtf8(error)});
+        return false;
+    }
+    if (!updateFile(tr("Edit Particle Effect"), path, text, engine::CatalogAssetKind::ParticleEffect)) return false;
+    if (!context_.engine().GetSceneAssets().Reload(assetName(path).toStdString(), engine::AssetKind::ParticleEffect, error)) {
+        report(tr("Edit Particle Effect"), {tr("File saved, but live reload failed: %1").arg(fromUtf8(error))});
+        return false;
+    }
+    if (auto* rendering = context_.engine().GetSubsystem<engine::RenderingSubsystem>();
+        rendering && rendering->GetRendering().GetParticlePreview().enabled) rendering->GetRendering().RestartParticlePreview();
     return true;
 }
 

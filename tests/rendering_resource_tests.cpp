@@ -106,6 +106,36 @@ protected:
     }
 };
 
+TEST_F(RenderingResourceWarpFailures, ComputeImporterReflectsAndFinalizes) {
+    AssetDesc desc;
+    desc.path = DiagnosticPath();
+    desc.shaderStage = ShaderType::Compute;
+    desc.shaderFromMemory = true;
+    desc.shaderSource = R"(
+RWStructuredBuffer<uint> outputData : register(u2);
+[numthreads(8, 1, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID) { outputData[id.x] = id.x; }
+)";
+    CpuPayload payload;
+    std::string error;
+    ASSERT_TRUE(ShaderImporter{}.ReadCpu(desc, nullptr, payload, error)) << error;
+    EXPECT_EQ(payload.shader.type, ShaderType::Compute);
+    EXPECT_EQ(payload.shader.diagnosticContext.stage, "compute");
+    EXPECT_EQ(payload.shader.diagnosticContext.entryPoint, "CSMain");
+    EXPECT_EQ(payload.shader.diagnosticContext.target, "cs_5_0");
+    ASSERT_EQ(payload.shader.bindings.size(), 1u);
+    EXPECT_EQ(payload.shader.bindings[0].name, "outputData");
+    EXPECT_EQ(payload.shader.bindings[0].slot, 2);
+    EXPECT_EQ(payload.shader.bindings[0].type, D3D_SIT_UAV_RWSTRUCTURED);
+    InputLayoutCache layouts;
+    const auto shader = ShaderContext::FinalizeOnDevice(payload.shader, device.Get(), layouts);
+    EXPECT_TRUE(shader.shader.computeShader);
+    EXPECT_FALSE(shader.shader.vertexShader);
+    GpuPayload gpu;
+    ASSERT_TRUE(ShaderImporter{}.UploadGpu({.resources = &manager}, payload, gpu, error)) << error;
+    EXPECT_TRUE(gpu.shader);
+}
+
 TEST_F(RenderingResourceWarpFailures, InvalidRequiredViewDoesNotPublishTextureAndRetryWorks) {
     TextureDesc desc;
     desc.srvFormat = DXGI_FORMAT_R32_FLOAT; // Incompatible with the RGBA8 resource, after CreateTexture2D succeeds.
