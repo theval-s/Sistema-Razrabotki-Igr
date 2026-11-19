@@ -43,6 +43,19 @@ Build Game / `sri-build` discovers these definitions and cooks both shader
 entry points, including their defines and includes. Missing or wrong-kind
 shader UUIDs fail validation.
 
+### Editing in the editor
+
+Double-click a `.pipeline.json` asset in the Content Browser (or choose
+**Edit...**) to edit its shader, vertex/pixel entry points, defines, blend and
+depth settings. **New > Render Pipeline...** creates a definition and its
+metadata sidecar. The shader picker accepts shader assets and drag-and-drop.
+An unresolved shader UUID is shown and preserved until you choose a replacement.
+Saving an existing pipeline preserves its asset UUID.
+
+Edit pipelines outside Play, then start Play again to load the updated settings.
+The dialog validates the definition; shader compilation and stage compatibility
+are checked when the pipeline is loaded.
+
 ## Two camera-facing cutouts
 
 Save the following as `content/effects/billboards.hlsl`. The `EngineView`

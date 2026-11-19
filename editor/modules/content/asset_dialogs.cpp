@@ -11,6 +11,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QStringList>
@@ -18,6 +19,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QStyle>
+#include <QTableWidget>
 #include <QToolButton>
 #include <QTimer>
 #include <QTreeWidget>
@@ -98,9 +100,61 @@ QComboBox* albedoMode() {
 }
 
 bool selectReference(editor::AssetPicker* picker, const std::optional<engine::AssetReference>& reference,
-                     const std::string& path) {
+                      const std::string& path) {
     if (reference) return picker->selectId(reference->id);  // UUID is authoritative; path may be stale
     return path.empty() || picker->selectPath(QString::fromStdString(path));
+}
+
+QTableWidget* shaderDefinesForm(QFormLayout* form, const QString& prefix, QObject* owner,
+                               const std::function<void()>& changed) {
+    auto* table = new QTableWidget(0, 2);
+    table->setObjectName(prefix + QStringLiteral("Defines"));
+    table->setHorizontalHeaderLabels({NewAssetDialog::tr("Name"), NewAssetDialog::tr("Value")});
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    form->addRow(NewAssetDialog::tr("Defines"), table);
+    auto* buttons = new QHBoxLayout;
+    auto* add = new QPushButton(NewAssetDialog::tr("Add"));
+    add->setObjectName(prefix + QStringLiteral("AddDefine"));
+    auto* remove = new QPushButton(NewAssetDialog::tr("Remove"));
+    remove->setObjectName(prefix + QStringLiteral("RemoveDefine"));
+    buttons->addWidget(add);
+    buttons->addWidget(remove);
+    buttons->addStretch();
+    form->addRow(buttons);
+    QObject::connect(table, &QTableWidget::itemChanged, owner, [changed] { changed(); });
+    QObject::connect(add, &QPushButton::clicked, owner, [table, changed] {
+        const int row = table->rowCount();
+        table->insertRow(row);
+        table->setCurrentCell(row, 0);
+        changed();
+    });
+    QObject::connect(remove, &QPushButton::clicked, owner, [table, changed] {
+        if (table->currentRow() >= 0) table->removeRow(table->currentRow());
+        changed();
+    });
+    return table;
+}
+
+void loadShaderDefines(QTableWidget* table, const std::vector<engine::ShaderDefine>& defines) {
+    const QSignalBlocker blocker(table);
+    table->setRowCount(0);
+    for (const auto& define : defines) {
+        const int row = table->rowCount();
+        table->insertRow(row);
+        table->setItem(row, 0, new QTableWidgetItem(QString::fromStdString(define.name)));
+        table->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(define.value)));
+    }
+}
+
+std::vector<engine::ShaderDefine> shaderDefines(const QTableWidget* table) {
+    std::vector<engine::ShaderDefine> result;
+    for (int row = 0; row < table->rowCount(); ++row) {
+        const auto* name = table->item(row, 0);
+        const auto* value = table->item(row, 1);
+        result.push_back({name ? name->text().toStdString() : std::string{},
+                          value ? value->text().toStdString() : std::string{}});
+    }
+    return result;
 }
 
 }  // namespace
@@ -757,6 +811,148 @@ QString SkyboxDialog::problem() const {
     if (const auto base = NewAssetDialog::problem(); !base.isEmpty()) return base;
     std::string error;
     if (!engine::ValidateSkyboxDefinition(value_, error)) return QString::fromStdString(error);
+    return {};
+}
+
+PostProcessDialog::PostProcessDialog(const engine::AssetCatalog& catalog, const QString& folder,
+    const QString& name, QWidget* parent, bool editing)
+    : NewAssetDialog(editing ? tr("Edit Postprocess") : tr("New Postprocess"), folder,
+                     QStringLiteral(".postprocess.json"), name, parent, editing) {
+    auto* help = new QLabel(tr("Choose an HLSL pixel shader and its entry point. "
+        "Pass stage, order and runtime parameters are configured in Lua. "
+        "Settings apply on the next Render.LoadShader call; restart Play to reload."));
+    help->setWordWrap(true);
+    form()->addRow(help);
+    shader_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Shader);
+    shader_->setObjectName(QStringLiteral("postprocessShader"));
+    shader_->setCurrentIndex(-1);
+    form()->addRow(tr("Shader"), shader_);
+    missing_ = new QLabel;
+    missing_->setObjectName(QStringLiteral("postprocessMissingShader"));
+    missing_->setWordWrap(true);
+    missing_->hide();
+    form()->addRow(missing_);
+    entry_ = new QLineEdit;
+    entry_->setObjectName(QStringLiteral("postprocessEntry"));
+    form()->addRow(tr("Pixel entry point"), entry_);
+    defines_ = shaderDefinesForm(form(), QStringLiteral("postprocess"), this, [this] { validate(); });
+    connect(shader_, &QComboBox::currentIndexChanged, this, [this] {
+        if (const auto chosen = shader_->reference()) {
+            value_.shader = *chosen;
+            missing_->hide();
+        }
+        validate();
+    });
+    connect(entry_, &QLineEdit::textChanged, this, &PostProcessDialog::validate);
+    load(value_);
+}
+
+void PostProcessDialog::load(const engine::PostProcessDefinition& definition) {
+    value_ = definition;
+    const QSignalBlocker shaderBlocker(shader_), entryBlocker(entry_);
+    shader_->reload();
+    if (!shader_->selectId(value_.shader.id)) shader_->setCurrentIndex(-1);
+    missing_->setText(tr("Unresolved shader: %1 (%2). The reference is preserved until you choose a replacement.")
+        .arg(QString::fromStdString(value_.shader.path), QString::fromStdString(value_.shader.id.ToString())));
+    missing_->setVisible(shader_->currentIndex() < 0 &&
+                         (value_.shader.id.IsValid() || !value_.shader.path.empty()));
+    entry_->setText(QString::fromStdString(value_.options.entryPoint));
+    loadShaderDefines(defines_, value_.options.defines);
+    validate();
+}
+
+engine::PostProcessDefinition PostProcessDialog::definition() const {
+    auto result = value_;
+    result.options.entryPoint = entry_->text().toStdString();
+    result.options.defines = shaderDefines(defines_);
+    return result;
+}
+
+QString PostProcessDialog::problem() const {
+    if (const auto base = NewAssetDialog::problem(); !base.isEmpty()) return base;
+    std::string error;
+    if (!engine::ValidatePostProcessDefinition(definition(), error)) return QString::fromStdString(error);
+    return {};
+}
+
+RenderPipelineDialog::RenderPipelineDialog(const engine::AssetCatalog& catalog, const QString& folder,
+    const QString& name, QWidget* parent, bool editing)
+    : NewAssetDialog(editing ? tr("Edit Render Pipeline") : tr("New Render Pipeline"), folder,
+                     QStringLiteral(".pipeline.json"), name, parent, editing) {
+    auto* help = new QLabel(tr("Choose one HLSL shader containing both vertex and pixel entry points. "
+        "Depth uses reverse-Z. Alpha uses straight alpha; additive uses ONE + ONE. "
+        "Settings apply on the next pipeline load; restart Play to reload."));
+    help->setWordWrap(true);
+    form()->addRow(help);
+    shader_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Shader);
+    shader_->setObjectName(QStringLiteral("pipelineShader"));
+    shader_->setCurrentIndex(-1);
+    form()->addRow(tr("Shader"), shader_);
+    missing_ = new QLabel;
+    missing_->setObjectName(QStringLiteral("pipelineMissingShader"));
+    missing_->setWordWrap(true);
+    missing_->hide();
+    form()->addRow(missing_);
+    vertex_ = new QLineEdit;
+    vertex_->setObjectName(QStringLiteral("pipelineVertexEntry"));
+    form()->addRow(tr("Vertex entry point"), vertex_);
+    pixel_ = new QLineEdit;
+    pixel_->setObjectName(QStringLiteral("pipelinePixelEntry"));
+    form()->addRow(tr("Pixel entry point"), pixel_);
+    blend_ = new QComboBox;
+    blend_->setObjectName(QStringLiteral("pipelineBlend"));
+    blend_->addItems({QStringLiteral("Opaque"), QStringLiteral("Alpha"), QStringLiteral("Additive")});
+    form()->addRow(tr("Blend"), blend_);
+    depth_ = new QComboBox;
+    depth_->setObjectName(QStringLiteral("pipelineDepth"));
+    depth_->addItems({QStringLiteral("Disabled"), QStringLiteral("ReadOnly"), QStringLiteral("ReadWrite")});
+    form()->addRow(tr("Depth"), depth_);
+    defines_ = shaderDefinesForm(form(), QStringLiteral("pipeline"), this, [this] { validate(); });
+    connect(shader_, &QComboBox::currentIndexChanged, this, [this] {
+        if (const auto chosen = shader_->reference()) {
+            value_.shader = *chosen;
+            missing_->hide();
+        }
+        validate();
+    });
+    connect(vertex_, &QLineEdit::textChanged, this, &RenderPipelineDialog::validate);
+    connect(pixel_, &QLineEdit::textChanged, this, &RenderPipelineDialog::validate);
+    connect(blend_, &QComboBox::currentIndexChanged, this, &RenderPipelineDialog::validate);
+    connect(depth_, &QComboBox::currentIndexChanged, this, &RenderPipelineDialog::validate);
+    load(value_);
+}
+
+void RenderPipelineDialog::load(const engine::RenderPipelineDefinition& definition) {
+    value_ = definition;
+    const QSignalBlocker a(shader_), b(vertex_), c(pixel_), d(blend_), e(depth_);
+    shader_->reload();
+    if (!shader_->selectId(value_.shader.id)) shader_->setCurrentIndex(-1);
+    missing_->setText(tr("Unresolved shader: %1 (%2). The reference is preserved until you choose a replacement.")
+        .arg(QString::fromStdString(value_.shader.path), QString::fromStdString(value_.shader.id.ToString())));
+    missing_->setVisible(shader_->currentIndex() < 0 &&
+                         (value_.shader.id.IsValid() || !value_.shader.path.empty()));
+    vertex_->setText(QString::fromStdString(value_.vertexEntryPoint));
+    pixel_->setText(QString::fromStdString(value_.pixelEntryPoint));
+    blend_->setCurrentIndex(static_cast<int>(value_.blend));
+    depth_->setCurrentIndex(static_cast<int>(value_.depth));
+    loadShaderDefines(defines_, value_.defines);
+    validate();
+}
+
+engine::RenderPipelineDefinition RenderPipelineDialog::definition() const {
+    auto result = value_;
+    result.vertexEntryPoint = vertex_->text().toStdString();
+    result.pixelEntryPoint = pixel_->text().toStdString();
+    if (blend_->currentIndex() >= 0) result.blend = static_cast<engine::ProceduralBlend>(blend_->currentIndex());
+    if (depth_->currentIndex() >= 0) result.depth = static_cast<engine::ProceduralDepth>(depth_->currentIndex());
+    result.defines = shaderDefines(defines_);
+    return result;
+}
+
+QString RenderPipelineDialog::problem() const {
+    if (const auto base = NewAssetDialog::problem(); !base.isEmpty()) return base;
+    std::string error;
+    if (!engine::ValidateRenderPipelineDefinition(definition(), error)) return QString::fromStdString(error);
     return {};
 }
 

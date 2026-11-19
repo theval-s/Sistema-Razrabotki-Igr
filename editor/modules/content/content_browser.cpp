@@ -452,6 +452,10 @@ void ContentBrowser::buildActions() {
                          &ContentBrowser::newParticleEffect);
     new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::Skybox), tr("Skybox..."), this,
                          &ContentBrowser::newSkybox);
+    new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::RenderPipeline), tr("Render Pipeline..."), this,
+                         &ContentBrowser::newRenderPipeline);
+    new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::PostProcess), tr("Postprocess..."), this,
+                         &ContentBrowser::newPostProcess);
     new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::Scene), tr("Scene..."), this,
                          &ContentBrowser::newScene);
     new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::Script), tr("Script..."), this,
@@ -524,6 +528,10 @@ void ContentBrowser::activate(const QModelIndex& index) {
         editParticleEffect(path);
     } else if (engine::CatalogKindForFile(editor::toPath(path)) == engine::CatalogAssetKind::Skybox) {
         editSkybox(path);
+    } else if (engine::CatalogKindForFile(editor::toPath(path)) == engine::CatalogAssetKind::RenderPipeline) {
+        editRenderPipeline(path);
+    } else if (engine::CatalogKindForFile(editor::toPath(path)) == engine::CatalogAssetKind::PostProcess) {
+        editPostProcess(path);
     } else if (!context_.openAsset(editor::toPath(path))) {
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
     }
@@ -599,6 +607,42 @@ void ContentBrowser::editSkybox(const QString& path) {
         splitAssetName(QFileInfo(path).fileName(), false).first, window(), true);
     dialog.load(definition);
     if (dialog.exec() == QDialog::Accepted) operations_.updateSkybox(path, dialog.definition());
+}
+
+void ContentBrowser::editRenderPipeline(const QString& path) {
+    if (context_.playSession().isPlaying()) return;
+    if (roots_[root_].read_only) {
+        QMessageBox::information(window(), tr("Read-only asset"), tr("Engine assets cannot be edited here."));
+        return;
+    }
+    std::string error;
+    engine::RenderPipelineDefinition definition;
+    if (!engine::LoadRenderPipelineDefinition(editor::toPath(path), definition, error)) {
+        QMessageBox::warning(window(), tr("Edit Render Pipeline"), QString::fromStdString(error));
+        return;
+    }
+    RenderPipelineDialog dialog(catalog(), QFileInfo(path).absolutePath(),
+        splitAssetName(QFileInfo(path).fileName(), false).first, window(), true);
+    dialog.load(definition);
+    if (dialog.exec() == QDialog::Accepted) operations_.updateRenderPipeline(path, dialog.definition());
+}
+
+void ContentBrowser::editPostProcess(const QString& path) {
+    if (context_.playSession().isPlaying()) return;
+    if (roots_[root_].read_only) {
+        QMessageBox::information(window(), tr("Read-only asset"), tr("Engine assets cannot be edited here."));
+        return;
+    }
+    std::string error;
+    engine::PostProcessDefinition definition;
+    if (!engine::LoadPostProcessDefinition(editor::toPath(path), definition, error)) {
+        QMessageBox::warning(window(), tr("Edit Postprocess"), QString::fromStdString(error));
+        return;
+    }
+    PostProcessDialog dialog(catalog(), QFileInfo(path).absolutePath(),
+        splitAssetName(QFileInfo(path).fileName(), false).first, window(), true);
+    dialog.load(definition);
+    if (dialog.exec() == QDialog::Accepted) operations_.updatePostProcess(path, dialog.definition());
 }
 
 void ContentBrowser::rebuildBreadcrumb() {
@@ -742,7 +786,8 @@ void ContentBrowser::updateActions() {
     if (selected.size() == 1) {
         const auto kind = engine::CatalogKindForFile(editor::toPath(selected.front()));
         open_->setText(kind == engine::CatalogAssetKind::Material || kind == engine::CatalogAssetKind::MaterialInstance ||
-                           kind == engine::CatalogAssetKind::ParticleEffect || kind == engine::CatalogAssetKind::Skybox
+                           kind == engine::CatalogAssetKind::ParticleEffect || kind == engine::CatalogAssetKind::Skybox ||
+                           kind == engine::CatalogAssetKind::RenderPipeline || kind == engine::CatalogAssetKind::PostProcess
                            ? tr("Edit...") : tr("Open"));
     } else {
         open_->setText(tr("Open"));
@@ -1132,6 +1177,20 @@ void ContentBrowser::newSkybox() {
     if (context_.playSession().isPlaying() || roots_[root_].read_only) return;
     SkyboxDialog dialog(catalog(), folder_, tr("New Skybox"), window());
     if (dialog.exec() == QDialog::Accepted && operations_.createSkybox(dialog.path(), dialog.definition()))
+        select({dialog.path()});
+}
+
+void ContentBrowser::newRenderPipeline() {
+    if (roots_[root_].read_only || context_.playSession().isPlaying()) return;
+    RenderPipelineDialog dialog(catalog(), folder_, tr("New Render Pipeline"), window());
+    if (dialog.exec() == QDialog::Accepted && operations_.createRenderPipeline(dialog.path(), dialog.definition()))
+        select({dialog.path()});
+}
+
+void ContentBrowser::newPostProcess() {
+    if (roots_[root_].read_only || context_.playSession().isPlaying()) return;
+    PostProcessDialog dialog(catalog(), folder_, tr("New Postprocess"), window());
+    if (dialog.exec() == QDialog::Accepted && operations_.createPostProcess(dialog.path(), dialog.definition()))
         select({dialog.path()});
 }
 

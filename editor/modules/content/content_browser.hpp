@@ -71,13 +71,17 @@ private:
     void navigate(std::size_t root, const QString& folder);
     /// Goes up from the shown folder until one exists, after it was deleted or moved.
     void leaveMissingFolder();
-    /// Double-click / Enter: enters folders, opens scenes, edits materials, opens other files.
+    /// Double-click / Enter: enters folders, opens scenes, edits supported assets, opens other files.
     void activate(const QModelIndex& index);
     void editMaterial(const QString& path, engine::CatalogAssetKind kind);
     void editParticleEffect(const QString& path);
     void newParticleEffect();
     void editSkybox(const QString& path);
     void newSkybox();
+    void editRenderPipeline(const QString& path);
+    void newRenderPipeline();
+    void editPostProcess(const QString& path);
+    void newPostProcess();
     void rebuildBreadcrumb();
     void applyViewMode();
     void applyFilters();

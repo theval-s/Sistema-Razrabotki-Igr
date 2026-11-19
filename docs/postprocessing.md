@@ -39,6 +39,18 @@ Build Game / `sri-build` discovers and cooks catalogued postprocess definitions 
 their shader variants; missing or wrong-kind shader references fail cooking.
 See [building-games.md](building-games.md) for packaging.
 
+### Editing in the editor
+
+Double-click a `.postprocess.json` asset in the Content Browser (or choose
+**Edit...**) to edit its shader, pixel entry point and defines.
+**New > Postprocess...** creates a definition and metadata sidecar.
+Saving preserves the asset UUID, and unresolved shader references are retained
+until you choose a replacement.
+
+Edit outside Play and restart Play to load the updated settings. Pass stage,
+order and runtime parameters are configured in Lua. The dialog validates the
+definition; the shader is compiled when loaded or cooked.
+
 ## Minimal retro pass
 
 This example quantizes color. Save the shader as `content/effects/retro.hlsl`:

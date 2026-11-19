@@ -140,6 +140,7 @@ if(SRI_BUILD_EDITOR)
     add_executable(content_browser_drop_tests
         content_browser_drop_tests.cpp
         content_rig_dialog_tests.cpp
+        render_pipeline_editor_tests.cpp
         ../editor/modules/content/content_browser.cpp
         ../editor/modules/content/content_browser.hpp
         ../editor/modules/content/asset_filter_model.cpp
