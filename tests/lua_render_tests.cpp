@@ -1,6 +1,7 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/assets/PostProcessDefinition.hpp>
+#include <engine/assets/RenderPipelineDefinition.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/Uuid.hpp>
 #include <engine/engine.hpp>
@@ -348,6 +349,265 @@ TEST_F(LuaRenderTest, CatalogShaderAndReflectedParameterShapesExecute) {
     EXPECT_TRUE(lua.UpdateInstance(id, 0, error)) << error;
 }
 
+TEST_F(LuaRenderTest, ProceduralLifecycleRevokesContextAndRemovesLaterCallback) {
+    auto desc = Script(R"(
+        local calls, oldContext, later = 0
+        local target
+        return {
+            OnStart=function(self)
+                target = Render.CreateRenderTarget{width=7,height=9}
+                assert(not pcall(function()
+                    Render.AddProceduralPass{name='bad stage',stage=Render.Stage.AfterUI,execute=function() end}
+                end))
+                for _,value in ipairs({false, '0', 0.5, math.huge, {}}) do
+                    assert(not pcall(function()
+                        Render.AddProceduralPass{name='bad order',order=value,execute=function() end}
+                    end))
+                end
+                assert(not pcall(function() Render.AddProceduralPass{name='bad execute',execute=3} end))
+                self.pass = Render.AddProceduralPass{name='procedural lifecycle',order=-1,
+                    execute=function(ctx,frame)
+                        assert(frame.width == 96 and frame.height == 72)
+                        local fields = 0
+                        for key in pairs(frame) do
+                            assert(key == 'width' or key == 'height')
+                            fields = fields + 1
+                        end
+                        assert(fields == 2)
+                        assert(ctx.SetRenderTarget == nil and ctx.ClearRenderTarget == nil and ctx.DrawFullscreen == nil)
+                        local w,h = ctx:GetTextureSize(target)
+                        assert(w == 7 and h == 9)
+                        if oldContext then
+                            assert(not pcall(function() oldContext:GetTextureSize(target) end))
+                        end
+                        assert(not pcall(function() Render.CreateRenderTarget{scale=1} end))
+                        assert(not pcall(function() Render.LoadPipeline('missing.pipeline.json') end))
+                        assert(not pcall(function()
+                            Render.AddProceduralPass{name='nested',execute=function() end}
+                        end))
+                        for _,value in ipairs({-1, 1.5, 4294967296, '3', false, {}, math.huge, 0/0}) do
+                            assert(not pcall(function() ctx:DrawProcedural(value) end))
+                            assert(not pcall(function() ctx:DrawProcedural(3,value) end))
+                            assert(not pcall(function() ctx:BindTexture(value,target) end))
+                        end
+                        assert(not pcall(function() ctx:DrawProcedural() end))
+                        for _,value in ipairs({'pixel', 'Geometry', 1, false, {}}) do
+                            assert(not pcall(function() ctx:BindTexture(16,target,value) end))
+                        end
+                        assert(not pcall(function() ctx:SetPipeline(target) end))
+                        assert(not pcall(function() ctx:BindConstantBuffer(5,target) end))
+                        oldContext = ctx
+                        calls = calls + 1
+                        if calls == 1 then later:Remove() end
+                    end}
+                later = Render.AddProceduralPass{name='removed',execute=function() error('removed callback ran') end}
+            end,
+            OnUpdate=function(self)
+                assert(calls == 2)
+                assert(not pcall(function() oldContext:GetTextureSize(target) end))
+                self.pass:SetEnabled(false)
+                self.pass:Remove()
+            end,
+            OnDestroy=function()
+                assert(not pcall(function()
+                    Render.AddProceduralPass{name='teardown',execute=function() end}
+                end))
+            end
+        }
+    )");
+    InstanceId id;
+    ASSERT_TRUE(lua.CreateInstance(desc, id, error)) << error;
+    ASSERT_TRUE(lua.StartInstance(id, error)) << error;
+    Render();
+    Render();
+    ASSERT_TRUE(lua.UpdateInstance(id, 0, error)) << error;
+    ASSERT_TRUE(lua.DestroyInstance(id, error)) << error;
+    Render();
+    EXPECT_FALSE(rendering->GetRendering().GetPostProcessing().HasProceduralPasses());
+}
+
+TEST_F(LuaRenderTest, ProceduralFaultRetiresMixedPassesAndShutdownRevokesCallbacks) {
+    auto desc = Script(R"(
+        return {OnStart=function()
+            Render.SetBuiltinTonemappingEnabled(false)
+            Render.AddProceduralPass{name='fault',order=-1,
+                execute=function() error('intentional procedural fault') end}
+            Render.AddProceduralPass{name='retired procedural',
+                execute=function() error('retired procedural executed') end}
+            Render.AddFullscreenPass{name='retired fullscreen',stage=Render.Stage.AfterUI,
+                execute=function() error('retired fullscreen executed') end}
+        end}
+    )");
+    InstanceId id;
+    ASSERT_TRUE(lua.CreateInstance(desc, id, error)) << error;
+    ASSERT_TRUE(lua.StartInstance(id, error)) << error;
+    Render();
+    EXPECT_TRUE(rendering->GetRendering().GetPostProcessing().IsBuiltinTonemappingEnabled());
+    EXPECT_FALSE(lua.UpdateInstance(id, 0, error));
+    EXPECT_NE(error.find("intentional procedural fault"), std::string::npos) << error;
+    EXPECT_NE(error.find("Render.execute"), std::string::npos) << error;
+    Render();
+    EXPECT_FALSE(rendering->GetRendering().GetPostProcessing().HasProceduralPasses());
+    EXPECT_FALSE(rendering->GetRendering().GetPostProcessing().HasPasses());
+
+    auto pending = Script(R"(
+        return {OnStart=function()
+            Render.AddProceduralPass{name='pending shutdown',execute=function() error('dead Lua state') end}
+        end}
+    )");
+    ASSERT_TRUE(lua.CreateInstance(pending, id, error)) << error;
+    ASSERT_TRUE(lua.StartInstance(id, error)) << error;
+    lua.Shutdown();
+    Render();
+    ASSERT_TRUE(lua.Initialize(root, host, error)) << error;
+    Render();
+    EXPECT_FALSE(rendering->GetRendering().GetPostProcessing().HasProceduralPasses());
+}
+
+TEST_F(LuaRenderTest, ProceduralRemovalAndOwnerRetirementReleaseLuaClosures) {
+    ASSERT_TRUE(CreateNewFile(root / "shared.lua", "return {}", error)) << error;
+    auto desc = Script(R"(
+        return {OnStart=function()
+            local shared = require('shared')
+            shared.weak = setmetatable({}, {__mode='v'})
+            do
+                local marker = {}
+                shared.weak[1] = marker
+                local pass = Render.AddProceduralPass{name='removed closure',
+                    execute=function() assert(marker) end}
+                pass:Remove()
+            end
+            do
+                local marker = {}
+                shared.weak[2] = marker
+                Render.AddProceduralPass{name='retired closure',
+                    execute=function() assert(marker) end}
+            end
+            collectgarbage('collect')
+            assert(shared.weak[1] == nil)
+            assert(shared.weak[2] ~= nil)
+        end}
+    )");
+    auto observer = Script(R"(
+        return {OnStart=function()
+            collectgarbage('collect')
+            assert(require('shared').weak[1] == nil)
+            assert(require('shared').weak[2] == nil)
+        end}
+    )");
+    InstanceId id;
+    ASSERT_TRUE(lua.CreateInstance(desc, id, error)) << error;
+    ASSERT_TRUE(lua.StartInstance(id, error)) << error;
+    ASSERT_TRUE(lua.DestroyInstance(id, error)) << error;
+    ASSERT_TRUE(lua.CreateInstance(observer, id, error)) << error;
+    ASSERT_TRUE(lua.StartInstance(id, error)) << error;
+    Render();
+    EXPECT_FALSE(rendering->GetRendering().GetPostProcessing().HasProceduralPasses());
+}
+
+TEST_F(LuaRenderTest, CatalogPipelineReflectsBothStagesDrawsAndGuardsPropertiesByOwner) {
+    const auto shaderFile = root / "procedural.hlsl";
+    ASSERT_TRUE(CreateNewFile(shaderFile, R"(
+        cbuffer VertexParameters : register(b5) { float Offset; };
+        cbuffer PixelParameters : register(b5) { float4 Tint; };
+        struct Vertex { float4 position : SV_Position; };
+        Vertex VSMain(uint id : SV_VertexID, uint instance : SV_InstanceID) {
+            Vertex output;
+            float2 positions[3] = {float2(-.5,-.5),float2(0,.5),float2(.5,-.5)};
+            output.position = float4(positions[id % 3] + float2(Offset + instance * .01,0),.5,1);
+            return output;
+        }
+        float4 PSMain(Vertex input) : SV_Target { return Tint; }
+    )", error)) << error;
+    AssetMetadata shaderMetadata;
+    shaderMetadata.id = NewUuid();
+    shaderMetadata.kind = CatalogAssetKind::Shader;
+    ASSERT_TRUE(WriteAssetMetadata(shaderFile, shaderMetadata, error)) << error;
+    RenderPipelineDefinition definition;
+    definition.shader = {shaderMetadata.id, "game/procedural.hlsl"};
+    definition.depth = ProceduralDepth::Disabled;
+    std::string json;
+    ASSERT_TRUE(SerializeRenderPipelineDefinition(definition, json, error)) << error;
+    const auto pipelineFile = root / "procedural.pipeline.json";
+    ASSERT_TRUE(CreateNewFile(pipelineFile, json, error)) << error;
+    AssetMetadata metadata;
+    metadata.id = NewUuid();
+    metadata.kind = CatalogAssetKind::RenderPipeline;
+    ASSERT_TRUE(WriteAssetMetadata(pipelineFile, metadata, error)) << error;
+    ASSERT_TRUE(host.GetAssets().RescanCatalog(error)) << error;
+    ASSERT_TRUE(CreateNewFile(root / "shared.lua", "return {}", error)) << error;
+    auto desc = Script(std::string(R"(
+        local calls, pipeline = 0
+        return {
+            OnStart=function()
+                assert(not pcall(function() Render.LoadPipeline('game/procedural.hlsl') end))
+                pipeline = Render.LoadPipeline('game/procedural.pipeline.json')
+                local byId = Render.LoadPipeline(')") + metadata.id.ToString() + R"(')
+                assert(byId.vertexShader ~= nil and byId.pixelShader ~= nil)
+                require('shared').pipeline = pipeline
+                assert(not pcall(function() pipeline.vertexShader = pipeline.pixelShader end))
+                assert(not pcall(function() pipeline.pixelShader = pipeline.vertexShader end))
+                local vertex = Render.CreateConstantBuffer{shader=pipeline.vertexShader,
+                    name='VertexParameters',values={Offset=0}}
+                local pixel = Render.CreateConstantBuffer{shader=pipeline.pixelShader,
+                    name='PixelParameters',values={Tint={.1,.2,.3,1}}}
+                assert(not pcall(function()
+                    Render.CreateConstantBuffer{shader=pipeline.vertexShader,name='PixelParameters'}
+                end))
+                assert(not pcall(function()
+                    Render.CreateConstantBuffer{shader=pipeline.pixelShader,name='VertexParameters'}
+                end))
+                local texture = Render.LoadTexture('engine/primitives/white/texture.png')
+                Render.AddProceduralPass{name='pipeline',execute=function(ctx,frame)
+                    vertex:Set('Offset', 0)
+                    pixel:Set{Tint={.2,.3,.4,1}}
+                    ctx:SetPipeline(pipeline)
+                    ctx:BindConstantBuffer(5,vertex)
+                    ctx:BindConstantBuffer(5,pixel)
+                    ctx:BindTexture(16,texture)
+                    ctx:BindTexture(16,texture,'Pixel')
+                    ctx:BindTexture(16,texture,'Vertex')
+                    ctx:DrawProcedural(3,0)
+                    ctx:DrawProcedural(3)
+                    ctx:DrawProcedural(3,2)
+                    calls = calls + 1
+                end}
+            end,
+            OnUpdate=function() assert(calls == 2) end,
+            OnDestroy=function()
+                assert(not pcall(function() return pipeline.vertexShader end))
+                assert(not pcall(function() return pipeline.pixelShader end))
+            end
+        }
+    )");
+    auto foreign = Script(R"(
+        return {
+            OnStart=function()
+                local pipeline = require('shared').pipeline
+                assert(not pcall(function() return pipeline.vertexShader end))
+                assert(not pcall(function() return pipeline.pixelShader end))
+            end,
+            OnUpdate=function()
+                local pipeline = require('shared').pipeline
+                assert(not pcall(function() return pipeline.vertexShader end))
+                assert(not pcall(function() return pipeline.pixelShader end))
+            end
+        }
+    )");
+    InstanceId first, second;
+    ASSERT_TRUE(lua.CreateInstance(desc, first, error)) << error;
+    ASSERT_TRUE(lua.StartInstance(first, error)) << error;
+    ASSERT_TRUE(lua.CreateInstance(foreign, second, error)) << error;
+    ASSERT_TRUE(lua.StartInstance(second, error)) << error;
+    Render();
+    Render();
+    ASSERT_TRUE(lua.UpdateInstance(first, 0, error)) << error;
+    ASSERT_TRUE(lua.DestroyInstance(first, error)) << error;
+    ASSERT_TRUE(lua.UpdateInstance(second, 0, error)) << error;
+    Render();
+    EXPECT_FALSE(rendering->GetRendering().GetPostProcessing().HasProceduralPasses());
+}
+
 TEST(LuaRenderHeadless, ChunkCannotCreateAndStartedScriptFailsCleanlyWithoutRenderer) {
     const auto root = std::filesystem::temp_directory_path() / ("lua-render-headless-" + NewUuid());
     std::filesystem::create_directories(root);
@@ -360,8 +620,12 @@ TEST(LuaRenderHeadless, ChunkCannotCreateAndStartedScriptFailsCleanlyWithoutRend
     ASSERT_TRUE(CreateNewFile(path, R"(
         assert(Render.Stage.BeforeTonemap ~= nil)
         assert(not pcall(function() Render.CreateRenderTarget{scale=1} end))
+        assert(not pcall(function() Render.LoadPipeline('not-an-asset.pipeline.json') end))
+        assert(not pcall(function() Render.AddProceduralPass{name='chunk',execute=function() end} end))
         return {OnStart=function()
             assert(not pcall(function() Render.LoadShader('not-an-asset.hlsl') end))
+            assert(not pcall(function() Render.LoadPipeline('not-an-asset.pipeline.json') end))
+            assert(not pcall(function() Render.AddProceduralPass{name='headless',execute=function() end} end))
         end}
     )", error)) << error;
     LuaRuntime lua;

@@ -4,6 +4,7 @@
 #include <engine/rendering/ShaderParameters.hpp>
 #include <engine/rendering/RenderingDiagnostics.hpp>
 #include <engine/rendering/resources/Texture.hpp>
+#include <engine/rendering/resources/BindSlot.hpp>
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -24,6 +25,9 @@ struct PostProcessOwner { std::uint64_t value{}; bool operator==(const PostProce
 struct PostProcessShader { std::uint64_t value{}; bool operator==(const PostProcessShader&) const = default; };
 struct PostProcessBuffer { std::uint64_t value{}; bool operator==(const PostProcessBuffer&) const = default; };
 struct PostProcessPass { std::uint64_t value{}; bool operator==(const PostProcessPass&) const = default; };
+struct PostProcessPipeline { std::uint64_t value{}; bool operator==(const PostProcessPipeline&) const = default; };
+enum class ProceduralBlend { Opaque, Alpha, Additive };
+enum class ProceduralDepth { Disabled, ReadOnly, ReadWrite };
 struct PostProcessTexture {
     std::uint64_t value{};
     // Nonzero for a borrowed frame texture; valid only in that execution.
@@ -45,6 +49,29 @@ struct PostProcessFrame {
 
 class PostProcessing;
 
+struct ProceduralFrame {
+    std::uint32_t width{}, height{};
+};
+
+/// Callback-scoped procedural triangle drawing into the engine's HDR scene color/depth.
+/// No vertex buffers; the vertex shader generates vertices from SV_VertexID/SV_InstanceID.
+class ENGINE_API ProceduralContext {
+public:
+    void SetPipeline(PostProcessPipeline pipeline);
+    void BindTexture(std::uint32_t slot, PostProcessTexture texture, ShaderStage stage = ShaderStage::Pixel);
+    // Stage is inferred from the shader used to reflect the buffer.
+    void BindConstantBuffer(std::uint32_t slot, PostProcessBuffer buffer);
+    void DrawProcedural(std::uint32_t vertexCount, std::uint32_t instanceCount = 1);
+    [[nodiscard]] std::array<std::uint32_t, 2> GetTextureSize(PostProcessTexture texture) const;
+
+private:
+    friend class PostProcessing;
+    struct State;
+    explicit ProceduralContext(const std::shared_ptr<State>& state);
+    [[nodiscard]] std::shared_ptr<State> GetState() const;
+    std::weak_ptr<State> state_;
+};
+
 /// Copyable capability, revoked when the callback returns. Engine-thread only.
 /// Pixel bindings are explicit. b0-b4 and s0-s4 belong to the engine.
 class ENGINE_API PostProcessContext {
@@ -65,12 +92,13 @@ private:
     std::weak_ptr<State> state_;
 };
 
-/// Fullscreen effect resources and scheduling, independent of Lua.
+/// Script-owned fullscreen/procedural resources and scheduling, independent of Lua.
 /// Creation/updates validate and throw std::invalid_argument on bad authoring.
 /// Native GPU failures retain RenderingException diagnostics.
 class ENGINE_API PostProcessing {
 public:
     using Callback = std::function<void(PostProcessContext&, const PostProcessFrame&)>;
+    using ProceduralCallback = std::function<void(ProceduralContext&, const ProceduralFrame&)>;
 
     PostProcessing();
     ~PostProcessing();
@@ -90,6 +118,12 @@ public:
     void SetBuiltinTonemappingEnabled(PostProcessOwner owner, bool enabled);
     [[nodiscard]] bool IsBuiltinTonemappingEnabled() const noexcept;
     [[nodiscard]] PostProcessShader CreateShader(PostProcessOwner owner, const CompiledShader& shader);
+    [[nodiscard]] PostProcessPipeline CreatePipeline(PostProcessOwner owner,
+        const CompiledShader& vertex, const CompiledShader& pixel,
+        ProceduralBlend blend = ProceduralBlend::Opaque, ProceduralDepth depth = ProceduralDepth::ReadWrite);
+    // Vertex shader first, pixel shader second. Reuse these with CreateConstantBuffer.
+    [[nodiscard]] std::array<PostProcessShader, 2> GetPipelineShaders(
+        PostProcessOwner owner, PostProcessPipeline pipeline) const;
     [[nodiscard]] ShaderParameters ReflectParameters(PostProcessOwner owner, PostProcessShader shader,
                                                      const std::string& name) const;
     [[nodiscard]] PostProcessBuffer CreateConstantBuffer(PostProcessOwner owner, PostProcessShader shader,
@@ -103,6 +137,8 @@ public:
     [[nodiscard]] PostProcessTexture ImportTexture(PostProcessOwner owner, TextureHandle texture);
     [[nodiscard]] PostProcessPass AddPass(PostProcessOwner owner, std::string name, PostProcessStage stage,
                                          int order, Callback callback);
+    [[nodiscard]] PostProcessPass AddProceduralPass(PostProcessOwner owner, std::string name,
+                                                   int order, ProceduralCallback callback);
     void RemovePass(PostProcessOwner owner, PostProcessPass pass);
     void SetEnabled(PostProcessOwner owner, PostProcessPass pass, bool enabled);
     [[nodiscard]] std::string GetPassError(PostProcessOwner owner, PostProcessPass pass) const;
@@ -112,6 +148,10 @@ public:
     void BeginFrame();
     void EndFrame() noexcept;
     [[nodiscard]] bool HasPasses() const noexcept;
+    [[nodiscard]] bool HasProceduralPasses() const noexcept;
+    // After opaque scene/sky, before particles. Does not clear scene color or depth.
+    // Callback errors disable the pass; draws already issued remain in this frame.
+    void ExecuteProcedural(RenderWorld& world, RenderingResources& resources);
     [[nodiscard]] TextureHandle Execute(PostProcessStage stage, TextureHandle input,
                                         RenderWorld& world, RenderingResources& resources);
     [[nodiscard]] TextureHandle GetCompositionTarget();
@@ -119,6 +159,7 @@ public:
 
 private:
     friend class PostProcessContext;
+    friend class ProceduralContext;
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

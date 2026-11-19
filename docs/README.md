@@ -31,6 +31,7 @@ Writing games in Lua with the editor:
 | [ui.md](ui.md) | Game UI with RML/RCSS: documents, styles, models, events, preview and reload |
 | [ui-lua-facade.md](ui-lua-facade.md) | The exact Lua UI API and its lifetime rules |
 | [postprocessing.md](postprocessing.md) | Runtime fullscreen effects, shader assets, passes and Lua render commands |
+| [procedural-rendering.md](procedural-rendering.md) | Script-owned procedural geometry, pipelines and instanced draws |
 | [importing-models.md](importing-models.md) | Importing static models: material slots, textures, material instances, Extract Materials |
 | [building-games.md](building-games.md) | Build Game and `sri-build`: what is cooked, the `game.sripak` pack, the shipped folder |
 

@@ -180,6 +180,10 @@ void RenderingContext::RawDraw(const uint32_t vertexCount, const uint32_t baseVe
     deviceContext_->Draw(vertexCount, baseVertex);
 }
 
+void RenderingContext::RawDrawInstanced(const uint32_t vertexCount, const uint32_t instanceCount) const {
+    deviceContext_->DrawInstanced(vertexCount, instanceCount, 0, 0);
+}
+
 void RenderingContext::DrawLines(const std::span<const LineVertex> endpoints) {
     if (endpoints.empty() || endpoints.size() % 2 != 0 ||
         endpoints.size_bytes() > std::numeric_limits<uint32_t>::max()) return;
@@ -306,13 +310,14 @@ void RenderingContext::SetShaderResources(const BindSlot slot, ID3D11ShaderResou
     }
 }
 
-void RenderingContext::BindSamplers() {
+void RenderingContext::BindSamplers(const ShaderStage stages) {
     constexpr uint32_t count = static_cast<uint32_t>(SamplerState::Count);
     std::array<ID3D11SamplerState*, count> samplers;
     for (int i = 0; i < count; i++) {
         samplers[i] = renderingStates_.GetSamplerState(static_cast<SamplerState>(i));
     }
-    deviceContext_->PSSetSamplers(0, count, samplers.data());
+    if (HasFlag(stages, ShaderStage::Vertex)) deviceContext_->VSSetSamplers(0, count, samplers.data());
+    if (HasFlag(stages, ShaderStage::Pixel)) deviceContext_->PSSetSamplers(0, count, samplers.data());
 }
 
 void RenderingContext::SetBlendState(const BlendState state, const float* blendFactor,

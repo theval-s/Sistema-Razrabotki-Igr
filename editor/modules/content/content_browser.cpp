@@ -78,7 +78,7 @@ constexpr engine::CatalogAssetKind FilterKinds[] = {
     engine::CatalogAssetKind::AnimationClip,
     engine::CatalogAssetKind::Texture,  engine::CatalogAssetKind::Material,
     engine::CatalogAssetKind::MaterialInstance, engine::CatalogAssetKind::Shader, engine::CatalogAssetKind::ParticleEffect,
-    engine::CatalogAssetKind::Skybox, engine::CatalogAssetKind::PostProcess,
+    engine::CatalogAssetKind::Skybox, engine::CatalogAssetKind::PostProcess, engine::CatalogAssetKind::RenderPipeline,
     engine::CatalogAssetKind::Script,
     engine::CatalogAssetKind::BehaviorTree,
     engine::CatalogAssetKind::AudioClip,

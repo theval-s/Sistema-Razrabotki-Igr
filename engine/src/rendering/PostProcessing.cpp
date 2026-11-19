@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cmath>
 #include <exception>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <unordered_map>
@@ -72,6 +73,148 @@ std::array<std::uint32_t, 2> TextureSize(const Texture& texture) {
     }
     throw std::invalid_argument("Postprocess texture must be a live 2D texture.");
 }
+
+std::size_t ProceduralStageIndex(ShaderStage stage) {
+    if (stage == ShaderStage::Vertex) return 0;
+    if (stage == ShaderStage::Pixel) return 1;
+    throw std::invalid_argument("Procedural bindings require Vertex or Pixel stage.");
+}
+
+bool TextureReturnTypeMatches(D3D_RESOURCE_RETURN_TYPE type, DXGI_FORMAT format) {
+    switch (format) {
+    case DXGI_FORMAT_R32G32B32A32_UINT: case DXGI_FORMAT_R32G32B32_UINT:
+    case DXGI_FORMAT_R16G16B16A16_UINT: case DXGI_FORMAT_R32G32_UINT:
+    case DXGI_FORMAT_R10G10B10A2_UINT: case DXGI_FORMAT_R8G8B8A8_UINT:
+    case DXGI_FORMAT_R16G16_UINT: case DXGI_FORMAT_R32_UINT: case DXGI_FORMAT_R8G8_UINT:
+    case DXGI_FORMAT_R16_UINT: case DXGI_FORMAT_R8_UINT:
+    case DXGI_FORMAT_X24_TYPELESS_G8_UINT: case DXGI_FORMAT_X32_TYPELESS_G8X24_UINT:
+        return type == D3D_RETURN_TYPE_UINT;
+    case DXGI_FORMAT_R32G32B32A32_SINT: case DXGI_FORMAT_R32G32B32_SINT:
+    case DXGI_FORMAT_R16G16B16A16_SINT: case DXGI_FORMAT_R32G32_SINT:
+    case DXGI_FORMAT_R8G8B8A8_SINT: case DXGI_FORMAT_R16G16_SINT:
+    case DXGI_FORMAT_R32_SINT: case DXGI_FORMAT_R8G8_SINT:
+    case DXGI_FORMAT_R16_SINT: case DXGI_FORMAT_R8_SINT:
+        return type == D3D_RETURN_TYPE_SINT;
+    case DXGI_FORMAT_UNKNOWN:
+        return false;
+    default:
+        // Normalized, sRGB, compressed and floating-point views all return floats.
+        return type == D3D_RETURN_TYPE_FLOAT || type == D3D_RETURN_TYPE_UNORM || type == D3D_RETURN_TYPE_SNORM;
+    }
+}
+
+// Validate the memory contract, not user-chosen variable names. Common.hlsl's
+// nested Frame/View structures and equivalent flat declarations are both valid.
+void ValidateEngineField(ID3D11ShaderReflectionType* type, UINT offset, UINT slot) {
+    D3D11_SHADER_TYPE_DESC desc{};
+    if (!type || FAILED(type->GetDesc(&desc)) || desc.Elements)
+        throw std::invalid_argument("Unsupported engine constant-buffer layout.");
+    if (desc.Class == D3D_SVC_STRUCT) {
+        for (UINT i = 0; i < desc.Members; ++i) {
+            auto* member = type->GetMemberTypeByIndex(i);
+            D3D11_SHADER_TYPE_DESC field{};
+            if (!member || FAILED(member->GetDesc(&field)))
+                throw std::invalid_argument("Invalid engine constant-buffer member.");
+            ValidateEngineField(member, offset + field.Offset, slot);
+        }
+        return;
+    }
+    if (desc.Type == D3D_SVT_FLOAT) {
+        if (slot == 1 && desc.Class == D3D_SVC_MATRIX_ROWS && desc.Rows == 4 && desc.Columns == 4 &&
+            (offset == 0 || offset == 64 || offset == 128)) return;
+        if ((desc.Class == D3D_SVC_SCALAR || desc.Class == D3D_SVC_VECTOR) && desc.Rows == 1 &&
+            desc.Columns >= 1 && desc.Columns <= 4 && offset % 4 == 0) {
+            const auto end = offset + desc.Columns * 4;
+            if (slot == 0 && end <= sizeof(FrameBufferData)) return;
+            if (slot == 1 && offset >= 192 && end <= sizeof(ViewBufferData)) return;
+        }
+    }
+    throw std::invalid_argument("Engine b0/b1 declarations must match the frame/camera layout in Common.hlsl.");
+}
+
+void ValidateProceduralResources(const CompiledShader& shader) {
+    if (!shader.blob || !shader.reflection)
+        throw std::invalid_argument("Procedural pipelines require compiled shaders with reflection.");
+    for (UINT i = 0; i < shader.desc.BoundResources; ++i) {
+        D3D11_SHADER_INPUT_BIND_DESC binding{};
+        if (FAILED(shader.reflection->GetResourceBindingDesc(i, &binding)) || binding.BindCount != 1)
+            throw std::invalid_argument("Procedural pipelines do not support resource binding arrays.");
+        switch (binding.Type) {
+        case D3D_SIT_TEXTURE:
+            if (binding.BindPoint >= D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT)
+                throw std::invalid_argument("Procedural texture slots must be t0-t127.");
+            break;
+        case D3D_SIT_SAMPLER:
+            if (binding.BindPoint > 4)
+                throw std::invalid_argument("Procedural pipelines use engine samplers s0-s4.");
+            break;
+        case D3D_SIT_CBUFFER: {
+            if (binding.BindPoint >= D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT ||
+                (binding.BindPoint >= 2 && binding.BindPoint <= 4))
+                throw std::invalid_argument("Procedural shaders use engine b0/b1 or custom b5-b13.");
+            if (binding.BindPoint >= 5) break;
+            auto* buffer = shader.reflection->GetConstantBufferByName(binding.Name);
+            D3D11_SHADER_BUFFER_DESC bufferDesc{};
+            const auto capacity = binding.BindPoint == 0 ? sizeof(FrameBufferData) : sizeof(ViewBufferData);
+            if (!buffer || FAILED(buffer->GetDesc(&bufferDesc)) || bufferDesc.Size > capacity)
+                throw std::invalid_argument("Engine constant-buffer declaration exceeds its native layout.");
+            for (UINT j = 0; j < bufferDesc.Variables; ++j) {
+                auto* variable = buffer->GetVariableByIndex(j);
+                D3D11_SHADER_VARIABLE_DESC variableDesc{};
+                if (!variable || FAILED(variable->GetDesc(&variableDesc)))
+                    throw std::invalid_argument("Invalid engine constant-buffer variable.");
+                ValidateEngineField(variable->GetType(), variableDesc.StartOffset, binding.BindPoint);
+            }
+            break;
+        }
+        default:
+            throw std::invalid_argument("Procedural shaders support only constant buffers, textures, and engine samplers.");
+        }
+    }
+}
+
+void ValidateProceduralSignatures(const CompiledShader& vertex, const CompiledShader& pixel) {
+    for (UINT i = 0; i < vertex.desc.InputParameters; ++i) {
+        D3D11_SIGNATURE_PARAMETER_DESC input{};
+        if (FAILED(vertex.reflection->GetInputParameterDesc(i, &input)) ||
+            (input.SystemValueType != D3D_NAME_VERTEX_ID && input.SystemValueType != D3D_NAME_INSTANCE_ID))
+            throw std::invalid_argument("Procedural vertex shaders accept only SV_VertexID and SV_InstanceID.");
+    }
+    bool position = false;
+    for (UINT i = 0; i < vertex.desc.OutputParameters; ++i) {
+        D3D11_SIGNATURE_PARAMETER_DESC output{};
+        if (FAILED(vertex.reflection->GetOutputParameterDesc(i, &output)))
+            throw std::invalid_argument("Invalid procedural vertex output signature.");
+        if (output.SystemValueType == D3D_NAME_POSITION && output.Mask == 15 &&
+            output.ComponentType == D3D_REGISTER_COMPONENT_FLOAT32) position = true;
+    }
+    if (!position) throw std::invalid_argument("Procedural vertex shaders must output float4 SV_Position.");
+    for (UINT i = 0; i < pixel.desc.InputParameters; ++i) {
+        D3D11_SIGNATURE_PARAMETER_DESC input{};
+        if (FAILED(pixel.reflection->GetInputParameterDesc(i, &input)))
+            throw std::invalid_argument("Invalid procedural pixel input signature.");
+        if (input.SystemValueType == D3D_NAME_IS_FRONT_FACE || input.SystemValueType == D3D_NAME_PRIMITIVE_ID ||
+            input.SystemValueType == D3D_NAME_SAMPLE_INDEX || input.SystemValueType == D3D_NAME_COVERAGE) continue;
+        bool matched = false;
+        for (UINT j = 0; j < vertex.desc.OutputParameters; ++j) {
+            D3D11_SIGNATURE_PARAMETER_DESC output{};
+            if (SUCCEEDED(vertex.reflection->GetOutputParameterDesc(j, &output)) &&
+                _stricmp(input.SemanticName, output.SemanticName) == 0 &&
+                input.SemanticIndex == output.SemanticIndex && input.ComponentType == output.ComponentType &&
+                (output.Mask & input.Mask) == input.Mask) { matched = true; break; }
+        }
+        if (!matched) throw std::invalid_argument("Procedural VS/PS signatures do not match: " + std::string(input.SemanticName));
+    }
+    for (UINT i = 0; i < pixel.desc.OutputParameters; ++i) {
+        D3D11_SIGNATURE_PARAMETER_DESC output{};
+        if (FAILED(pixel.reflection->GetOutputParameterDesc(i, &output)))
+            throw std::invalid_argument("Invalid procedural pixel output signature.");
+        if ((output.SystemValueType == D3D_NAME_TARGET && output.SemanticIndex == 0) ||
+            output.SystemValueType == D3D_NAME_DEPTH || output.SystemValueType == D3D_NAME_DEPTH_GREATER_EQUAL ||
+            output.SystemValueType == D3D_NAME_DEPTH_LESS_EQUAL || output.SystemValueType == D3D_NAME_COVERAGE) continue;
+        throw std::invalid_argument("Procedural pixel shaders can write only SV_Target0 and depth/coverage.");
+    }
+}
 }
 
 struct PostProcessing::Impl {
@@ -89,6 +232,12 @@ struct PostProcessing::Impl {
         PostProcessTargetDesc desc;
         bool imported = false;
     };
+    struct PipelineRecord {
+        PostProcessOwner owner;
+        std::array<PostProcessShader, 2> shaders;
+        ProceduralBlend blend;
+        ProceduralDepth depth;
+    };
     struct PassRecord {
         PostProcessOwner owner;
         std::string name;
@@ -98,6 +247,7 @@ struct PostProcessing::Impl {
         Callback callback;
         bool enabled = true;
         std::string error;
+        ProceduralCallback procedural;
     };
     RenderingContext* context{};
     std::uint32_t width{}, height{};
@@ -109,8 +259,10 @@ struct PostProcessing::Impl {
     std::unordered_map<std::uint64_t, ShaderRecord> shaders;
     std::unordered_map<std::uint64_t, BufferRecord> buffers;
     std::unordered_map<std::uint64_t, TextureRecord> textures;
+    std::unordered_map<std::uint64_t, PipelineRecord> pipelines;
     std::unordered_map<std::uint64_t, std::shared_ptr<PassRecord>> passes;
     std::array<std::vector<std::shared_ptr<PassRecord>>, 3> schedule;
+    std::vector<std::shared_ptr<PassRecord>> proceduralSchedule;
     ShaderHandle fullscreenVS, copyPS;
     TextureHandle composition;
     std::array<TextureHandle, 2> hdrTargets{}, colorTargets{};
@@ -149,6 +301,7 @@ struct PostProcessing::Impl {
     void Collect() noexcept {
         if (!context || frameActive) return;
         auto& manager = context->GetResourceManager();
+        std::erase_if(pipelines, [&](const auto& pair) { return !owners.contains(pair.second.owner.value); });
         std::erase_if(shaders, [&](auto& pair) {
             if (owners.contains(pair.second.owner.value)) return false;
             manager.DestroyShader(pair.second.handle);
@@ -232,6 +385,8 @@ std::shared_ptr<PostProcessContext::State> PostProcessContext::GetState() const 
 void PostProcessContext::SetPixelShader(PostProcessShader shader) {
     const auto state = GetState();
     const auto& record = PostProcessing::Impl::Owned(state->system->shaders, shader, state->owner);
+    if (record.compiled.type != ShaderType::Pixel)
+        throw std::invalid_argument("SetPixelShader requires a pixel shader.");
     state->system->context->SetShader(record.handle);
     state->shader = shader;
 }
@@ -268,6 +423,8 @@ void PostProcessContext::BindConstantBuffer(std::uint32_t slot, PostProcessBuffe
     if (slot < 5 || slot >= state->buffers.size())
         throw std::invalid_argument("Custom constant buffers use pixel slots b5 through b13; b0-b4 are engine-owned.");
     auto& record = PostProcessing::Impl::Owned(state->system->buffers, buffer, state->owner);
+    if (PostProcessing::Impl::Owned(state->system->shaders, record.shader, state->owner).compiled.type != ShaderType::Pixel)
+        throw std::invalid_argument("Fullscreen constant buffers must be reflected from a pixel shader.");
     if (slot != record.parameters.Slot())
         throw std::invalid_argument("Constant-buffer slot does not match its HLSL register.");
     try {
@@ -327,6 +484,148 @@ std::array<std::uint32_t, 2> PostProcessContext::GetTextureSize(PostProcessTextu
     return TextureSize(state->system->TextureFor(state->Resolve(texture)));
 }
 
+struct ProceduralContext::State {
+    PostProcessing::Impl* system{};
+    PostProcessOwner owner;
+    PostProcessPipeline pipeline;
+    TextureHandle color, depth;
+    std::array<std::array<TextureHandle, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT>, 2> sampled{};
+    std::array<std::array<PostProcessBuffer, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT>, 2> buffers{};
+    std::exception_ptr nativeFailure;
+
+    TextureHandle Resolve(PostProcessTexture texture) const {
+        system->RequireOwner(owner);
+        if (texture.execution) throw std::invalid_argument("Procedural draws cannot borrow fullscreen frame textures.");
+        const auto handle = PostProcessing::Impl::Owned(system->textures, texture, owner).handle;
+        if (!system->TextureFor(handle).HasShaderResourceView())
+            throw std::invalid_argument("Procedural textures must be sampleable.");
+        return handle;
+    }
+    bool AliasesOutput(TextureHandle handle) const {
+        ComPtr<ID3D11Resource> sampledResource;
+        system->TextureFor(handle).GetSRV()->GetResource(&sampledResource);
+        // Imported SRV snapshots have different handles, but may alias an engine attachment.
+        for (const auto target : {color, depth}) {
+            ComPtr<ID3D11Resource> targetResource;
+            const auto& resource = system->TextureFor(target);
+            if (resource.HasShaderResourceView()) resource.GetSRV()->GetResource(&targetResource);
+            else if (resource.HasRenderTargetView()) resource.GetRTV()->GetResource(&targetResource);
+            if (sampledResource == targetResource) return true;
+        }
+        return false;
+    }
+    void ValidateBindings(const PostProcessing::Impl::PipelineRecord& active) const {
+        for (std::size_t stage = 0; stage < 2; ++stage) {
+            const auto& shader = PostProcessing::Impl::Owned(system->shaders, active.shaders[stage], owner).compiled;
+            for (UINT i = 0; i < shader.desc.BoundResources; ++i) {
+                D3D11_SHADER_INPUT_BIND_DESC binding{};
+                shader.reflection->GetResourceBindingDesc(i, &binding); // Validated at pipeline creation.
+                if (binding.Type == D3D_SIT_TEXTURE) {
+                    const auto handle = sampled[stage].at(binding.BindPoint);
+                    if (!handle) throw std::invalid_argument("Missing procedural texture binding: " + std::string(binding.Name));
+                    D3D11_SHADER_RESOURCE_VIEW_DESC view{};
+                    system->TextureFor(handle).GetSRV()->GetDesc(&view);
+                    // D3D_SRV_DIMENSION and D3D11_SRV_DIMENSION use the same values.
+                    if (static_cast<UINT>(view.ViewDimension) != static_cast<UINT>(binding.Dimension))
+                        throw std::invalid_argument("Procedural texture dimension does not match shader: " + std::string(binding.Name));
+                    if (!TextureReturnTypeMatches(binding.ReturnType, view.Format))
+                        throw std::invalid_argument("Procedural texture numeric type does not match shader: " + std::string(binding.Name));
+                } else if (binding.Type == D3D_SIT_CBUFFER && binding.BindPoint >= 5) {
+                    const auto& buffer = PostProcessing::Impl::Owned(system->buffers, buffers[stage].at(binding.BindPoint), owner);
+                    if (buffer.shader != active.shaders[stage])
+                        throw std::invalid_argument("Constant buffer must be reflected from the active pipeline stage: " +
+                                                    std::string(binding.Name));
+                }
+            }
+        }
+    }
+};
+
+ProceduralContext::ProceduralContext(const std::shared_ptr<State>& state) : state_(state) {}
+std::shared_ptr<ProceduralContext::State> ProceduralContext::GetState() const {
+    auto state = state_.lock();
+    if (!state) throw std::invalid_argument("Procedural context is only valid inside its execute callback.");
+    state->system->RequireOwner(state->owner);
+    return state;
+}
+
+void ProceduralContext::SetPipeline(PostProcessPipeline pipeline) {
+    const auto state = GetState();
+    const auto& record = PostProcessing::Impl::Owned(state->system->pipelines, pipeline, state->owner);
+    auto& context = *state->system->context;
+    try {
+        context.SetRenderTargets({state->color},
+            record.depth == ProceduralDepth::Disabled ? TextureHandle{} : state->depth,
+            record.depth == ProceduralDepth::ReadOnly);
+        context.SetViewport(state->system->width, state->system->height);
+        context.SetDepthState(record.depth == ProceduralDepth::Disabled ? DepthState::Disabled :
+            record.depth == ProceduralDepth::ReadOnly ? DepthState::ReadOnlyReverseZ : DepthState::ReadWrite);
+        context.SetBlendState(record.blend == ProceduralBlend::Opaque ? BlendState::Opaque :
+            record.blend == ProceduralBlend::Alpha ? BlendState::AlphaBlend : BlendState::Additive);
+        context.SetRasterizerState(RasterizerState::CullNone);
+        for (const auto shader : record.shaders)
+            context.SetShader(PostProcessing::Impl::Owned(state->system->shaders, shader, state->owner).handle);
+        context.GetDeviceContext()->IASetInputLayout(nullptr);
+        context.GetDeviceContext()->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    } catch (const RenderingException&) {
+        state->nativeFailure = std::current_exception();
+        throw;
+    }
+    state->pipeline = pipeline;
+}
+
+void ProceduralContext::BindTexture(std::uint32_t slot, PostProcessTexture texture, ShaderStage stage) {
+    const auto state = GetState();
+    const auto index = ProceduralStageIndex(stage);
+    if (slot >= state->sampled[index].size()) throw std::invalid_argument("Texture slots must be in [0, 127].");
+    const auto handle = state->Resolve(texture);
+    if (state->AliasesOutput(handle))
+        throw std::invalid_argument("Procedural draws cannot sample scene color/depth attachments.");
+    state->system->context->SetShaderResources(BindSlot(static_cast<std::uint8_t>(slot), stage), handle);
+    state->sampled[index][slot] = handle;
+}
+
+void ProceduralContext::BindConstantBuffer(std::uint32_t slot, PostProcessBuffer buffer) {
+    const auto state = GetState();
+    if (slot < 5 || slot >= D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT)
+        throw std::invalid_argument("Custom constant buffers use slots b5-b13.");
+    auto& record = PostProcessing::Impl::Owned(state->system->buffers, buffer, state->owner);
+    if (slot != record.parameters.Slot())
+        throw std::invalid_argument("Constant-buffer slot does not match its HLSL register.");
+    const auto type = PostProcessing::Impl::Owned(state->system->shaders, record.shader, state->owner).compiled.type;
+    const auto stage = type == ShaderType::Vertex ? ShaderStage::Vertex : ShaderStage::Pixel;
+    try {
+        state->system->Upload(record);
+        state->system->context->BindCBuffer(BindSlot(static_cast<std::uint8_t>(slot), stage), record.handle);
+    } catch (const RenderingException&) {
+        state->nativeFailure = std::current_exception();
+        throw;
+    }
+    state->buffers[ProceduralStageIndex(stage)][slot] = buffer;
+}
+
+void ProceduralContext::DrawProcedural(std::uint32_t vertexCount, std::uint32_t instanceCount) {
+    const auto state = GetState();
+    if (!vertexCount || !instanceCount) return;
+    if (vertexCount % 3) throw std::invalid_argument("Procedural triangle-list vertex count must be divisible by three.");
+    const auto& pipeline = PostProcessing::Impl::Owned(state->system->pipelines, state->pipeline, state->owner);
+    state->ValidateBindings(pipeline);
+    try {
+        for (const auto& stage : state->buffers)
+            for (const auto buffer : stage)
+                if (buffer.value) state->system->Upload(PostProcessing::Impl::Owned(state->system->buffers, buffer, state->owner));
+        state->system->context->RawDrawInstanced(vertexCount, instanceCount);
+    } catch (const RenderingException&) {
+        state->nativeFailure = std::current_exception();
+        throw;
+    }
+}
+
+std::array<std::uint32_t, 2> ProceduralContext::GetTextureSize(PostProcessTexture texture) const {
+    const auto state = GetState();
+    return TextureSize(state->system->TextureFor(state->Resolve(texture)));
+}
+
 PostProcessing::PostProcessing() : impl_(std::make_unique<Impl>()) {}
 PostProcessing::~PostProcessing() { Shutdown(); }
 
@@ -352,6 +651,7 @@ void PostProcessing::Shutdown() noexcept {
     impl_->context->ClearState();
     impl_->frameActive = false;
     for (auto& schedule : impl_->schedule) schedule.clear();
+    impl_->proceduralSchedule.clear();
     impl_->passes.clear();
     impl_->owners.clear();
     impl_->tonemappingBypassOwners.clear();
@@ -407,8 +707,8 @@ bool PostProcessing::IsBuiltinTonemappingEnabled() const noexcept {
 
 PostProcessShader PostProcessing::CreateShader(PostProcessOwner owner, const CompiledShader& shader) {
     impl_->RequireSetup(owner);
-    if (shader.type != ShaderType::Pixel || !shader.blob || !shader.reflection)
-        throw std::invalid_argument("Fullscreen effects require a compiled pixel shader with reflection.");
+    if ((shader.type != ShaderType::Pixel && shader.type != ShaderType::Vertex) || !shader.blob || !shader.reflection)
+        throw std::invalid_argument("Render resources require a compiled vertex or pixel shader with reflection.");
     for (const auto& binding : shader.bindings) {
         if (binding.type != D3D_SIT_CBUFFER && binding.type != D3D_SIT_TEXTURE && binding.type != D3D_SIT_SAMPLER)
             throw std::invalid_argument("Unsupported fullscreen shader resource: " + binding.name);
@@ -423,6 +723,41 @@ PostProcessShader PostProcessing::CreateShader(PostProcessOwner owner, const Com
     try { impl_->shaders.emplace(token, Impl::ShaderRecord{owner, handle, shader}); }
     catch (...) { manager.DestroyShader(handle); throw; }
     return {token};
+}
+
+PostProcessPipeline PostProcessing::CreatePipeline(PostProcessOwner owner,
+    const CompiledShader& vertex, const CompiledShader& pixel, ProceduralBlend blend, ProceduralDepth depth) {
+    impl_->RequireSetup(owner);
+    if (vertex.type != ShaderType::Vertex || pixel.type != ShaderType::Pixel)
+        throw std::invalid_argument("Procedural pipelines require vertex and pixel shader stages.");
+    if ((blend != ProceduralBlend::Opaque && blend != ProceduralBlend::Alpha && blend != ProceduralBlend::Additive) ||
+        (depth != ProceduralDepth::Disabled && depth != ProceduralDepth::ReadOnly && depth != ProceduralDepth::ReadWrite))
+        throw std::invalid_argument("Invalid procedural blend or depth mode.");
+    ValidateProceduralResources(vertex);
+    ValidateProceduralResources(pixel);
+    ValidateProceduralSignatures(vertex, pixel);
+    const auto token = Token();
+    std::array<PostProcessShader, 2> shaders{};
+    try {
+        shaders[0] = CreateShader(owner, vertex);
+        shaders[1] = CreateShader(owner, pixel);
+        impl_->pipelines.emplace(token, Impl::PipelineRecord{owner, shaders, blend, depth});
+    } catch (...) {
+        for (const auto shader : shaders) {
+            const auto found = impl_->shaders.find(shader.value);
+            if (found == impl_->shaders.end()) continue;
+            impl_->context->GetResourceManager().DestroyShader(found->second.handle);
+            impl_->shaders.erase(found);
+        }
+        throw;
+    }
+    return {token};
+}
+
+std::array<PostProcessShader, 2> PostProcessing::GetPipelineShaders(
+    PostProcessOwner owner, PostProcessPipeline pipeline) const {
+    impl_->RequireOwner(owner);
+    return Impl::Owned(impl_->pipelines, pipeline, owner).shaders;
 }
 
 ShaderParameters PostProcessing::ReflectParameters(PostProcessOwner owner, PostProcessShader shader, const std::string& name) const {
@@ -491,6 +826,16 @@ PostProcessPass PostProcessing::AddPass(PostProcessOwner owner, std::string name
         Impl::PassRecord{owner, std::move(name), stage, order, token, std::move(callback), true, {}}));
     return {token};
 }
+PostProcessPass PostProcessing::AddProceduralPass(PostProcessOwner owner, std::string name, int order, ProceduralCallback callback) {
+    impl_->RequireSetup(owner);
+    if (name.empty() || !callback) throw std::invalid_argument("Procedural passes require a name and execute callback.");
+    for (const auto& [id, pass] : impl_->passes)
+        if (pass->owner == owner && pass->name == name) throw std::invalid_argument("Duplicate render pass name: " + name);
+    const auto token = Token();
+    impl_->passes.emplace(token, std::make_shared<Impl::PassRecord>(
+        Impl::PassRecord{owner, std::move(name), PostProcessStage::BeforeTonemap, order, token, {}, true, {}, std::move(callback)}));
+    return {token};
+}
 void PostProcessing::RemovePass(PostProcessOwner owner, PostProcessPass pass) {
     impl_->RequireOwner(owner);
     const auto found = impl_->passes.find(pass.value);
@@ -515,24 +860,75 @@ std::string PostProcessing::GetPassError(PostProcessOwner owner, PostProcessPass
 void PostProcessing::BeginFrame() {
     if (!impl_->context || impl_->frameActive) throw std::logic_error("Invalid postprocess frame boundary.");
     for (auto& schedule : impl_->schedule) schedule.clear();
+    impl_->proceduralSchedule.clear();
     for (const auto& [id, pass] : impl_->passes) {
-        if (pass->enabled && impl_->owners.contains(pass->owner.value))
-            impl_->schedule[StageIndex(pass->stage)].push_back(pass);
+        if (!pass->enabled || !impl_->owners.contains(pass->owner.value)) continue;
+        if (pass->procedural) impl_->proceduralSchedule.push_back(pass);
+        else impl_->schedule[StageIndex(pass->stage)].push_back(pass);
     }
+    const auto ordered = [](const auto& a, const auto& b) {
+        return a->order == b->order ? a->sequence < b->sequence : a->order < b->order;
+    };
     for (auto& schedule : impl_->schedule) {
-        std::sort(schedule.begin(), schedule.end(), [](const auto& a, const auto& b) {
-            return a->order == b->order ? a->sequence < b->sequence : a->order < b->order;
-        });
+        std::sort(schedule.begin(), schedule.end(), ordered);
     }
+    std::sort(impl_->proceduralSchedule.begin(), impl_->proceduralSchedule.end(), ordered);
     impl_->frameActive = true;
 }
 void PostProcessing::EndFrame() noexcept {
     for (auto& schedule : impl_->schedule) schedule.clear();
+    impl_->proceduralSchedule.clear();
     impl_->frameActive = false;
     impl_->Collect();
 }
 bool PostProcessing::HasPasses() const noexcept {
     return std::any_of(impl_->schedule.begin(), impl_->schedule.end(), [](const auto& passes) { return !passes.empty(); });
+}
+
+bool PostProcessing::HasProceduralPasses() const noexcept {
+    return !impl_->proceduralSchedule.empty();
+}
+
+void PostProcessing::ExecuteProcedural(RenderWorld& world, RenderingResources& resources) {
+    if (!impl_->frameActive) throw std::logic_error("Procedural execution requires BeginFrame.");
+    auto& context = *impl_->context;
+    for (const auto& pass : impl_->proceduralSchedule) {
+        if (!impl_->owners.contains(pass->owner.value) || !impl_->passes.contains(pass->sequence)) continue;
+        auto state = std::make_shared<ProceduralContext::State>();
+        state->system = impl_.get();
+        state->owner = pass->owner;
+        state->color = resources.gBuffer.resultTexture;
+        state->depth = resources.gBuffer.depthTexture;
+        ProceduralContext commands(state);
+        context.ClearState();
+        context.BindCBuffer(BindSlots::CBuffer::Frame.WithStages(ShaderStage::Vertex | ShaderStage::Pixel),
+                            resources.frameCBuffer.GetHandle());
+        context.BindCBuffer(BindSlots::CBuffer::View.WithStages(ShaderStage::Vertex | ShaderStage::Pixel),
+                            resources.viewCBuffer.GetHandle());
+        world.BindCameraView(context, resources);
+        context.BindSamplers(ShaderStage::Vertex | ShaderStage::Pixel);
+        try {
+            pass->procedural(commands, {impl_->width, impl_->height});
+            if (state->nativeFailure) std::rethrow_exception(state->nativeFailure);
+        } catch (const RenderingException&) {
+            context.ClearState();
+            throw;
+        } catch (const std::exception& error) {
+            context.ClearState();
+            if (state->nativeFailure) std::rethrow_exception(state->nativeFailure);
+            pass->enabled = false;
+            pass->error = error.what();
+            log::Render().error("Procedural pass '{}' disabled: {}", pass->name, pass->error);
+        } catch (...) {
+            context.ClearState();
+            if (state->nativeFailure) std::rethrow_exception(state->nativeFailure);
+            pass->enabled = false;
+            pass->error = "Unknown procedural callback error.";
+            log::Render().error("Procedural pass '{}' disabled: {}", pass->name, pass->error);
+        }
+        state.reset();
+        context.ClearState();
+    }
 }
 
 TextureHandle PostProcessing::Execute(PostProcessStage stage, TextureHandle input, RenderWorld& world, RenderingResources& resources) {

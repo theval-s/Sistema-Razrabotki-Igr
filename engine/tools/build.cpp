@@ -9,6 +9,7 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
 #include <engine/assets/PostProcessDefinition.hpp>
+#include <engine/assets/RenderPipelineDefinition.hpp>
 #include <engine/core/Content.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/Pak.hpp>
@@ -336,6 +337,14 @@ namespace {
             engine::ShaderVariant variant;
             if (!engine::LoadPostProcessDefinition(entry->source, definition, error) ||
                 !engine::PostProcessShaderVariant(definition, catalog, variant, error))
+                errors.push_back(entry->path + ": " + error);
+        }
+
+        for (const auto* entry : catalog.List(engine::CatalogAssetKind::RenderPipeline)) {
+            engine::RenderPipelineDefinition definition;
+            std::array<engine::ShaderVariant, 2> variants;
+            if (!engine::LoadRenderPipelineDefinition(entry->source, definition, error) ||
+                !engine::RenderPipelineShaderVariants(definition, catalog, variants, error))
                 errors.push_back(entry->path + ": " + error);
         }
 

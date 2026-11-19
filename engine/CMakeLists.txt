@@ -416,6 +416,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/assets/MaterialDefinition.hpp
     include/engine/assets/ParticleEffectDefinition.hpp
     include/engine/assets/PostProcessDefinition.hpp
+    include/engine/assets/RenderPipelineDefinition.hpp
     include/engine/assets/SkyboxDefinition.hpp
     include/engine/core/CoreEvents.hpp
     include/engine/core/DefaultSubsystems.hpp
@@ -463,6 +464,7 @@ set(ENGINE_CORE_SOURCES
     src/assets/MaterialDefinition.cpp
     src/assets/ParticleEffectDefinition.cpp
     src/assets/PostProcessDefinition.cpp
+    src/assets/RenderPipelineDefinition.cpp
     src/assets/ParticleEffectImporter.cpp
     src/assets/SkyboxDefinition.cpp
     src/assets/SkyboxImporter.cpp

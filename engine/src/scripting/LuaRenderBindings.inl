@@ -6,10 +6,12 @@ namespace {
         std::uint64_t session;
     };
     using LuaRenderShader = LuaRenderHandle<PostProcessShader>;
+    using LuaRenderPipeline = LuaRenderHandle<PostProcessPipeline>;
     using LuaRenderBuffer = LuaRenderHandle<PostProcessBuffer>;
     using LuaRenderTexture = LuaRenderHandle<PostProcessTexture>;
     using LuaRenderPass = LuaRenderHandle<PostProcessPass>;
     using LuaRenderContext = LuaRenderHandle<PostProcessContext>;
+    using LuaProceduralContext = LuaRenderHandle<ProceduralContext>;
 
     std::size_t RenderArraySize(const sol::table& table) {
         const auto count = table.size();
@@ -106,7 +108,8 @@ void LuaRuntime::Impl::CheckRenderHandle(PostProcessOwner owner, std::uint64_t h
         throw std::invalid_argument("Render handle belongs to another owner or stale session");
 }
 
-void LuaRuntime::Impl::DispatchRender(std::uint64_t callback, PostProcessContext& context, const PostProcessFrame& frame) {
+template<class Context, class Frame>
+void LuaRuntime::Impl::DispatchRender(std::uint64_t callback, Context& context, const Frame& frame) {
     if (!state || shuttingDown || uiSuspended) throw std::runtime_error("Render script session has ended");
     const auto found = std::find_if(renderCallbacks.begin(), renderCallbacks.end(),
         [&](const auto& entry) { return entry.id == callback; });
@@ -127,19 +130,28 @@ void LuaRuntime::Impl::DispatchRender(std::uint64_t callback, PostProcessContext
     struct Reset { bool& active; ~Reset() { active = false; } } reset{instance->active};
     try {
         sol::table input = state->create_table();
-        const auto texture = [&](PostProcessTexture token) {
-            return LuaRenderTexture{token, instance->renderOwner, session};
+        const auto execute = [&]() -> sol::protected_function_result {
+            if constexpr (std::is_same_v<Context, ProceduralContext>) {
+                input["width"] = frame.width;
+                input["height"] = frame.height;
+                return function(LuaProceduralContext{context, instance->renderOwner, session}, input);
+            } else {
+                const auto texture = [&](PostProcessTexture token) {
+                    return LuaRenderTexture{token, instance->renderOwner, session};
+                };
+                input["inputColor"] = texture(frame.inputColor);
+                input["outputColor"] = texture(frame.outputColor);
+                input["depth"] = texture(frame.depth);
+                input["normals"] = texture(frame.normals);
+                input["inputWidth"] = frame.inputWidth;
+                input["inputHeight"] = frame.inputHeight;
+                input["outputWidth"] = frame.outputWidth;
+                input["outputHeight"] = frame.outputHeight;
+                return function(LuaRenderContext{context, instance->renderOwner, session}, input);
+            }
         };
-        input["inputColor"] = texture(frame.inputColor);
-        input["outputColor"] = texture(frame.outputColor);
-        input["depth"] = texture(frame.depth);
-        input["normals"] = texture(frame.normals);
-        input["inputWidth"] = frame.inputWidth;
-        input["inputHeight"] = frame.inputHeight;
-        input["outputWidth"] = frame.outputWidth;
-        input["outputHeight"] = frame.outputHeight;
         renderDeviceFailure = {};
-        auto result = function(LuaRenderContext{context, instance->renderOwner, session}, input);
+        auto result = execute();
         // sol translates native exceptions into Lua errors. Preserve typed GPU failures
         // separately so the renderer's device-failure boundary still sees the original.
         if (renderDeviceFailure) std::rethrow_exception(std::exchange(renderDeviceFailure, {}));
@@ -169,6 +181,17 @@ void LuaRuntime::Impl::RegisterRender() {
     stages["AfterUI"] = PostProcessStage::AfterUI;
     render["Stage"] = stages;
     state->new_usertype<LuaRenderShader>("RenderShader", sol::no_constructor);
+    state->new_usertype<LuaRenderPipeline>("RenderPipeline", sol::no_constructor,
+        "vertexShader", sol::property([this](const LuaRenderPipeline& pipeline) {
+            CheckRenderHandle(pipeline.owner, pipeline.session);
+            return LuaRenderShader{RenderBackend()->GetPipelineShaders(pipeline.owner, pipeline.token)[0],
+                pipeline.owner, pipeline.session};
+        }),
+        "pixelShader", sol::property([this](const LuaRenderPipeline& pipeline) {
+            CheckRenderHandle(pipeline.owner, pipeline.session);
+            return LuaRenderShader{RenderBackend()->GetPipelineShaders(pipeline.owner, pipeline.token)[1],
+                pipeline.owner, pipeline.session};
+        }));
     state->new_usertype<LuaRenderTexture>("RenderTexture", sol::no_constructor);
     state->new_usertype<LuaRenderBuffer>("RenderConstantBuffer", sol::no_constructor,
         "Set", sol::overload(
@@ -251,6 +274,65 @@ void LuaRuntime::Impl::RegisterRender() {
             return std::make_tuple(size[0], size[1]);
         });
 
+    state->new_usertype<LuaProceduralContext>("ProceduralContext", sol::no_constructor,
+        "SetPipeline", [this, invoke](LuaProceduralContext& context, const LuaRenderPipeline& pipeline) {
+            CheckRenderHandle(context.owner, context.session); CheckRenderHandle(pipeline.owner, pipeline.session);
+            invoke([&] { context.token.SetPipeline(pipeline.token); });
+        },
+        "BindTexture", [this, invoke](LuaProceduralContext& context, sol::object slot,
+            const LuaRenderTexture& texture, sol::optional<sol::object> stage) {
+            CheckRenderHandle(context.owner, context.session); CheckRenderHandle(texture.owner, texture.session);
+            ShaderStage shaderStage = ShaderStage::Pixel;
+            if (stage && stage->get_type() != sol::type::nil) {
+                if (stage->get_type() != sol::type::string)
+                    throw std::invalid_argument("Texture stage must be 'Pixel' or 'Vertex'");
+                const auto name = stage->as<std::string>();
+                if (name == "Vertex") shaderStage = ShaderStage::Vertex;
+                else if (name != "Pixel") throw std::invalid_argument("Texture stage must be 'Pixel' or 'Vertex'");
+            }
+            invoke([&] { context.token.BindTexture(RenderInteger(slot, "Texture slot"), texture.token, shaderStage); });
+        },
+        "BindConstantBuffer", [this, invoke](LuaProceduralContext& context, sol::object slot, const LuaRenderBuffer& buffer) {
+            CheckRenderHandle(context.owner, context.session); CheckRenderHandle(buffer.owner, buffer.session);
+            const auto index = RenderInteger(slot, "Constant buffer slot");
+            if (index < 5) throw std::invalid_argument("Constant buffer slots b0-b4 are reserved");
+            invoke([&] { context.token.BindConstantBuffer(index, buffer.token); });
+        },
+        "DrawProcedural", [this, invoke](LuaProceduralContext& context, sol::object vertices, sol::optional<sol::object> instances) {
+            CheckRenderHandle(context.owner, context.session);
+            const auto vertexCount = RenderInteger(vertices, "Vertex count");
+            const auto instanceCount = !instances || instances->get_type() == sol::type::nil ?
+                1 : RenderInteger(*instances, "Instance count");
+            invoke([&] { context.token.DrawProcedural(vertexCount, instanceCount); });
+        },
+        "GetTextureSize", [this, invoke](LuaProceduralContext& context, const LuaRenderTexture& texture) {
+            CheckRenderHandle(context.owner, context.session); CheckRenderHandle(texture.owner, texture.session);
+            const auto size = invoke([&] { return context.token.GetTextureSize(texture.token); });
+            return std::make_tuple(size[0], size[1]);
+        });
+
+    render.set_function("LoadPipeline", [this](const std::string& asset) {
+        const auto owner = RenderOwnerForCall(true);
+        const auto& catalog = bindingsContext.engine->GetAssets().GetCatalog();
+        const auto* entry = catalog.Find(std::string_view(asset), CatalogAssetKind::RenderPipeline);
+        if (!entry) entry = catalog.FindPath(asset);
+        if (!entry || entry->metadata.kind != CatalogAssetKind::RenderPipeline)
+            throw std::invalid_argument("Render.LoadPipeline expects a catalogued pipeline UUID or logical path");
+        RenderPipelineDefinition definition;
+        std::array<ShaderVariant, 2> variants;
+        std::string error;
+        if (!LoadRenderPipelineDefinition(entry->source, definition, error) ||
+            !RenderPipelineShaderVariants(definition, catalog, variants, error))
+            throw std::invalid_argument(error);
+        try {
+            const auto vertex = ShaderContext::CompileCpu(variants[0].file, variants[0].stage, variants[0].options);
+            const auto pixel = ShaderContext::CompileCpu(variants[1].file, variants[1].stage, variants[1].options);
+            return LuaRenderPipeline{RenderBackend()->CreatePipeline(owner, vertex, pixel, definition.blend, definition.depth),
+                owner, session};
+        } catch (const RenderingException& error) {
+            throw std::runtime_error(rendering_failure::Format(error.GetFailure()));
+        }
+    });
     render.set_function("SetBuiltinTonemappingEnabled", [this](sol::object enabled) {
         if (enabled.get_type() != sol::type::boolean)
             throw std::invalid_argument("SetBuiltinTonemappingEnabled expects a boolean");
@@ -328,12 +410,18 @@ void LuaRuntime::Impl::RegisterRender() {
         else throw std::invalid_argument("Unsupported render target format");
         return LuaRenderTexture{RenderBackend()->CreateTarget(owner, target), owner, session};
     });
-    render.set_function("AddFullscreenPass", [this](sol::table desc) {
+    const auto addPass = [this](sol::table desc, bool procedural) {
         const auto owner = RenderOwnerForCall(true);
         const auto name = desc.get<std::string>("name");
-        const auto stage = desc.get<PostProcessStage>("stage");
-        if (stage != PostProcessStage::BeforeTonemap && stage != PostProcessStage::AfterTonemap &&
-            stage != PostProcessStage::AfterUI) throw std::invalid_argument("Invalid Render stage");
+        PostProcessStage stage = PostProcessStage::BeforeTonemap;
+        if (procedural) {
+            if (desc.raw_get<sol::object>("stage").get_type() != sol::type::nil)
+                throw std::invalid_argument("Procedural passes have a fixed pre-particle stage");
+        } else {
+            stage = desc.get<PostProcessStage>("stage");
+            if (stage != PostProcessStage::BeforeTonemap && stage != PostProcessStage::AfterTonemap &&
+                stage != PostProcessStage::AfterUI) throw std::invalid_argument("Invalid Render stage");
+        }
         int order = 0;
         const auto orderValue = desc.raw_get<sol::object>("order");
         if (orderValue.get_type() != sol::type::nil) {
@@ -356,7 +444,12 @@ void LuaRuntime::Impl::RegisterRender() {
         renderCallbacks.push_back({callback, owner, instance, function, {}, name});
         try {
             const std::weak_ptr<UiLink> weak = uiLink;
-            const auto pass = RenderBackend()->AddPass(owner, name, stage, order,
+            const auto pass = procedural ? RenderBackend()->AddProceduralPass(owner, name, order,
+                [weak, callback](ProceduralContext& context, const ProceduralFrame& frame) {
+                    const auto link = weak.lock();
+                    if (!link || !link->runtime) throw std::runtime_error("Render script runtime has ended");
+                    link->runtime->DispatchRender(callback, context, frame);
+                }) : RenderBackend()->AddPass(owner, name, stage, order,
                 [weak, callback](PostProcessContext& context, const PostProcessFrame& frame) {
                     const auto link = weak.lock();
                     if (!link || !link->runtime) throw std::runtime_error("Render script runtime has ended");
@@ -370,5 +463,7 @@ void LuaRuntime::Impl::RegisterRender() {
             std::erase_if(renderCallbacks, [&](const auto& entry) { return entry.id == callback; });
             throw;
         }
-    });
+    };
+    render.set_function("AddFullscreenPass", [addPass](sol::table desc) { return addPass(desc, false); });
+    render.set_function("AddProceduralPass", [addPass](sol::table desc) { return addPass(desc, true); });
 }

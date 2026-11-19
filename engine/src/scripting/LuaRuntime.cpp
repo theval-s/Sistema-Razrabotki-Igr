@@ -3,6 +3,7 @@
 #include "LuaBehaviorTree.hpp"
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/assets/PostProcessDefinition.hpp>
+#include <engine/assets/RenderPipelineDefinition.hpp>
 #include <engine/rendering/PostProcessing.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include "../rendering/RenderingFailureUtils.hpp"
@@ -259,7 +260,8 @@ namespace engine {
         PostProcessOwner RenderOwnerForCall(bool setup = false);
         void CheckRenderHandle(PostProcessOwner owner, std::uint64_t handleSession);
         void RegisterRender();
-        void DispatchRender(std::uint64_t callback, PostProcessContext&, const PostProcessFrame&);
+        template<class Context, class Frame>
+        void DispatchRender(std::uint64_t callback, Context&, const Frame&);
         std::shared_ptr<UiDispatcher> uiDispatcher;
         UiSubsystem* ui = nullptr;
         std::weak_ptr<void> uiLifetime;

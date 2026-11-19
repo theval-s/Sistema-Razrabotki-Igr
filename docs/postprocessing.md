@@ -1,5 +1,8 @@
 # Lua fullscreen postprocessing
 
+For geometry generated from vertex and instance IDs rather than fullscreen effects,
+see [procedural rendering](procedural-rendering.md).
+
 Fullscreen effects are runtime script-owned passes, not serialized scene settings.
 Create their resources and register passes in a live script's `OnStart`, not at
 module load or during teardown. A rendering subsystem and a started, live script

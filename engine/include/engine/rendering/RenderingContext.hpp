@@ -56,6 +56,7 @@ struct ENGINE_API RenderingContext {
     void BindMesh(MeshHandle h);
     void RawDrawIndexed(uint32_t indexCount, uint32_t baseIndex = 0, uint32_t baseVertex = 0) const;
     void RawDraw(uint32_t vertexCount, uint32_t baseVertex = 0) const;
+    void RawDrawInstanced(uint32_t vertexCount, uint32_t instanceCount) const;
     /// Draws line pairs with the currently bound shaders (POSITION and COLOR input).
     void DrawLines(std::span<const LineVertex> endpoints);
     void DrawMesh(MeshHandle h);
@@ -66,7 +67,7 @@ struct ENGINE_API RenderingContext {
     void SetShaderResources(BindSlot slot, TextureHandle h);
     /// Binds a borrowed native view; null unbinds the slot.
     void SetShaderResources(BindSlot slot, ID3D11ShaderResourceView* view);
-    void BindSamplers();
+    void BindSamplers(ShaderStage stages = ShaderStage::Pixel);
     void SetBlendState(BlendState state, const float* blendFactor = nullptr,
                        UINT sampleMask = 0xffffffff) const;
     void SetDepthState(DepthState state, UINT stencilRef = 0) const;

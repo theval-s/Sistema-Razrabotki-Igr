@@ -406,9 +406,13 @@ function Scene.Destroy(target) end
 function Scene.AttachController(target, type, data) end
 
 )"
-R"(---Fullscreen resources are owned by the live script; create them in OnStart.
+R"(---Render resources are owned by the live script; create them in OnStart.
 ---@class RenderShader
 local RenderShader = {}
+---@class RenderPipeline
+---@field vertexShader RenderShader Read-only vertex shader.
+---@field pixelShader RenderShader Read-only pixel shader.
+local RenderPipeline = {}
 ---@class RenderTexture
 local RenderTexture = {}
 ---@class RenderConstantBuffer
@@ -452,6 +456,27 @@ function RenderContext:DrawFullscreen() end
 ---@return integer width
 ---@return integer height
 function RenderContext:GetTextureSize(texture) end
+---@class ProceduralFrame
+---@field width integer
+---@field height integer
+---@class ProceduralContext Only valid within execute.
+local ProceduralContext = {}
+---@param pipeline RenderPipeline
+function ProceduralContext:SetPipeline(pipeline) end
+---@param slot integer Texture register index.
+---@param texture RenderTexture
+---@param stage? 'Pixel'|'Vertex' Defaults to Pixel.
+function ProceduralContext:BindTexture(slot, texture, stage) end
+---@param slot integer Custom buffer register b5-b13; stage is inferred from the buffer's shader.
+---@param buffer RenderConstantBuffer
+function ProceduralContext:BindConstantBuffer(slot, buffer) end
+---@param vertexCount integer Zero is a no-op.
+---@param instanceCount? integer Defaults to 1; zero is a no-op.
+function ProceduralContext:DrawProcedural(vertexCount, instanceCount) end
+---@param texture RenderTexture
+---@return integer width
+---@return integer height
+function ProceduralContext:GetTextureSize(texture) end
 ---@class RenderStageConstants
 ---@field BeforeTonemap integer
 ---@field AfterTonemap integer
@@ -470,6 +495,10 @@ function RenderContext:GetTextureSize(texture) end
 ---@field stage integer
 ---@field order? integer
 ---@field execute fun(ctx: RenderContext, frame: RenderFrame)
+---@class ProceduralPassDesc
+---@field name string
+---@field order? integer Defaults to 0.
+---@field execute fun(ctx: ProceduralContext, frame: ProceduralFrame)
 ---@class RenderAPI
 ---@field Stage RenderStageConstants
 Render = {}
@@ -480,6 +509,9 @@ function Render.SetBuiltinTonemappingEnabled(enabled) end
 ---@param asset string Postprocess definition UUID or logical path.
 ---@return RenderShader
 function Render.LoadShader(asset) end
+---@param asset string Render pipeline definition UUID or logical path.
+---@return RenderPipeline
+function Render.LoadPipeline(asset) end
 ---@param asset string Texture UUID or logical path; blocking setup-time load.
 ---@return RenderTexture Read-only snapshot retained until owner retirement.
 function Render.LoadTexture(asset) end
@@ -492,6 +524,9 @@ function Render.CreateRenderTarget(desc) end
 ---@param desc RenderPassDesc
 ---@return RenderPass
 function Render.AddFullscreenPass(desc) end
+---@param desc ProceduralPassDesc
+---@return RenderPass
+function Render.AddProceduralPass(desc) end
 
 ---@class InputContext
 InputContext = {}

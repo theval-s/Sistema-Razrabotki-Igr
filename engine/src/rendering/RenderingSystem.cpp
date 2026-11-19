@@ -160,6 +160,17 @@ void RenderingSystem::RenderFrame(const FrameContext& frame, const OverlayCallba
         });
         renderingContext_.BindSamplers();
         for (size_t i = 0; i < renderPasses_.size(); ++i) {
+            if (renderPasses_[i].get() == particlePass_ && debugView_ == RenderDebugView::Final &&
+                postProcessing_.HasProceduralPasses()) {
+                rendering_detail::InPass("Procedural", [&] {
+                    postProcessing_.ExecuteProcedural(world_, resources_);
+                });
+                // Particles consume scene color/depth as compute SRVs. Detach both outputs,
+                // and restore defaults even when no live particles draw this frame.
+                renderingContext_.ClearState();
+                resources_.BindCBuffers(renderingContext_);
+                renderingContext_.BindSamplers();
+            }
             if (renderPasses_[i].get() == presentPass_ && postProcessing_.HasPasses() &&
                 debugView_ == RenderDebugView::Final) {
                 TextureHandle color;
