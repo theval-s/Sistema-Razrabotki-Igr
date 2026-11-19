@@ -62,6 +62,8 @@ struct ENGINE_API Texture {
     [[nodiscard]] ID3D11DepthStencilView* GetDSV() const;
     [[nodiscard]] ID3D11DepthStencilView* GetReadOnlyDSV() const;
     [[nodiscard]] ID3D11UnorderedAccessView* GetUAV() const;
+    [[nodiscard]] bool HasShaderResourceView() const noexcept { return srv_ != nullptr; }
+    [[nodiscard]] bool HasRenderTargetView() const noexcept { return rtv_ != nullptr; }
 
 private:
     HRESULT CreateDefaultSRV(ID3D11Device* device);

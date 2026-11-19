@@ -47,6 +47,6 @@ For native editor screenshots, set `SRI_RENDERING_SCREENSHOT_DIR` to a temporary
 
 ### Milestone verification
 
-The configured Windows VS 2022 Debug build completed for the editor and all 14 focused test targets above; all 14 CTest targets passed. WARP pixel readback and native production-pipeline checks include static/skinned geometry, reverse-Z depth, repeated switching, resize/suspend/restore, overlay ordering, failure cleanup and restart. The optional `viewport_overlay_tests` run with `SRI_TEST_PROJECT=C:\Work\Gamedev\Projects\Test1\Test1\Test1.sriproject` also passed.
+The configured Windows VS 2022 Debug build completed for the editor and all 14 focused test targets above; all 14 CTest targets passed. WARP pixel readback and native production-pipeline checks include static/skinned geometry, reverse-Z depth, repeated switching, resize/suspend/restore, overlay ordering, failure cleanup and restart. The optional `viewport_overlay_tests` run against a local project selected through `SRI_TEST_PROJECT` also passed.
 
 Six screenshots of the native editor were inspected: the four views, returning to Final, and the fatal-startup banner with the existing Log dock open. This was a screenshot-based visual pass on the deterministic fixture, not a full interactive editing session. Opening the log through the operating system's associated application remains a manual check; Unicode paths, active-path selection, fallback and sink behavior have automated coverage.

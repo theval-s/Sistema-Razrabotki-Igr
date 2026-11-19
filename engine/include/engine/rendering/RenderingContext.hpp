@@ -79,6 +79,8 @@ struct ENGINE_API RenderingContext {
     void ClearRenderTargetView(TextureHandle h,
                                std::array<float, 4> color = {0.f, 0.f, 0.f, 0.f});
     void UpdateBuffer(const GpuBuffer& buffer, const void* data, uint32_t size) const;
+    /// Upload a complete, already-packed constant buffer (including initialized padding).
+    void UpdateCBufferBytes(BufferHandle buffer, std::span<const std::byte> bytes);
 
     template<typename T>
     void UpdateCBuffer(const BufferHandle handle, const T& data) {

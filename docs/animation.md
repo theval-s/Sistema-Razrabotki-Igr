@@ -22,8 +22,8 @@ also load headlessly, without a renderer.
    One material instance applies to the rig.
 4. Set the initial entity placement scale, then optionally select **Add to Scene
    after import**. The scale affects the entity transform only; source skeletal
-   transforms remain intact. For the Test1 Fox use `0.022`; its self-contained GLB
-   has Survey, Walk and Run clips and one embedded texture.
+   transforms remain intact. Choose a placement scale appropriate to the source
+   model's units and your scene.
 
 The importer generates the source, descriptors, metadata and `rig.import.json` in
 the dedicated folder. Existing destination names are rejected. Static models still
@@ -217,7 +217,7 @@ that source and creates a disposable temporary project; it never edits the suppl
 asset or its project. For example:
 
 ```powershell
-$env:SRI_TEST_RIG_SOURCE = "C:\Work\Gamedev\Projects\Test1\Test1\content\models\Fox\Fox.glb"
+$env:SRI_TEST_RIG_SOURCE = "C:\Projects\MyGame\content\models\character.glb"
 ctest --test-dir build/windows-vs2022 -C Debug -R '^animation_tests$' --output-on-failure
 ```
 

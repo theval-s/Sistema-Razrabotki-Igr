@@ -8,6 +8,7 @@
 #include <engine/assets/AssetCooking.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
+#include <engine/assets/PostProcessDefinition.hpp>
 #include <engine/core/Content.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/Pak.hpp>
@@ -329,6 +330,14 @@ namespace {
         validateSkeletal(engine::CatalogAssetKind::Skeleton, engine::AssetKind::Skeleton, skeletons);
         validateSkeletal(engine::CatalogAssetKind::AnimationClip, engine::AssetKind::AnimationClip, clips);
         validateSkeletal(engine::CatalogAssetKind::SkinnedMesh, engine::AssetKind::SkinnedMesh, meshes);
+
+        for (const auto* entry : catalog.List(engine::CatalogAssetKind::PostProcess)) {
+            engine::PostProcessDefinition definition;
+            engine::ShaderVariant variant;
+            if (!engine::LoadPostProcessDefinition(entry->source, definition, error) ||
+                !engine::PostProcessShaderVariant(definition, catalog, variant, error))
+                errors.push_back(entry->path + ": " + error);
+        }
 
         for (const auto* entry : catalog.List(engine::CatalogAssetKind::Skybox)) {
             engine::CpuPayload payload;

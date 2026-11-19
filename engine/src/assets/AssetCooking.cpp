@@ -4,6 +4,7 @@
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
 #include <engine/assets/MaterialDefinition.hpp>
+#include <engine/assets/PostProcessDefinition.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/PathUtils.hpp>
 #include <engine/rendering/EngineShaders.hpp>
@@ -511,6 +512,17 @@ bool CookShaderLibrary(const AssetCatalog& catalog, ShaderLibrary& library, std:
         for (const auto& variant : MaterialShaderVariants(file, definition.hooks)) {
             if (variant) add(*variant, entry->path);
         }
+    }
+    for (const auto* entry : catalog.List(CatalogAssetKind::PostProcess)) {
+        std::string error;
+        PostProcessDefinition definition;
+        ShaderVariant variant;
+        if (!LoadPostProcessDefinition(entry->source, definition, error) ||
+            !PostProcessShaderVariant(definition, catalog, variant, error)) {
+            errors.push_back(entry->path + ": " + error);
+            continue;
+        }
+        add(variant, entry->path);
     }
     return errors.empty();
 }

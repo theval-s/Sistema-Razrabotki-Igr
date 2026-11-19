@@ -389,6 +389,14 @@ void RenderingContext::UpdateBuffer(const GpuBuffer& buffer, const void* data, c
     deviceContext_->Unmap(buffer.buffer.Get(), 0);
 }
 
+void RenderingContext::UpdateCBufferBytes(const BufferHandle handle, const std::span<const std::byte> bytes) {
+    const auto* buffer = resourceManager_.buffers_.TryGet(handle);
+    if (!buffer || buffer->type != BufferType::Constant || bytes.size() != buffer->size)
+        rendering_detail::Check(E_INVALIDARG, "UpdateCBufferBytes", device_.Get(),
+                               "A live constant buffer and its complete packed contents are required.");
+    UpdateBuffer(*buffer, bytes.data(), static_cast<uint32_t>(bytes.size()));
+}
+
 void RenderingContext::Present() const {
     if (!swapChain_) rendering_detail::Check(E_POINTER, "Present", device_.Get(), "No swap chain is initialized.");
     const auto res = swapChain_->Present(1, 0);

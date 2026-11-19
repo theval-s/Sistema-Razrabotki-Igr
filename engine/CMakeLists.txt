@@ -64,6 +64,8 @@ set(ENGINE_PUBLIC_HEADERS
     include/engine/rendering/DebugDraw.hpp
     include/engine/rendering/EngineShaders.hpp
     include/engine/rendering/Particles.hpp
+    include/engine/rendering/PostProcessing.hpp
+    include/engine/rendering/ShaderParameters.hpp
     include/engine/rendering/FPSCamera.hpp
     include/engine/rendering/GraphicalState.hpp
     include/engine/rendering/MaterialDrawList.hpp
@@ -136,6 +138,8 @@ set(ENGINE_SOURCES
     src/rendering/RenderingResources.cpp
     src/rendering/RenderingResourceManager.cpp
     src/rendering/RenderingSystem.cpp
+    src/rendering/PostProcessing.cpp
+    src/rendering/ShaderParameters.cpp
     src/rendering/RenderWorld.cpp
     src/rendering/SkyboxPass.cpp
     src/rendering/SkyboxPass.hpp
@@ -178,6 +182,7 @@ set(ENGINE_SHADERS
     shaders/GBufferVS.hlsl
     shaders/GBufferPS.hlsl
     shaders/PresentPass.hlsl
+    shaders/PostProcessCopy.hlsl
     shaders/SkyboxPass.hlsl
     shaders/SkyboxConstants.hlsli
     shaders/ParticleSim.hlsl
@@ -410,6 +415,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/assets/AssetPipeline.hpp
     include/engine/assets/MaterialDefinition.hpp
     include/engine/assets/ParticleEffectDefinition.hpp
+    include/engine/assets/PostProcessDefinition.hpp
     include/engine/assets/SkyboxDefinition.hpp
     include/engine/core/CoreEvents.hpp
     include/engine/core/DefaultSubsystems.hpp
@@ -456,6 +462,7 @@ set(ENGINE_CORE_SOURCES
     src/assets/TextureImporter.cpp
     src/assets/MaterialDefinition.cpp
     src/assets/ParticleEffectDefinition.cpp
+    src/assets/PostProcessDefinition.cpp
     src/assets/ParticleEffectImporter.cpp
     src/assets/SkyboxDefinition.cpp
     src/assets/SkyboxImporter.cpp

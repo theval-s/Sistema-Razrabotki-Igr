@@ -13,6 +13,9 @@ struct ENGINE_API PresentPass : RenderPass {
         RenderingResources& resources) override;
 
     void Render(RenderWorld& world, RenderingContext& context, RenderingResources& resources) override;
+    void RenderTo(RenderWorld& world, RenderingContext& context, RenderingResources& resources,
+                  TextureHandle sceneColor, TextureHandle target);
+    [[nodiscard]] TextureHandle GetBackbuffer() const noexcept { return backBufferView_; }
 
     bool PreReinitialize(RenderingResourceManager& resourceManager, RenderingContext& context,
         RenderingResources& resources) override;

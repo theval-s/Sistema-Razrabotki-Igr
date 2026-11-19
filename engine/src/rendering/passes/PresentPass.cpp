@@ -86,9 +86,14 @@ void PresentPass::Destroy(RenderingResourceManager& resourceManager, RenderingCo
 }
 
 void PresentPass::Render(RenderWorld& world, RenderingContext& context, RenderingResources& resources) {
+    RenderTo(world, context, resources, resources.gBuffer.resultTexture, backBufferView_);
+}
+
+void PresentPass::RenderTo(RenderWorld& world, RenderingContext& context, RenderingResources& resources,
+                           TextureHandle sceneColor, TextureHandle target) {
     // In particular detach the scene DSV before binding its SRV, even if the
     // preceding selection pass left a read-only DSV attached.
-    context.SetRenderTargets({backBufferView_}, TextureHandle{});
+    context.SetRenderTargets({target}, TextureHandle{});
     context.SetViewport(resources.screenWith, resources.screenHeight);
     context.SetBlendState(BlendState::Opaque);
     context.SetDepthState(DepthState::Disabled);
@@ -97,7 +102,7 @@ void PresentPass::Render(RenderWorld& world, RenderingContext& context, Renderin
     const auto mode = resources.debugView;
     const bool outlined = mode == RenderDebugView::Final && !world.selectedSceneItems.empty();
     context.SetShader(outlined ? outlinedPixelShader_ : pixelShader_);
-    TextureHandle source = resources.gBuffer.resultTexture;
+    TextureHandle source = sceneColor;
     switch (mode) {
     case RenderDebugView::Albedo: source = resources.gBuffer.albedoTexture; break;
     case RenderDebugView::Normals: source = resources.gBuffer.normalTexture; break;

@@ -406,7 +406,90 @@ function Scene.Destroy(target) end
 function Scene.AttachController(target, type, data) end
 
 )"
-R"(---@class InputContext
+R"(---Fullscreen resources are owned by the live script; create them in OnStart.
+---@class RenderShader
+local RenderShader = {}
+---@class RenderTexture
+local RenderTexture = {}
+---@class RenderConstantBuffer
+local RenderConstantBuffer = {}
+---@overload fun(self: RenderConstantBuffer, name: string, value: any)
+---@param values table<string, any> Partial, atomic reflected parameter updates.
+function RenderConstantBuffer:Set(values) end
+---@class RenderPass
+local RenderPass = {}
+function RenderPass:Remove() end
+---@param enabled boolean
+function RenderPass:SetEnabled(enabled) end
+---@return string
+function RenderPass:GetError() end
+---@class RenderFrame
+---@field inputColor RenderTexture
+---@field outputColor RenderTexture
+---@field depth RenderTexture
+---@field normals RenderTexture
+---@field inputWidth integer
+---@field inputHeight integer
+---@field outputWidth integer
+---@field outputHeight integer
+---@class RenderContext Only valid within execute; frame textures expire with it.
+local RenderContext = {}
+---@param shader RenderShader
+function RenderContext:SetPixelShader(shader) end
+---@param texture RenderTexture
+function RenderContext:SetRenderTarget(texture) end
+---@param slot integer Pixel texture register index.
+---@param texture RenderTexture
+function RenderContext:BindTexture(slot, texture) end
+---@param slot integer Custom pixel buffer register b5-b13.
+---@param buffer RenderConstantBuffer
+function RenderContext:BindConstantBuffer(slot, buffer) end
+---@param texture RenderTexture
+---@param color? number[] Four components; defaults to zero.
+function RenderContext:ClearRenderTarget(texture, color) end
+function RenderContext:DrawFullscreen() end
+---@param texture RenderTexture
+---@return integer width
+---@return integer height
+function RenderContext:GetTextureSize(texture) end
+---@class RenderStageConstants
+---@field BeforeTonemap integer
+---@field AfterTonemap integer
+---@field AfterUI integer
+---@class RenderConstantBufferDesc
+---@field shader RenderShader
+---@field name string Reflected HLSL cbuffer name.
+---@field values? table<string, any>
+---@class RenderTargetDesc
+---@field width? integer
+---@field height? integer
+---@field scale? number
+---@field format? 'RGBA16F'|'RGBA8'|'R16F'|'R8'
+---@class RenderPassDesc
+---@field name string
+---@field stage integer
+---@field order? integer
+---@field execute fun(ctx: RenderContext, frame: RenderFrame)
+---@class RenderAPI
+---@field Stage RenderStageConstants
+Render = {}
+---@param asset string Postprocess definition UUID or logical path.
+---@return RenderShader
+function Render.LoadShader(asset) end
+---@param asset string Texture UUID or logical path; blocking setup-time load.
+---@return RenderTexture Read-only snapshot retained until owner retirement.
+function Render.LoadTexture(asset) end
+---@param desc RenderConstantBufferDesc
+---@return RenderConstantBuffer
+function Render.CreateConstantBuffer(desc) end
+---@param desc RenderTargetDesc
+---@return RenderTexture
+function Render.CreateRenderTarget(desc) end
+---@param desc RenderPassDesc
+---@return RenderPass
+function Render.AddFullscreenPass(desc) end
+
+---@class InputContext
 InputContext = {}
 ---@return boolean
 function InputContext:IsValid() end

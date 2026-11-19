@@ -30,6 +30,7 @@ Writing games in Lua with the editor:
 | [enemy-ai.md](enemy-ai.md) | A basic chasing, attacking enemy as one script or a behavior tree, with NavMesh paths |
 | [ui.md](ui.md) | Game UI with RML/RCSS: documents, styles, models, events, preview and reload |
 | [ui-lua-facade.md](ui-lua-facade.md) | The exact Lua UI API and its lifetime rules |
+| [postprocessing.md](postprocessing.md) | Runtime fullscreen effects, shader assets, passes and Lua render commands |
 | [importing-models.md](importing-models.md) | Importing static models: material slots, textures, material instances, Extract Materials |
 | [building-games.md](building-games.md) | Build Game and `sri-build`: what is cooked, the `game.sripak` pack, the shipped folder |
 
