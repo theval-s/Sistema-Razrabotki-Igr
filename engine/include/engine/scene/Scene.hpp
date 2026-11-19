@@ -26,6 +26,7 @@
 #include <engine/ai/BehaviorTreeComponent.hpp>
 #include <engine/scene/Controller.hpp>
 #include <engine/scene/SceneQueries.hpp>
+#include <engine/scene/EnvironmentSettings.hpp>
 #include <engine/rendering/RenderComponents.hpp>
 #include <engine/rendering/Particles.hpp>
 #include <engine/animation/AnimationComponents.hpp>
@@ -145,6 +146,12 @@ public:
     [[nodiscard]] entt::entity GetActiveCamera() const;
     void SetDirectionalLight(entt::entity entity);
     [[nodiscard]] entt::entity GetDirectionalLight() const;
+
+    [[nodiscard]] const EnvironmentSettings& GetEnvironment() const noexcept { return environment_; }
+    /// Validates atomically: false leaves state unchanged and sets error. Success clears error.
+    /// An equal value succeeds silently; a changed value emits Settings(entt::null) once.
+    /// Does not increment structural revision or request assets. Clear restores defaults.
+    [[nodiscard]] bool SetEnvironment(const EnvironmentSettings& value, std::string& error);
 
     // --- Editor folders ------------------------------------------------------------
     // Grouping for the editor's hierarchy, saved with the scene and ignored at runtime.
@@ -334,6 +341,7 @@ private:
     std::size_t destructionDepth_ = 0;
     std::optional<EntityUuid> activeCameraId_;
     std::optional<EntityUuid> directionalLightId_;
+    EnvironmentSettings environment_;
     std::vector<std::string> editorFolders_;
     std::vector<entt::entity> roots_;
     std::uint64_t revision_ = 0;

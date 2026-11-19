@@ -1,5 +1,7 @@
 sri_add_editor_module(editor_module_scene
     scene_module.cpp
+    environment_panel.cpp
+    environment_panel.hpp
     inspector_panel.cpp
     inspector_panel.hpp
     component_inspectors.cpp

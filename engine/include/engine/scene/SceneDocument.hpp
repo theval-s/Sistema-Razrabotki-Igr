@@ -20,6 +20,7 @@
 #include <engine/scene/Components.hpp>
 #include <engine/scene/Controller.hpp>
 #include <engine/scene/SceneQueries.hpp>
+#include <engine/scene/EnvironmentSettings.hpp>
 
 namespace engine {
 class Scene;
@@ -69,6 +70,7 @@ struct SceneSettings {
     std::optional<EntityUuid> activeCamera;
     std::optional<EntityUuid> directionalLight;
     std::vector<std::string> editorFolders;
+    EnvironmentSettings environment;
     bool operator==(const SceneSettings&) const = default;
 };
 
@@ -78,6 +80,7 @@ struct SceneDocument {
     std::optional<EntityUuid> directionalLight;
     // Editor folders that exist even when empty (Scene::SetEditorFolders).
     std::vector<std::string> editorFolders;
+    EnvironmentSettings environment;
 };
 
 // Structural validation includes UUID syntax, unique entity IDs, hierarchy

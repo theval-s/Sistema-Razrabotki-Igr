@@ -76,6 +76,8 @@ private:
     void editMaterial(const QString& path, engine::CatalogAssetKind kind);
     void editParticleEffect(const QString& path);
     void newParticleEffect();
+    void editSkybox(const QString& path);
+    void newSkybox();
     void rebuildBreadcrumb();
     void applyViewMode();
     void applyFilters();

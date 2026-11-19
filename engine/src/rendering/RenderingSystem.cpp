@@ -3,12 +3,13 @@
 #include <engine/core/PathUtils.hpp>
 #include "LifecycleFailure.hpp"
 #include "particles/ParticlePass.hpp"
+#include "SkyboxPass.hpp"
 #include <algorithm>
 #include <cmath>
 
 namespace engine {
 namespace {
-constexpr const char* PassNames[] = {"ShadowCSMPass", "ParticleShadowPass", "GBufferPass", "LightPass", "ParticlePass",
+constexpr const char* PassNames[] = {"ShadowCSMPass", "ParticleShadowPass", "GBufferPass", "LightPass", "SkyboxPass", "ParticlePass",
                                      "SelectionMaskPass", "PresentPass"};
 }
 
@@ -108,6 +109,7 @@ void RenderingSystem::InitializePasses(const uint32_t width, const uint32_t heig
     renderPasses_.push_back(std::make_unique<ParticleShadowPass>(*particlePass_));
     renderPasses_.push_back(std::make_unique<GBufferPass>());
     renderPasses_.push_back(std::make_unique<LightPass>());
+    renderPasses_.push_back(std::make_unique<SkyboxPass>());
     renderPasses_.push_back(std::move(particles));
     renderPasses_.push_back(std::make_unique<SelectionMaskPass>());
     renderPasses_.push_back(std::make_unique<PresentPass>());
@@ -168,6 +170,7 @@ void RenderingSystem::Shutdown() noexcept {
     particlePass_ = nullptr;
     particleStats_ = {};
     world_.particleEmitters.clear();
+    world_.environment = {};
     particlePreview_ = {};
     particlePrewarmRemaining_ = 0;
     resources_.particleShadowView = nullptr;

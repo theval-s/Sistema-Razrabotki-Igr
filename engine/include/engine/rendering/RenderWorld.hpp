@@ -7,6 +7,7 @@
 #include <engine/rendering/DebugDraw.hpp>
 #include <engine/rendering/FPSCamera.hpp>
 #include <engine/rendering/Particles.hpp>
+#include <engine/scene/EnvironmentSettings.hpp>
 #include <engine/rendering/RenderingContext.hpp>
 #include <engine/rendering/RenderingResources.hpp>
 
@@ -38,7 +39,15 @@ struct RenderItem {
     std::shared_ptr<const SkinningPalette> skinning;
 };
 
+/// Replaced every extraction, including while paused; reset before asset-scope eviction.
+/// Invalid cubemap selects settings.fallbackColor. Only a Ready SkyboxAsset may supply it.
+struct ResolvedEnvironment {
+    EnvironmentSettings settings;
+    TextureHandle cubemap;
+};
+
 struct RenderWorld {
+    ResolvedEnvironment environment;
     struct EmitterSource {
         std::uint64_t owner;
         ParticleEmitter settings;

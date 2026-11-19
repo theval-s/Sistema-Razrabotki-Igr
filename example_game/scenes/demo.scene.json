@@ -2,6 +2,13 @@
   "version": 1,
   "activeCamera": null,
   "directionalLight": "34fb74e3-a33c-4f20-8f44-792f841f9be8",
+  "environment": {
+    "skybox": { "id": "9f1b0b13-bd18-45f4-b9d8-52360b1cd202", "path": "game/materials/example-sky.skybox.json" },
+    "yawRadians": 0,
+    "brightness": 1,
+    "tint": [1, 1, 1],
+    "fallbackColor": [0, 0, 0]
+  },
   "entities": [
     {
       "id": "49533bcb-ea22-49d3-b53e-1c1c57e43001",

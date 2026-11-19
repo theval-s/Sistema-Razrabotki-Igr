@@ -18,6 +18,7 @@
 #include <engine/core/PathUtils.hpp>
 #include <engine/engine.hpp>
 #include <engine/rendering/RenderComponents.hpp>
+#include <engine/scene/Scene.hpp>
 
 namespace engine {
 namespace {
@@ -38,6 +39,8 @@ T MakeValue(const AssetDesc& desc, const LoadJob& job, const GpuPayload& gpu) {
         return cpu.skeleton;
     } else if constexpr (std::is_same_v<T, ParticleEffectAsset>) {
         return ParticleEffectAsset{cpu.particleEffect, job.textureDependency};
+    } else if constexpr (std::is_same_v<T, SkyboxAsset>) {
+        return SkyboxAsset{cpu.skybox, job.textureDependency};
     } else if constexpr (std::is_same_v<T, AnimationClipAsset>) {
         return cpu.animationClip;
     } else if constexpr (std::is_same_v<T, SkinnedMeshAsset>) {
@@ -105,10 +108,39 @@ constexpr std::string_view ToString(const AssetKind kind) {
     case AssetKind::AnimationClip: return "animation clip";
     case AssetKind::SkinnedMesh: return "skinned mesh";
     case AssetKind::ParticleEffect: return "particle effect";
+    case AssetKind::Skybox: return "skybox";
     case AssetKind::Count:
         break;
     }
     return "unknown";
+}
+
+bool ValidateTextureView(ID3D11ShaderResourceView* view, bool cube, std::string& error) {
+    if (!view) { error = "texture dependency has no SRV"; return false; }
+    D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+    view->GetDesc(&srv);
+    if (srv.ViewDimension != (cube ? D3D11_SRV_DIMENSION_TEXTURECUBE : D3D11_SRV_DIMENSION_TEXTURE2D)) {
+        error = cube ? "skybox requires a TEXTURECUBE SRV (cube arrays and 2D textures are unsupported)"
+                     : "texture dependency requires a TEXTURE2D SRV (cubes and arrays are unsupported)";
+        return false;
+    }
+    ComPtr<ID3D11Resource> resource;
+    view->GetResource(resource.GetAddressOf());
+    ComPtr<ID3D11Texture2D> texture;
+    if (!resource || FAILED(resource.As(&texture))) {
+        error = "texture dependency is not a Texture2D resource";
+        return false;
+    }
+    D3D11_TEXTURE2D_DESC desc{};
+    texture->GetDesc(&desc);
+    if (desc.SampleDesc.Count != 1 || desc.ArraySize != (cube ? 6u : 1u) ||
+        (cube && (desc.Width != desc.Height || !(desc.MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE))) ||
+        (!cube && (desc.MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE))) {
+        error = cube ? "skybox requires square, six-face, nonmultisample cubemap resource"
+                     : "texture dependency requires a single nonmultisample 2D resource";
+        return false;
+    }
+    return true;
 }
 
 /// Cooked builds ship a manifest in place of the .meta files a scan reads.
@@ -136,6 +168,7 @@ void AssetSystem::Initialize() {
     importers_[static_cast<size_t>(AssetKind::Material)] = std::make_unique<MaterialImporter>();
     importers_[static_cast<size_t>(AssetKind::MaterialInstance)] = std::make_unique<MaterialInstanceImporter>();
     importers_[static_cast<size_t>(AssetKind::ParticleEffect)] = std::make_unique<ParticleEffectImporter>();
+    importers_[static_cast<size_t>(AssetKind::Skybox)] = std::make_unique<SkyboxImporter>();
     for (const auto kind : {AssetKind::Skeleton, AssetKind::AnimationClip, AssetKind::SkinnedMesh})
         importers_[static_cast<size_t>(kind)] = std::make_unique<SkeletalAssetImporter>(kind);
     if (AssetPathResolver::IsCooked()) {
@@ -211,6 +244,20 @@ entt::resource<SkeletonAsset> AssetSystem::LoadSkeleton(std::string_view name) {
 entt::resource<ParticleEffectAsset> AssetSystem::LoadParticleEffect(std::string_view name) {
     return LoadSync(RequestParticleEffect(name));
 }
+entt::resource<SkyboxAsset> AssetSystem::LoadSkybox(std::string_view name) {
+    return LoadSync(RequestSkybox(name));
+}
+AssetHandle<SkyboxAsset> AssetSystem::RequestSkybox(std::string_view name) {
+    if (name.empty()) return {};
+    AssetDesc desc;
+    desc.name = NormalizeAssetName(name, AssetKind::Skybox);
+    desc.path = AssetPathResolver::DefaultPath(desc.name, AssetKind::Skybox);
+    return Request<SkyboxAsset>(std::move(desc));
+}
+AssetHandle<SkyboxAsset> AssetSystem::RequestSkybox(const AssetReference& reference) {
+    const auto* entry = Resolve(reference, CatalogAssetKind::Skybox);
+    return entry ? RequestSkybox(entry->path) : AssetHandle<SkyboxAsset>{};
+}
 AssetHandle<ParticleEffectAsset> AssetSystem::RequestParticleEffect(std::string_view name) {
     if (name.empty()) return {};
     AssetDesc desc;
@@ -266,7 +313,8 @@ AssetHandle<SkinnedMeshAsset> AssetSystem::RequestSkinnedMesh(const AssetReferen
 
 bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& error) {
     error.clear();
-    if (kind != AssetKind::Material && kind != AssetKind::MaterialInstance && kind != AssetKind::ParticleEffect) {
+    if (kind != AssetKind::Material && kind != AssetKind::MaterialInstance &&
+        kind != AssetKind::ParticleEffect && kind != AssetKind::Skybox) {
         error = "reload is not supported for this asset type";
         return false;
     }
@@ -274,6 +322,10 @@ bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& err
     // A never-requested asset has no live state to replace.
     if (kind == AssetKind::Material && !materials_.Find(normalized)) return true;
     if (kind == AssetKind::MaterialInstance && !materialInstances_.Find(normalized)) return true;
+    if (kind == AssetKind::Skybox && !skyboxes_.Find(normalized)) {
+        RequestSkybox(normalized);
+        return true;
+    }
     if (kind == AssetKind::ParticleEffect && !particleEffects_.Find(normalized)) {
         // Failed records retire their handles. Extraction resolves effects by catalog name,
         // so a save can recover a previously broken scene effect without editing its emitter.
@@ -284,6 +336,12 @@ bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& err
         const auto handle = materials_.Find(normalized);
         if (materials_.Get(handle)->state == AssetState::Loading && !LoadSync(handle)) {
             error = "could not finish loading the previous material";
+            return false;
+        }
+    } else if (kind == AssetKind::Skybox) {
+        const auto handle = skyboxes_.Find(normalized);
+        if (skyboxes_.Get(handle)->state == AssetState::Loading && !LoadSync(handle)) {
+            error = "could not finish loading the previous skybox";
             return false;
         }
     } else if (kind == AssetKind::ParticleEffect) {
@@ -313,7 +371,8 @@ bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& err
         desc = record->desc;
         return true;
     };
-    if (!(kind == AssetKind::ParticleEffect ? capture(particleEffects_) :
+    if (!(kind == AssetKind::Skybox ? capture(skyboxes_) :
+          kind == AssetKind::ParticleEffect ? capture(particleEffects_) :
           kind == AssetKind::Material ? capture(materials_) : capture(materialInstances_))) {
         error = "asset is no longer Ready for reload";
         return false;
@@ -323,7 +382,10 @@ bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& err
     job.desc = &desc;
     if (auto* rendering = engine_.GetSubsystem<RenderingSubsystem>()) job.device = rendering->GetContext().GetDevice();
     job.cpuOk = ImporterFor(kind).ReadCpu(desc, job.device, job.payload, job.error);
-    if (job.cpuOk && ResolveDependencies(job, true) == DependencyState::Failed) job.cpuOk = false;
+    if (job.cpuOk && ResolveDependencies(job, true) != DependencyState::Ready) {
+        job.cpuOk = false;
+        if (job.error.empty()) job.error = "reload dependencies did not reach Ready";
+    }
     if (!job.cpuOk) {
         error = job.error;
         log::Assets().error("Live reload failed for '{}': {}", normalized, error);
@@ -339,6 +401,15 @@ bool AssetSystem::Reload(std::string_view name, AssetKind kind, std::string& err
 }
 
 bool AssetSystem::ReloadReady(LoadJob& job, std::string& error) {
+    if (job.kind == AssetKind::Skybox) {
+        auto* record = skyboxes_.Get({job.slot, job.generation});
+        if (!record || record->state != AssetState::Ready) {
+            error = "asset was retired while resolving reload dependencies";
+            return false;
+        }
+        *record->value = SkyboxAsset{std::move(job.payload.skybox), job.textureDependency};
+        return true;
+    }
     if (job.kind == AssetKind::ParticleEffect) {
         auto* record = particleEffects_.Get({job.slot, job.generation});
         if (!record || record->state != AssetState::Ready) {
@@ -398,9 +469,10 @@ bool AssetSystem::ReloadReady(LoadJob& job, std::string& error) {
 std::string AssetSystem::NormalizeAssetName(std::string_view name, AssetKind kind) {
     auto normalized = NormalizeName(name);
     if (!normalized.empty() && (kind == AssetKind::Material || kind == AssetKind::MaterialInstance ||
-                               kind == AssetKind::ParticleEffect) &&
+                               kind == AssetKind::ParticleEffect || kind == AssetKind::Skybox) &&
         FromUtf8(normalized).extension().empty()) {
-        normalized += kind == AssetKind::ParticleEffect ? ".particle-effect.json" :
+        normalized += kind == AssetKind::Skybox ? ".skybox.json" :
+            kind == AssetKind::ParticleEffect ? ".particle-effect.json" :
             kind == AssetKind::Material ? ".material.json" : ".material-instance.json";
     }
     return normalized;
@@ -514,6 +586,13 @@ void AssetSystem::ApplyCatalog(AssetCatalog&& catalog) {
     meshes_.ForEachReadyRecord([this](const auto& record) {
         record.value->materials = RequestSlotMaterials(record.desc, record.value->materialSlots.size());
     });
+    // Extraction resolves the authored UUID to its current catalog path. A rename
+    // changes that path without changing scene settings, so this explicit rescan
+    // is the retry boundary for the scene's environment dependency as well.
+    if (this == &engine_.GetSceneAssets()) {
+        const auto& skybox = engine_.GetScene().GetEnvironment().skybox;
+        if (skybox.id.IsValid()) RequestSkybox(skybox);
+    }
 }
 
 void AssetSystem::UnloadAll() {
@@ -543,6 +622,7 @@ void AssetSystem::UnloadAll() {
     animationClips_.EvictAll();
     skeletons_.EvictAll();
     particleEffects_.EvictAll();
+    skyboxes_.EvictAll();
 }
 
 std::optional<AssetReference> AssetSystem::ReferenceFor(AssetHandle<SkinnedMeshAsset> handle) const {
@@ -576,7 +656,7 @@ const CatalogEntry* AssetSystem::Resolve(const AssetReference& reference, const 
         log::Assets().error("Missing or wrong-kind UUID '{}' (hint '{}')", reference.id.ToString(), reference.path);
         return nullptr;
     }
-    if (NormalizeName(reference.path) != NormalizeName(entry->path)) {
+    if (!reference.path.empty() && NormalizeName(reference.path) != NormalizeName(entry->path)) {
         log::Assets().warn("Stale path hint '{}' for UUID '{}', now at '{}'",
                       reference.path, reference.id.ToString(), entry->path);
     }
@@ -661,7 +741,10 @@ entt::resource<T> AssetSystem::LoadSync(const AssetHandle<T> handle) {
         return failed;
     }
     engine_.GetTaskScheduler().WaitforTask(job.get());
-    if (job->cpuOk && ResolveDependencies(*job, true) == DependencyState::Failed) job->cpuOk = false;
+    if (job->cpuOk && ResolveDependencies(*job, true) != DependencyState::Ready) {
+        job->cpuOk = false;
+        if (job->error.empty()) job->error = "synchronous dependencies did not reach Ready";
+    }
     return FinishTyped(*job, table, handle, engine_.GetFrame().frameIndex);
 }
 
@@ -733,6 +816,9 @@ bool AssetSystem::FinishJob(LoadJob& job, const uint64_t frameIndex) {
     case AssetKind::ParticleEffect:
         FinishTyped(job, particleEffects_, AssetHandle<ParticleEffectAsset>{job.slot, job.generation}, frameIndex);
         break;
+    case AssetKind::Skybox:
+        FinishTyped(job, skyboxes_, AssetHandle<SkyboxAsset>{job.slot, job.generation}, frameIndex);
+        break;
     case AssetKind::Count:
         break;
     }
@@ -740,17 +826,34 @@ bool AssetSystem::FinishJob(LoadJob& job, const uint64_t frameIndex) {
 }
 
 AssetSystem::DependencyState AssetSystem::ResolveDependencies(LoadJob& job, bool wait) {
-    if (job.kind == AssetKind::ParticleEffect) {
-        const auto& reference = job.payload.particleEffect.texture;
-        if (!reference.id.IsValid()) return DependencyState::Ready;
+    const auto validateTexture = [&](const TextureAsset& asset, bool cube) {
+        auto* rendering = engine_.GetSubsystem<RenderingSubsystem>();
+        const auto* texture = rendering ? rendering->GetResourceManager().TryGetTexture(asset.texture) : nullptr;
+        if (!ValidateTextureView(texture ? texture->GetSRV() : nullptr, cube, job.error)) {
+            job.error = "dependency while loading '" + job.name + "': " + job.error;
+            return DependencyState::Failed;
+        }
+        return DependencyState::Ready;
+    };
+    if (job.kind == AssetKind::ParticleEffect || job.kind == AssetKind::Skybox) {
+        const bool cube = job.kind == AssetKind::Skybox;
+        const auto& reference = cube ? job.payload.skybox.cubemap : job.payload.particleEffect.texture;
+        if (!cube && !reference.id.IsValid()) return DependencyState::Ready;
         if (!job.dependenciesRequested) {
             job.dependenciesRequested = true;
+            if (cube) {
+                const auto* entry = Resolve(reference, CatalogAssetKind::Texture);
+                if (!entry || NormalizeName(ToUtf8(entry->source.extension())) != ".dds") {
+                    job.error = "skybox cubemap must reference a catalog DDS texture: " + reference.id.ToString();
+                    return DependencyState::Failed;
+                }
+            }
             job.textureDependency = RequestTexture(reference);
         }
         const auto texture = wait ? LoadSync(job.textureDependency) : Peek(job.textureDependency);
-        if (texture) return DependencyState::Ready;
+        if (texture) return validateTexture(*texture, cube);
         if (GetState(job.textureDependency) == AssetState::Loading) return DependencyState::Waiting;
-        job.error = "particle texture dependency '" + reference.id.ToString() + "' failed while loading '" + job.name + "'";
+        job.error = "texture dependency '" + reference.id.ToString() + "' failed while loading '" + job.name + "'";
         return DependencyState::Failed;
     }
     if (job.kind == AssetKind::Mesh) {
@@ -804,6 +907,7 @@ AssetSystem::DependencyState AssetSystem::ResolveDependencies(LoadJob& job, bool
             entt::resource<TextureAsset> texture;
             const auto state = resolve(job.textureDependency, texture, *overrides.albedoTexture);
             if (state != DependencyState::Ready) return state;
+            if (validateTexture(*texture, false) != DependencyState::Ready) return DependencyState::Failed;
             parameters.albedoTexture = texture->texture;
         }
     }
@@ -827,7 +931,7 @@ entt::resource<T> AssetSystem::FinishTyped(const LoadJob& job, AssetTable<T>& ta
 
     GpuPayload gpu;
     if constexpr (!std::is_same_v<T, SkeletonAsset> && !std::is_same_v<T, AnimationClipAsset> &&
-                  !std::is_same_v<T, ParticleEffectAsset>) {
+                  !std::is_same_v<T, ParticleEffectAsset> && !std::is_same_v<T, SkyboxAsset>) {
         auto* rendering = engine_.GetSubsystem<RenderingSubsystem>();
         std::string error;
         bool uploaded = false;

@@ -8,6 +8,15 @@
 #include <engine/core/PathUtils.hpp>
 
 namespace engine {
+namespace {
+bool IsMaterialTexture(ID3D11ShaderResourceView* view) {
+    if (!view) return false;
+    D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+    view->GetDesc(&desc);
+    return desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D;
+}
+} // namespace
+
 void RenderingResourceManager::Initialize(ID3D11Device* device) {
     rendering_failure::RequireDevice(device, "InitializeResourceManager");
     device_ = device;
@@ -144,11 +153,12 @@ bool RenderingResourceManager::DestroyShader(const ShaderHandle shaderHandle) {
 }
 
 MaterialHandle RenderingResourceManager::CreateMaterial(const MaterialDesc& desc) {
+    const auto* texture = textures_.TryGet(desc.defaults.albedoTexture);
     constexpr uint8_t knownHooks = static_cast<uint8_t>(MaterialHook::GBufferVS) |
         static_cast<uint8_t>(MaterialHook::GBufferPS) | static_cast<uint8_t>(MaterialHook::ShadowVS);
     if ((static_cast<uint8_t>(desc.hooks) & ~knownHooks) ||
         (desc.hooks != MaterialHook::None && desc.shaderFile.empty()) ||
-        (desc.defaults.albedoTexture && !textures_.Contains(desc.defaults.albedoTexture)) ||
+        (desc.defaults.albedoTexture && (!texture || !IsMaterialTexture(texture->srv_.Get()))) ||
         (desc.defaults.customBuffer && (!buffers_.Contains(desc.defaults.customBuffer) ||
             buffers_.Get(desc.defaults.customBuffer).type != BufferType::Constant))) return {};
 
@@ -185,6 +195,7 @@ MaterialHandle RenderingResourceManager::CreateMaterial(const MaterialDesc& desc
 }
 
 MaterialHandle RenderingResourceManager::RegisterMaterial(const ShaderSet& shaders, const MaterialParameters& defaults) {
+    const auto* texture = textures_.TryGet(defaults.albedoTexture);
     const auto validShader = [&](ShaderHandle handle, ShaderType type) {
         const auto* shader = shaders_.TryGet(handle);
         return !handle || (shader && shader->type == type);
@@ -194,7 +205,7 @@ MaterialHandle RenderingResourceManager::RegisterMaterial(const ShaderSet& shade
         !validShader(shaders.gBufferPassPS, ShaderType::Pixel) ||
         !validShader(shaders.skinnedGBufferPassVS, ShaderType::Vertex) ||
         !validShader(shaders.skinnedShadowPassVS, ShaderType::Vertex) ||
-        (defaults.albedoTexture && !textures_.Contains(defaults.albedoTexture)) ||
+        (defaults.albedoTexture && (!texture || !IsMaterialTexture(texture->srv_.Get()))) ||
         (defaults.customBuffer && (!buffers_.Contains(defaults.customBuffer) ||
                                   buffers_.Get(defaults.customBuffer).type != BufferType::Constant))) return {};
     bool shared = false;
@@ -235,8 +246,9 @@ MaterialInstanceHandle RenderingResourceManager::CreateMaterialInstance(const Ma
 bool RenderingResourceManager::SetMaterialInstanceOverrides(const MaterialInstanceHandle handle,
                                                               const MaterialInstance::Overrides& overrides) {
     auto* instance = materialInstances_.TryGet(handle);
+    const auto* texture = textures_.TryGet(overrides.albedoTexture.value_or(TextureHandle{}));
     if (!instance || (overrides.albedoTexture && *overrides.albedoTexture &&
-        !textures_.Contains(*overrides.albedoTexture))) return false;
+        (!texture || !IsMaterialTexture(texture->srv_.Get())))) return false;
     instance->overrides = overrides;
     return true;
 }
@@ -253,7 +265,8 @@ bool RenderingResourceManager::SetMaterialInstanceCustomBuffer(const MaterialIns
 bool RenderingResourceManager::SetMaterialInstanceParameters(const MaterialInstanceHandle handle,
                                                                const MaterialParameters& parameters) {
     auto* instance = materialInstances_.TryGet(handle);
-    if (!instance || (parameters.albedoTexture && !textures_.Contains(parameters.albedoTexture)) ||
+    const auto* texture = textures_.TryGet(parameters.albedoTexture);
+    if (!instance || (parameters.albedoTexture && (!texture || !IsMaterialTexture(texture->srv_.Get()))) ||
         (parameters.customBuffer && (!buffers_.Contains(parameters.customBuffer) ||
             buffers_.Get(parameters.customBuffer).type != BufferType::Constant))) return false;
     instance->overrides = {.specularColor = parameters.parameters.specularColor,
@@ -266,6 +279,9 @@ bool RenderingResourceManager::ReplaceMaterial(const MaterialHandle live, const 
     auto* current = materials_.TryGet(live);
     auto* replacement = materials_.TryGet(staged);
     if (!current || !replacement || live == staged || replacement->instanceCount != 0) return false;
+    const auto* texture = textures_.TryGet(replacement->defaultParameters.albedoTexture);
+    if (replacement->defaultParameters.albedoTexture &&
+        (!texture || !IsMaterialTexture(texture->srv_.Get()))) return false;
     const auto oldShaders = current->shaders;
     current->shaders = replacement->shaders;
     current->defaultParameters = replacement->defaultParameters;
@@ -281,8 +297,10 @@ bool RenderingResourceManager::ReplaceMaterial(const MaterialHandle live, const 
 bool RenderingResourceManager::UpdateMaterialInstance(const MaterialInstanceHandle handle, const MaterialHandle material,
                                                        const MaterialInstance::Overrides& overrides) {
     auto* instance = materialInstances_.TryGet(handle);
+    const auto* texture = textures_.TryGet(overrides.albedoTexture.value_or(TextureHandle{}));
     if (!instance || !materials_.Contains(material) ||
-        (overrides.albedoTexture && *overrides.albedoTexture && !textures_.Contains(*overrides.albedoTexture))) return false;
+        (overrides.albedoTexture && *overrides.albedoTexture &&
+            (!texture || !IsMaterialTexture(texture->srv_.Get())))) return false;
     if (instance->material != material) {
         --materials_.Get(instance->material).instanceCount;
         ++materials_.Get(material).instanceCount;
@@ -297,6 +315,10 @@ bool RenderingResourceManager::DestroyMaterialInstance(const MaterialInstanceHan
     if (!instance) return false;
     --materials_.Get(instance->material).instanceCount;
     return materialInstances_.Remove(handle);
+}
+
+const Texture* RenderingResourceManager::TryGetTexture(const TextureHandle handle) const {
+    return textures_.TryGet(handle);
 }
 
 const Material* RenderingResourceManager::TryGetMaterial(const MaterialHandle handle) const {

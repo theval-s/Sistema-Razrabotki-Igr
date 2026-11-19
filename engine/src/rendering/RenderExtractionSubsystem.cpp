@@ -44,6 +44,7 @@ void RenderExtractionSubsystem::Shutdown() {
         rendering_->GetWorld().sceneItems.clear();
         rendering_->GetWorld().lights.clear();
         rendering_->GetWorld().particleEmitters.clear();
+        rendering_->GetWorld().environment = {};
     }
     rendering_ = nullptr;
 }
@@ -53,6 +54,13 @@ void RenderExtractionSubsystem::LateUpdate(const FrameContext&) {
     const Scene& scene = GetEngine().GetScene();
     AssetSystem& assets = GetEngine().GetSceneAssets();
     RenderWorld& world = rendering_->GetWorld();
+    world.environment = {scene.GetEnvironment(), {}};
+    if (const auto* entry = assets.GetCatalog().Find(scene.GetEnvironment().skybox.id, CatalogAssetKind::Skybox)) {
+        if (const auto skybox = assets.Peek<SkyboxAsset>(entry->path)) {
+            if (const auto cubemap = assets.Peek(skybox->cubemap))
+                world.environment.cubemap = cubemap->texture;
+        }
+    }
     world.sceneItems.clear();
     world.lights.clear();
     world.particleEmitters.clear();

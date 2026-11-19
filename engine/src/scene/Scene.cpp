@@ -1,6 +1,7 @@
 #include <engine/scene/Scene.hpp>
 
 #include <cstdlib>
+#include <cmath>
 #include <algorithm>
 #include <utility>
 
@@ -8,6 +9,32 @@
 #include <engine/rendering/RenderComponents.hpp>
 
 namespace engine {
+
+bool ValidateEnvironmentSettings(const EnvironmentSettings& value, std::string& error) {
+    const auto colorValid = [](const DirectX::SimpleMath::Vector3& color) {
+        return std::isfinite(color.x) && std::isfinite(color.y) && std::isfinite(color.z) &&
+               color.x >= 0 && color.y >= 0 && color.z >= 0;
+    };
+    if (!value.skybox.id.IsValid() && !value.skybox.path.empty()) {
+        error = "environment skybox path requires a UUID";
+        return false;
+    }
+    if (!std::isfinite(value.yawRadians) || !std::isfinite(value.brightness) || value.brightness < 0 ||
+        !colorValid(value.tint) || !colorValid(value.fallbackColor)) {
+        error = "environment numbers must be finite; brightness and colors must be nonnegative";
+        return false;
+    }
+    error.clear();
+    return true;
+}
+
+bool Scene::SetEnvironment(const EnvironmentSettings& value, std::string& error) {
+    if (!ValidateEnvironmentSettings(value, error)) return false;
+    if (environment_ == value) return true;
+    environment_ = value;
+    NotifyChange(ChangeKind::Settings);
+    return true;
+}
 
 Scene::Scene() {
     // Pools must be instantiated in Engine.dll before editor modules add components.
@@ -113,12 +140,13 @@ void Scene::Clear() {
     unsupported_.clear();
     controllers_.clear();
     pendingGameStates_.clear();
-    const bool had_folders = !editorFolders_.empty();
+    const bool had_settings = !editorFolders_.empty() || environment_ != EnvironmentSettings{};
     activeCameraId_.reset();
     directionalLightId_.reset();
     editorFolders_.clear();
+    environment_ = {};
     ++revision_;
-    if (had_folders) NotifyChange(ChangeKind::Settings);
+    if (had_settings) NotifyChange(ChangeKind::Settings);
     if (--destructionDepth_ == 0) FlushCommands();
 }
 

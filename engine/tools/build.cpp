@@ -22,6 +22,7 @@
 #include <charconv>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <set>
@@ -236,6 +237,44 @@ namespace {
         return {{{engine::AssetPathResolver::GetRoot() / L"engine", L"engine"}, {project.ContentDir(), L"game"}}};
     }
 
+    bool ValidateCubemapDds(const fs::path& file, std::string& error) {
+        if (engine::NormalizeName(engine::ToUtf8(file.extension())) != ".dds") {
+            error = "skybox cubemap source must be DDS";
+            return false;
+        }
+        // DDS is a little-endian file format. Read just the header; no GPU or
+        // DirectXTK private headers are needed for dimension/array validation.
+        std::ifstream stream(file, std::ios::binary);
+        std::array<unsigned char, 148> bytes{};
+        stream.read(reinterpret_cast<char*>(bytes.data()), bytes.size());
+        const auto size = stream.gcount();
+        const auto word = [&](std::size_t offset) -> std::uint32_t {
+            return std::uint32_t(bytes[offset]) | (std::uint32_t(bytes[offset + 1]) << 8) |
+                (std::uint32_t(bytes[offset + 2]) << 16) | (std::uint32_t(bytes[offset + 3]) << 24);
+        };
+        const auto reject = [&] {
+            error = "DDS must contain one square six-face Texture2D cubemap (no arrays or volumes)";
+            return false;
+        };
+        if (size < 128 || word(0) != 0x20534444 || word(4) != 124 || word(76) != 32 ||
+            word(12) == 0 || word(12) != word(16) || word(24) > 1 ||
+            (word(8) & 0x800000) || (word(112) & 0x200000)) return reject();
+        const bool dx10 = (word(80) & 4) && word(84) == 0x30315844;
+        if (dx10) {
+            // D3D10_RESOURCE_DIMENSION_TEXTURE2D, TEXTURECUBE misc flag,
+            // and one cube, not six cubes (DX10 arraySize counts cubes).
+            if (size < 148 || word(132) != 3 || !(word(136) & 4) || word(140) != 1) return reject();
+        } else if ((word(112) & 0xfe00) != 0xfe00) {
+            return reject(); // legacy DDS must declare the cube and all six faces
+        }
+        if (fs::file_size(file) <= (dx10 ? 148u : 128u)) {
+            error = "DDS cubemap has no image data";
+            return false;
+        }
+        error.clear();
+        return true;
+    }
+
     // Skeletal payloads are kept from validation so the cook does not read their sources again.
     bool Validate(
         const engine::Project& project,
@@ -291,6 +330,25 @@ namespace {
         validateSkeletal(engine::CatalogAssetKind::AnimationClip, engine::AssetKind::AnimationClip, clips);
         validateSkeletal(engine::CatalogAssetKind::SkinnedMesh, engine::AssetKind::SkinnedMesh, meshes);
 
+        for (const auto* entry : catalog.List(engine::CatalogAssetKind::Skybox)) {
+            engine::CpuPayload payload;
+            engine::AssetDesc desc;
+            desc.name = entry->path;
+            desc.path = entry->source;
+            if (!engine::SkyboxImporter{}.ReadCpu(desc, nullptr, payload, error)) {
+                errors.push_back(entry->path + ": " + error);
+                continue;
+            }
+            const auto& reference = payload.skybox.cubemap;
+            const auto* texture = catalog.Find(reference.id, engine::CatalogAssetKind::Texture);
+            if (!texture) {
+                errors.push_back(entry->path + ": cubemap references missing or wrong-kind asset " +
+                    reference.id.ToString() + " (" + reference.path + ")");
+            } else if (!ValidateCubemapDds(texture->source, error)) {
+                errors.push_back(entry->path + ": cubemap " + texture->path + ": " + error);
+            }
+        }
+
         for (const auto* entry : catalog.List(engine::CatalogAssetKind::ParticleEffect)) {
             engine::CpuPayload payload;
             engine::AssetDesc desc;
@@ -344,6 +402,11 @@ namespace {
             }
             if (scene == start && !document.activeCamera) {
                 warnings.push_back(scene->path + ": no active camera, the game would show nothing");
+            }
+            const auto& skybox = document.environment.skybox;
+            if (skybox.id.IsValid() && !catalog.Find(skybox.id, engine::CatalogAssetKind::Skybox)) {
+                errors.push_back(scene->path + ": environment.skybox references missing or wrong-kind asset " +
+                    skybox.id.ToString() + " (" + skybox.path + ")");
             }
             for (const auto& entity : document.entities) {
                 const std::string context = scene->path + ": entity '" + entity.name + "' (" +

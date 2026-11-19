@@ -118,7 +118,11 @@ const engine::CatalogEntry* AssetPicker::droppedEntry(const QMimeData* mime) con
         return nullptr;
     }
     const engine::CatalogEntry* entry = catalog_.FindPath(engine::AssetPathResolver::ToName(toPath(paths.front())));
-    return entry != nullptr && entry->metadata.kind == kind_ ? entry : nullptr;
+    return entry != nullptr && entry->metadata.kind == kind_ && acceptsEntry(*entry) ? entry : nullptr;
+}
+
+bool AssetPicker::acceptsEntry(const engine::CatalogEntry&) const {
+    return true;
 }
 
 void AssetPicker::populate() {
@@ -127,6 +131,7 @@ void AssetPicker::populate() {
     }
     const QIcon icon = assetIcon(kind_);
     for (const engine::CatalogEntry* entry : catalog_.List(kind_)) {
+        if (!acceptsEntry(*entry)) continue;
         addItem(icon, QString::fromStdString(entry->path), QString::fromStdString(entry->metadata.id.ToString()));
     }
 }

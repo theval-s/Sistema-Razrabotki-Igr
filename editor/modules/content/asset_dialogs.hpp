@@ -11,6 +11,7 @@
 #include <engine/assets/MaterialDefinition.hpp>
 #include <engine/assets/ModelImport.hpp>
 #include <engine/assets/ParticleEffectDefinition.hpp>
+#include <engine/assets/SkyboxDefinition.hpp>
 
 #include "asset_operations.hpp"
 
@@ -69,6 +70,20 @@ private:
     QLabel* problem_ = nullptr;
     QDialogButtonBox* buttons_ = nullptr;
     QPushButton* ok_ = nullptr;
+};
+
+class SkyboxDialog : public NewAssetDialog {
+public:
+    SkyboxDialog(const engine::AssetCatalog& catalog, const QString& folder, const QString& name,
+                 QWidget* parent, bool editing = false);
+    void load(const engine::SkyboxDefinition& definition);
+    [[nodiscard]] engine::SkyboxDefinition definition() const;
+protected:
+    [[nodiscard]] QString problem() const override;
+private:
+    engine::SkyboxDefinition value_;
+    editor::AssetPicker* cubemap_ = nullptr;
+    QLabel* missing_ = nullptr;
 };
 
 class ParticleEffectDialog : public NewAssetDialog {

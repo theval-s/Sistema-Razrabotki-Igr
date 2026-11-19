@@ -17,6 +17,7 @@ class QWidget;
 namespace engine {
 struct MaterialDefinition;
 struct ParticleEffectDefinition;
+struct SkyboxDefinition;
 struct MaterialInstanceDefinition;
 }  // namespace engine
 
@@ -71,6 +72,8 @@ public:
     bool createMaterial(const QString& path, const engine::MaterialDefinition& definition);
     bool createParticleEffect(const QString& path, const engine::ParticleEffectDefinition& definition);
     bool updateParticleEffect(const QString& path, const engine::ParticleEffectDefinition& definition);
+    bool createSkybox(const QString& path, const engine::SkyboxDefinition& definition);
+    bool updateSkybox(const QString& path, const engine::SkyboxDefinition& definition);
     bool createMaterialInstance(const QString& path, const engine::MaterialInstanceDefinition& definition);
     /// Replaces an existing definition without touching its metadata/UUID.
     bool updateMaterial(const QString& path, const engine::MaterialDefinition& definition);

@@ -78,6 +78,7 @@ constexpr engine::CatalogAssetKind FilterKinds[] = {
     engine::CatalogAssetKind::AnimationClip,
     engine::CatalogAssetKind::Texture,  engine::CatalogAssetKind::Material,
     engine::CatalogAssetKind::MaterialInstance, engine::CatalogAssetKind::Shader, engine::CatalogAssetKind::ParticleEffect,
+    engine::CatalogAssetKind::Skybox,
     engine::CatalogAssetKind::Script,
     engine::CatalogAssetKind::BehaviorTree,
     engine::CatalogAssetKind::AudioClip,
@@ -449,6 +450,8 @@ void ContentBrowser::buildActions() {
                          [this] { newMaterialInstance(); });
     new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::ParticleEffect), tr("Particle Effect..."), this,
                          &ContentBrowser::newParticleEffect);
+    new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::Skybox), tr("Skybox..."), this,
+                         &ContentBrowser::newSkybox);
     new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::Scene), tr("Scene..."), this,
                          &ContentBrowser::newScene);
     new_menu_->addAction(editor::assetIcon(engine::CatalogAssetKind::Script), tr("Script..."), this,
@@ -519,6 +522,8 @@ void ContentBrowser::activate(const QModelIndex& index) {
         editMaterial(path, *kind);
     } else if (engine::CatalogKindForFile(editor::toPath(path)) == engine::CatalogAssetKind::ParticleEffect) {
         editParticleEffect(path);
+    } else if (engine::CatalogKindForFile(editor::toPath(path)) == engine::CatalogAssetKind::Skybox) {
+        editSkybox(path);
     } else if (!context_.openAsset(editor::toPath(path))) {
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
     }
@@ -575,6 +580,25 @@ void ContentBrowser::editParticleEffect(const QString& path) {
         splitAssetName(QFileInfo(path).fileName(), false).first, window(), true);
     dialog.load(definition);
     if (dialog.exec() == QDialog::Accepted) operations_.updateParticleEffect(path, dialog.definition());
+}
+
+void ContentBrowser::editSkybox(const QString& path) {
+    if (context_.playSession().isPlaying()) return;
+    if (roots_[root_].read_only) {
+        QMessageBox::information(window(), tr("Read-only asset"), tr("Engine assets cannot be edited here."));
+        return;
+    }
+    std::string text, error;
+    engine::SkyboxDefinition definition;
+    if (!engine::ReadTextFile(editor::toPath(path), text, error, 1024 * 1024) ||
+        !engine::ParseSkyboxDefinition(text, definition, error)) {
+        QMessageBox::warning(window(), tr("Edit Skybox"), QString::fromStdString(error));
+        return;
+    }
+    SkyboxDialog dialog(catalog(), QFileInfo(path).absolutePath(),
+        splitAssetName(QFileInfo(path).fileName(), false).first, window(), true);
+    dialog.load(definition);
+    if (dialog.exec() == QDialog::Accepted) operations_.updateSkybox(path, dialog.definition());
 }
 
 void ContentBrowser::rebuildBreadcrumb() {
@@ -718,7 +742,7 @@ void ContentBrowser::updateActions() {
     if (selected.size() == 1) {
         const auto kind = engine::CatalogKindForFile(editor::toPath(selected.front()));
         open_->setText(kind == engine::CatalogAssetKind::Material || kind == engine::CatalogAssetKind::MaterialInstance ||
-                           kind == engine::CatalogAssetKind::ParticleEffect
+                           kind == engine::CatalogAssetKind::ParticleEffect || kind == engine::CatalogAssetKind::Skybox
                            ? tr("Edit...") : tr("Open"));
     } else {
         open_->setText(tr("Open"));
@@ -1101,6 +1125,13 @@ void ContentBrowser::newParticleEffect() {
     if (context_.playSession().isPlaying() || roots_[root_].read_only) return;
     ParticleEffectDialog dialog(catalog(), folder_, tr("New Particle Effect"), window());
     if (dialog.exec() == QDialog::Accepted && operations_.createParticleEffect(dialog.path(), dialog.definition()))
+        select({dialog.path()});
+}
+
+void ContentBrowser::newSkybox() {
+    if (context_.playSession().isPlaying() || roots_[root_].read_only) return;
+    SkyboxDialog dialog(catalog(), folder_, tr("New Skybox"), window());
+    if (dialog.exec() == QDialog::Accepted && operations_.createSkybox(dialog.path(), dialog.definition()))
         select({dialog.path()});
 }
 

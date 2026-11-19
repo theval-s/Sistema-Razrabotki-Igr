@@ -38,6 +38,7 @@ Asset formats, with their C++ APIs:
 | Guide | Covers |
 |---|---|
 | [scene-assets.md](scene-assets.md) | `.meta` sidecars and UUIDs, scene JSON, saves, the C++ scene API |
+| [skyboxes.md](skyboxes.md) | DDS cubemap authoring, skybox assets, scene environment and background rendering |
 | [material-assets.md](material-assets.md) | Material and material-instance JSON, shader hooks, the C++ material API |
 | [particles.md](particles.md) | Particle effects, scene preview, textures, shadows, GPU budgets and telemetry |
 | [particle-hooks.md](particle-hooks.md) | Project particle simulation and appearance HLSL hooks |

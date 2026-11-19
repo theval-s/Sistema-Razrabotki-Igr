@@ -86,7 +86,7 @@ struct MaterialCpu {
 
 struct CpuPayload {
     enum class Kind : uint8_t { None, Mesh, Texture, Shader, Material, MaterialInstance,
-                               Skeleton, AnimationClip, SkinnedMesh, ParticleEffect };
+                               Skeleton, AnimationClip, SkinnedMesh, ParticleEffect, Skybox };
 
     Kind kind = Kind::None;
     MeshCpu mesh;
@@ -98,6 +98,7 @@ struct CpuPayload {
     AnimationClipAsset animationClip;
     SkinnedMeshCpu skinnedMesh;
     ParticleEffectDefinition particleEffect;
+    SkyboxDefinition skybox;
 };
 
 /// Output of the GPU phase (main thread): handles of the resources that were created.
@@ -173,6 +174,16 @@ public:
                                  GpuPayload& result, std::string& error) const override;
 };
 
+/// JSON-only CPU phase; dependency resolution uses LoadJob::textureDependency.
+/// Upload creates no GPU resource: the TextureAsset owns the validated cubemap.
+class SkyboxImporter final : public IAssetImporter {
+public:
+    bool ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPayload& payload,
+                 std::string& error) const override;
+    bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
+                   GpuPayload& result, std::string& error) const override;
+};
+
 class ParticleEffectImporter final : public IAssetImporter {
 public:
     bool ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPayload& payload,
@@ -239,6 +250,10 @@ struct LoadJob final : public enki::ITaskSet {
     bool cpuOk = false;
     bool dependenciesRequested = false;
     AssetHandle<MaterialAsset> materialDependency;
+    /// Skybox: require DDS source, TEXTURECUBE SRV and Texture2D resource with
+    /// TEXTURECUBE misc flag, ArraySize == 6, square faces, SampleDesc.Count == 1.
+    /// Materials/particle effects: require TEXTURE2D SRV; reject cubes/arrays
+    /// before publication. Inspect native SRV/resource descriptors, not Texture::desc.
     AssetHandle<TextureAsset> textureDependency;
     std::vector<AssetHandle<MaterialInstanceAsset>> meshMaterials;
     MaterialParameters resolvedParameters;

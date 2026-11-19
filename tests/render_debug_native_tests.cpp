@@ -803,6 +803,7 @@ TEST(RenderDebugNative, BrokenProjectParticleHookDisablesParticlesUntilTheFileIs
     auto& world = renderer.GetWorld();
     world.camera = FPSCamera{1, float(InitialWidth) / InitialHeight, 0.1f, 100};
     world.camera.position = {0, 1, 0};
+    world.directionalLight = {{0, 0, 0}, {0, -1, -1}, {1, 1, 1}, 0, 0, LightInfo::Directional};
     world.particleEmitters.push_back({.owner = 0x10000002aULL,
         .settings = {.appearance = 2, .maxAlive = 8, .rate = 4, .lifetime = 10, .speed = 0, .radius = 0.5f, .spread = 0},
         .position = {0, 1, -3}, .direction = {0, 1, 0}});

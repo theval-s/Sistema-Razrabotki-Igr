@@ -19,6 +19,7 @@ enum class EngineShader : std::uint8_t {
     ParticleUpdate, ParticleAdmit, ParticleSpawn,
     ParticleBuild, ParticleMerge, ParticleBin, ParticleShade,
     ParticleTextureResample, ParticleShadowVS, ParticleShadowPS,
+    SkyboxVS, SkyboxPS,
     Count
 };
 

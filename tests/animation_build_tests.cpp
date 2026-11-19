@@ -11,6 +11,7 @@
 #include <engine/scene/SceneDocument.hpp>
 #include <engine/engine.hpp>
 #include <engine/rendering/EngineShaders.hpp>
+#include <engine/rendering/RenderingSubsystem.hpp>
 #include <engine/core/Content.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/Pak.hpp>
@@ -23,12 +24,15 @@
 #include "content_fixture.hpp"
 
 #include <filesystem>
+#include <cstdint>
 #include <initializer_list>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace {
 namespace fs = std::filesystem;
@@ -81,7 +85,8 @@ std::wstring QuoteArgument(const std::wstring& argument) {
 }
 
 std::optional<DWORD> RunBuild(const fs::path& tool, const fs::path& project,
-                              const fs::path& output, const fs::path& runtime, const std::wstring& extra = {}) {
+                              const fs::path& output, const fs::path& runtime, const std::wstring& extra = {},
+                              const fs::path& log = {}) {
     std::wstring command = QuoteArgument(tool.native()) + L" --project " + QuoteArgument(project.native()) +
         L" --out " + QuoteArgument(output.native()) + L" --runtime " + QuoteArgument(runtime.native()) + extra;
     SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
@@ -91,10 +96,22 @@ std::optional<DWORD> RunBuild(const fs::path& tool, const fs::path& project,
         ADD_FAILURE() << "Opening NUL failed: " << GetLastError();
         return std::nullopt;
     }
+    HANDLE outputDevice = nullDevice;
+    if (!log.empty()) {
+        outputDevice = CreateFileW(log.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (outputDevice == INVALID_HANDLE_VALUE) {
+            const DWORD logError = GetLastError();
+            CloseHandle(nullDevice);
+            ADD_FAILURE() << "Opening build log failed: " << logError;
+            return std::nullopt;
+        }
+    }
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdInput = startup.hStdOutput = startup.hStdError = nullDevice;
+    startup.hStdInput = nullDevice;
+    startup.hStdOutput = startup.hStdError = outputDevice;
     PROCESS_INFORMATION process{};
     // The child inherits the process error mode, suppressing Windows error dialogs.
     const UINT previousMode = SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS |
@@ -103,6 +120,7 @@ std::optional<DWORD> RunBuild(const fs::path& tool, const fs::path& project,
                                         nullptr, nullptr, &startup, &process);
     const DWORD createError = created ? ERROR_SUCCESS : GetLastError();
     SetErrorMode(previousMode);
+    if (outputDevice != nullDevice) CloseHandle(outputDevice);
     CloseHandle(nullDevice);
     if (!created) {
         ADD_FAILURE() << "CreateProcessW failed: " << createError;
@@ -128,6 +146,11 @@ std::optional<DWORD> RunBuild(const fs::path& tool, const fs::path& project,
         return std::nullopt;
     }
     return exitCode;
+}
+
+std::string BuildLog(const fs::path& path) {
+    std::string text, error;
+    return engine::ReadTextFile(path, text, error) ? text : error;
 }
 } // namespace
 
@@ -351,4 +374,185 @@ TEST(ParticleEffectBuild, CopiesJsonAndValidatesSceneAndTextureUuidDependencies)
     EXPECT_EQ(*textured, 0u);
     EXPECT_TRUE(fs::is_regular_file(output / "game/smoke.particle-effect.json"));
     EXPECT_TRUE(fs::is_regular_file(output / "game/smoke.png"));
+}
+
+TEST(SkyboxBuild, PackagesLooseAndPackedCubemapShadersAndPreservesOutputOnValidationFailure) {
+    TemporaryDirectory temp;
+    const auto projectRoot = temp.path / "project";
+    const auto content = projectRoot / "content";
+    const auto runtime = temp.path / "runtime";
+    const auto loose = temp.path / "loose";
+    const auto output = temp.path / "packed";
+    const auto log = temp.path / "build.log";
+    fs::create_directories(content / "materials");
+    fs::create_directories(runtime);
+    const auto fixture = fs::path(SRI_SOURCE_ROOT) / "example_game/materials";
+    for (const auto* name : {"example-sky.dds", "example-sky.dds.meta",
+                            "example-sky.skybox.json", "example-sky.skybox.json.meta"}) {
+        fs::copy_file(fixture / name, content / "materials" / name);
+    }
+    std::string error, text;
+    engine::AssetMetadata skyMetadata, textureMetadata;
+    const auto skyFile = content / "materials/example-sky.skybox.json";
+    const auto ddsFile = content / "materials/example-sky.dds";
+    ASSERT_TRUE(engine::ReadAssetMetadata(skyFile, skyMetadata, error)) << error;
+    ASSERT_TRUE(engine::ReadAssetMetadata(ddsFile, textureMetadata, error)) << error;
+    const engine::AssetReference sky{skyMetadata.id, "game/materials/example-sky.skybox.json"};
+    const engine::AssetReference cubemap{textureMetadata.id, "game/materials/example-sky.dds"};
+    engine::SceneDocument scene;
+    scene.environment.skybox = sky;
+    const auto saveScene = [&] {
+        return engine::SerializeSceneDocument(scene, text, error) &&
+            engine::WriteFileAtomic(content / "test.scene.json", text, error);
+    };
+    ASSERT_TRUE(saveScene()) << error;
+    ASSERT_TRUE(engine::WriteAssetMetadata(content / "test.scene.json",
+        {engine::NewUuid(), engine::CatalogAssetKind::Scene}, error)) << error;
+    engine::Project project;
+    project.file = projectRoot / "Skybox.sriproject";
+    project.name = "SkyboxBuildTest";
+    project.startupScene = "game/test.scene.json";
+    ASSERT_TRUE(project.Save(error)) << error;
+    ASSERT_TRUE(engine::WriteFileAtomic(runtime / "sri_runtime.exe", "runtime marker", error)) << error;
+    const auto tool = engine::AssetPathResolver::GetRoot() / "sri-build.exe";
+    ASSERT_TRUE(fs::is_regular_file(tool));
+    std::vector<std::uint8_t> sourceDds;
+    ASSERT_TRUE(engine::ReadBinaryFile(ddsFile, sourceDds, error)) << error;
+
+    const auto checkContent = [&](const fs::path& root) {
+        std::string manifest, descriptor;
+        ASSERT_TRUE(engine::ReadTextFile(root / "manifest.json", manifest, error)) << error;
+        engine::AssetCatalog catalog;
+        ASSERT_TRUE(catalog.LoadManifest(manifest, root / "game", root / "engine", error)) << error;
+        ASSERT_NE(catalog.Find(sky.id, engine::CatalogAssetKind::Skybox), nullptr);
+        ASSERT_NE(catalog.Find(cubemap.id, engine::CatalogAssetKind::Texture), nullptr);
+        EXPECT_EQ(catalog.Find(sky.id)->path, sky.path);
+        EXPECT_EQ(catalog.Find(cubemap.id)->path, cubemap.path);
+        ASSERT_TRUE(engine::ReadTextFile(root / "game/test.scene.json", descriptor, error)) << error;
+        engine::SceneDocument shippedScene;
+        ASSERT_TRUE(engine::ParseSceneDocument(descriptor, shippedScene, error)) << error;
+        EXPECT_EQ(shippedScene.environment.skybox, sky);
+        ASSERT_TRUE(engine::ReadTextFile(root / sky.path, descriptor, error)) << error;
+        engine::SkyboxDefinition definition;
+        ASSERT_TRUE(engine::ParseSkyboxDefinition(descriptor, definition, error)) << error;
+        EXPECT_EQ(definition.cubemap.id, cubemap.id);
+        std::vector<std::uint8_t> bytes;
+        ASSERT_TRUE(engine::ReadBinaryFile(root / cubemap.path, bytes, error)) << error;
+        EXPECT_EQ(bytes, sourceDds);
+        ASSERT_TRUE(engine::ReadBinaryFile(root / engine::ShaderLibraryName, bytes, error)) << error;
+        engine::ShaderLibrary shaders;
+        ASSERT_TRUE(shaders.Deserialize(bytes, error)) << error;
+        for (const auto shader : {engine::EngineShader::SkyboxVS, engine::EngineShader::SkyboxPS}) {
+            const auto& variant = engine::GetEngineShader(shader);
+            const auto file = engine::AssetPathResolver::ResolveShader({.path = engine::AssetPathResolver::DefaultPath(
+                engine::ToUtf8(variant.file), engine::AssetKind::Shader)});
+            const auto* compiled = shaders.Find(engine::ShaderLibrary::Key(file, variant.stage, variant.options));
+            ASSERT_NE(compiled, nullptr) << static_cast<unsigned>(shader);
+            EXPECT_FALSE(compiled->empty());
+        }
+    };
+
+    const auto looseStatus = RunBuild(tool, project.file, loose, runtime, L" --no-pak", log);
+    ASSERT_TRUE(looseStatus);
+    ASSERT_EQ(*looseStatus, 0u) << BuildLog(log);
+    EXPECT_FALSE(fs::exists(loose / engine::PakFileName));
+    ASSERT_NO_FATAL_FAILURE(checkContent(loose));
+    const auto packedStatus = RunBuild(tool, project.file, output, runtime, {}, log);
+    ASSERT_TRUE(packedStatus);
+    ASSERT_EQ(*packedStatus, 0u) << BuildLog(log);
+    EXPECT_TRUE(fs::is_regular_file(output / "SkyboxBuildTest.exe"));
+    EXPECT_FALSE(fs::exists(output / "game"));
+    EXPECT_FALSE(fs::exists(output / "manifest.json"));
+    {
+        auto pack = engine::PakSource::Load(output / engine::PakFileName, error);
+        ASSERT_TRUE(pack) << error;
+        EXPECT_TRUE(pack->IsFile(sky.path));
+        EXPECT_TRUE(pack->IsFile(cubemap.path));
+        EXPECT_FALSE(pack->IsFile(sky.path + ".meta"));
+        EXPECT_FALSE(pack->IsFile(cubemap.path + ".meta"));
+        MountScope mount(output, std::move(pack));
+        ASSERT_NO_FATAL_FAILURE(checkContent(output));
+    }
+
+    // Validation must precede Stage's replacement of the previous good output.
+    std::vector<std::uint8_t> goodPack;
+    ASSERT_TRUE(engine::ReadBinaryFile(output / engine::PakFileName, goodPack, error)) << error;
+    ASSERT_TRUE(engine::WriteFileAtomic(output / "preserve.txt", "previous good skybox build", error)) << error;
+    const auto rejected = [&](std::string_view diagnostic) {
+        const auto status = RunBuild(tool, project.file, output, runtime, {}, log);
+        ASSERT_TRUE(status);
+        EXPECT_NE(*status, 0u) << BuildLog(log);
+        EXPECT_NE(BuildLog(log).find(diagnostic), std::string::npos) << BuildLog(log);
+        std::string marker;
+        ASSERT_TRUE(engine::ReadTextFile(output / "preserve.txt", marker, error)) << error;
+        EXPECT_EQ(marker, "previous good skybox build");
+        std::vector<std::uint8_t> retained;
+        ASSERT_TRUE(engine::ReadBinaryFile(output / engine::PakFileName, retained, error)) << error;
+        EXPECT_EQ(retained, goodPack);
+    };
+    // Well-formed DX10 1x1 RGBA Texture2D DDS, with no cubemap flag.
+    std::string flatDds(152, '\0');
+    const auto word = [&](unsigned offset, std::uint32_t value) {
+        for (unsigned i = 0; i < 4; ++i) flatDds[offset + i] = static_cast<char>(value >> (8 * i));
+    };
+    word(0, 0x20534444); word(4, 124); word(8, 0x100f);
+    word(12, 1); word(16, 1); word(20, 4); word(28, 1);
+    word(76, 32); word(80, 4); word(84, 0x30315844); word(108, 0x1000);
+    word(128, 28); word(132, 3); word(140, 1);
+    ASSERT_TRUE(engine::WriteFileAtomic(ddsFile, flatDds, error)) << error;
+    ASSERT_NO_FATAL_FAILURE(rejected("cubemap"));
+    ASSERT_TRUE(engine::WriteFileAtomic(ddsFile,
+        std::string_view(reinterpret_cast<const char*>(sourceDds.data()), sourceDds.size()), error)) << error;
+    scene.environment.skybox = {engine::NewUuid(), sky.path};
+    ASSERT_TRUE(saveScene()) << error;
+    ASSERT_NO_FATAL_FAILURE(rejected("environment.skybox"));
+
+    // Consume the retained pack through the runtime path, with no loose sources.
+    auto pack = engine::PakSource::Load(output / engine::PakFileName, error);
+    ASSERT_TRUE(pack) << error;
+    MountScope mount(output, std::move(pack));
+    struct RestoreRoots {
+        fs::path game = engine::AssetPathResolver::GetGameRoot();
+        fs::path manifest = engine::AssetPathResolver::GetManifest();
+        ~RestoreRoots() {
+            engine::AssetPathResolver::SetManifest(manifest);
+            engine::AssetPathResolver::SetGameRoot(game);
+        }
+    } restore;
+    engine::AssetPathResolver::SetManifest(output / "manifest.json");
+    engine::AssetPathResolver::SetGameRoot(output / "game");
+    struct HiddenWindow {
+        HWND handle = CreateWindowExW(0, L"STATIC", L"Packed skybox build test", WS_OVERLAPPEDWINDOW,
+            0, 0, 64, 64, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        ~HiddenWindow() { if (handle) DestroyWindow(handle); }
+    } window;
+    ASSERT_NE(window.handle, nullptr);
+    engine::Engine host({.surface = {window.handle, 64, 64}, .taskThreads = 1});
+    auto* rendering = host.AddSubsystem<engine::RenderingSubsystem>();
+    if (!host.Initialize()) GTEST_SKIP() << "Packaging checks passed; D3D11 hardware/debug layer unavailable";
+    auto& assets = host.GetSceneAssets();
+    ASSERT_TRUE(assets.GetCatalogError().empty()) << assets.GetCatalogError();
+    const auto handle = assets.RequestSkybox(sky);
+    const auto loaded = assets.LoadSkybox(sky.path);
+    ASSERT_TRUE(loaded);
+    EXPECT_TRUE(assets.IsReady(handle));
+    ASSERT_TRUE(assets.IsReady(loaded->cubemap));
+    const auto texture = assets.Peek(loaded->cubemap);
+    ASSERT_TRUE(texture);
+    const auto* native = rendering->GetResourceManager().TryGetTexture(texture->texture);
+    ASSERT_NE(native, nullptr);
+    D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+    native->GetSRV()->GetDesc(&srv);
+    EXPECT_EQ(srv.ViewDimension, D3D11_SRV_DIMENSION_TEXTURECUBE);
+    Microsoft::WRL::ComPtr<ID3D11Resource> resource;
+    native->GetSRV()->GetResource(resource.GetAddressOf());
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> cube;
+    ASSERT_TRUE(SUCCEEDED(resource.As(&cube)));
+    D3D11_TEXTURE2D_DESC desc{};
+    cube->GetDesc(&desc);
+    EXPECT_EQ(desc.Width, desc.Height);
+    EXPECT_GT(desc.Width, 0u);
+    EXPECT_EQ(desc.ArraySize, 6u);
+    EXPECT_EQ(desc.SampleDesc.Count, 1u);
+    EXPECT_NE(desc.MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE, 0u);
 }

@@ -12,6 +12,19 @@ The default scene also contains two ParticleEmitter entities: smoke from the eng
 `shaders/ParticleHooks.hlsli` (custom appearance ID 2). Particles leave along the
 entity's local up axis, so rotating an entity changes its emission direction.
 
+The demo scene uses `materials/example-sky.skybox.json` and its original analytic
+gradient cubemap, `materials/example-sky.dds`, as its background. The Sun entity
+provides lighting separately. From the repository root, regenerate or verify the
+256×256 sRGB cubemap and its nine mip levels with:
+
+```text
+python tools/generate_skybox.py
+python tools/generate_skybox.py --check
+```
+
+Keep both assets' `.meta` files alongside them. See [the skybox guide](../docs/skyboxes.md)
+for authoring and environment settings.
+
 - WASD: move; mouse: look; Q/E: down/up; Shift: sprint.
 - P: pause/settings; I: inventory; F5/F9: save/load; R: raycast.
 - T: Lua-triggered mono one-shot at the enchanted cube, independent of its entity.

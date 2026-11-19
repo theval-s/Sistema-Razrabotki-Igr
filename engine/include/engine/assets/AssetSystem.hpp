@@ -53,8 +53,9 @@ public:
     /// per Tick, before the subsystems run.
     void Update(const FrameContext& frame);
     void Shutdown();
-    /// Drop in-flight work and evict asset-backed GPU resources after clearing
-    /// all render-world references. Handles from the old scene become stale.
+    /// Drop in-flight work and evict asset-backed GPU resources. The caller must
+    /// first detach render-world references (including environment.cubemap) and GPU bindings.
+    /// Handles from the old scene become stale; retained CPU records do not own GPU resources.
     void UnloadAll();
 
     /// Blocking loads, for boot-time assets: the CPU phase may already run on a worker
@@ -68,6 +69,10 @@ public:
     entt::resource<MaterialInstanceAsset> LoadMaterialInstance(std::string_view name);
     entt::resource<SkeletonAsset> LoadSkeleton(std::string_view name);
     entt::resource<ParticleEffectAsset> LoadParticleEffect(std::string_view name);
+    /// Extensionless names gain .skybox.json. Ready requires a validated DDS single cubemap.
+    entt::resource<SkyboxAsset> LoadSkybox(std::string_view name);
+    AssetHandle<SkyboxAsset> RequestSkybox(std::string_view name);
+    AssetHandle<SkyboxAsset> RequestSkybox(const AssetReference& reference);
     AssetHandle<ParticleEffectAsset> RequestParticleEffect(std::string_view name);
     AssetHandle<ParticleEffectAsset> RequestParticleEffect(const AssetReference& reference);
     entt::resource<AnimationClipAsset> LoadAnimationClip(std::string_view name);
@@ -79,7 +84,8 @@ public:
     AssetHandle<AnimationClipAsset> RequestAnimationClip(const AssetReference& reference);
     AssetHandle<SkinnedMeshAsset> RequestSkinnedMesh(const AssetReference& reference);
     /// Reimport a saved asset and atomically replace its live GPU contents on the main thread.
-    /// Unloaded materials are read on their next request; unloaded effects are queued again.
+    /// Unloaded materials are read on their next request; unloaded effects/skyboxes are queued again.
+    /// Skybox reload resolves and validates its dependency before atomic publication.
     /// A failure leaves ready values untouched.
     bool Reload(std::string_view name, AssetKind kind, std::string& error);
     /// Names use game/... or engine/...; each stage/entry point/define set is a separate asset.
@@ -212,6 +218,8 @@ private:
             return skeletons_;
         } else if constexpr (std::is_same_v<T, ParticleEffectAsset>) {
             return particleEffects_;
+        } else if constexpr (std::is_same_v<T, SkyboxAsset>) {
+            return skyboxes_;
         } else if constexpr (std::is_same_v<T, AnimationClipAsset>) {
             return animationClips_;
         } else if constexpr (std::is_same_v<T, SkinnedMeshAsset>) {
@@ -233,6 +241,7 @@ private:
     AssetTable<MaterialInstanceAsset> materialInstances_;
     AssetTable<SkeletonAsset> skeletons_;
     AssetTable<ParticleEffectAsset> particleEffects_;
+    AssetTable<SkyboxAsset> skyboxes_;
     AssetTable<AnimationClipAsset> animationClips_;
     AssetTable<SkinnedMeshAsset> skinnedMeshes_;
     AssetCatalog catalog_;

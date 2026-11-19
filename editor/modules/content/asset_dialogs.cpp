@@ -703,6 +703,63 @@ QString MaterialDialog::problem() const {
     return shader_->reference() && !hooked ? tr("Pick the hooks the shader implements.") : QString();
 }
 
+namespace {
+class DdsCubemapPicker final : public editor::AssetPicker {
+public:
+    explicit DdsCubemapPicker(const engine::AssetCatalog& catalog)
+        : AssetPicker(catalog, engine::CatalogAssetKind::Texture) {
+        reload(); // Apply the derived filter after construction.
+        setCurrentIndex(-1);
+    }
+protected:
+    bool acceptsEntry(const engine::CatalogEntry& entry) const override {
+        return QString::fromStdString(entry.path).endsWith(QLatin1String(".dds"), Qt::CaseInsensitive);
+    }
+};
+} // namespace
+
+SkyboxDialog::SkyboxDialog(const engine::AssetCatalog& catalog, const QString& folder,
+    const QString& name, QWidget* parent, bool editing)
+    : NewAssetDialog(editing ? tr("Edit Skybox") : tr("New Skybox"), folder,
+                     QStringLiteral(".skybox.json"), name, parent, editing) {
+    cubemap_ = new DdsCubemapPicker(catalog);
+    cubemap_->setObjectName(QStringLiteral("skyboxCubemap"));
+    cubemap_->setToolTip(tr("A DDS texture containing one six-face cubemap. The engine validates the resource when loading."));
+    form()->addRow(tr("Cubemap (DDS)"), cubemap_);
+    missing_ = new QLabel;
+    missing_->setWordWrap(true);
+    missing_->hide();
+    form()->addRow(missing_);
+    connect(cubemap_, &QComboBox::currentIndexChanged, this, [this] {
+        if (const auto chosen = cubemap_->reference()) value_.cubemap = *chosen;
+        missing_->setVisible(cubemap_->currentIndex() < 0 && value_.cubemap.id.IsValid());
+        validate();
+    });
+    validate();
+}
+
+void SkyboxDialog::load(const engine::SkyboxDefinition& definition) {
+    value_ = definition;
+    const QSignalBlocker blocker(cubemap_);
+    cubemap_->reload();
+    if (!cubemap_->selectId(value_.cubemap.id)) cubemap_->setCurrentIndex(-1);
+    missing_->setText(tr("Unresolved DDS cubemap: %1 (%2). The reference is preserved until you choose a replacement.")
+        .arg(QString::fromStdString(value_.cubemap.path), QString::fromStdString(value_.cubemap.id.ToString())));
+    missing_->setVisible(cubemap_->currentIndex() < 0 && value_.cubemap.id.IsValid());
+    validate();
+}
+
+engine::SkyboxDefinition SkyboxDialog::definition() const {
+    return value_;
+}
+
+QString SkyboxDialog::problem() const {
+    if (const auto base = NewAssetDialog::problem(); !base.isEmpty()) return base;
+    std::string error;
+    if (!engine::ValidateSkyboxDefinition(value_, error)) return QString::fromStdString(error);
+    return {};
+}
+
 ParticleEffectDialog::ParticleEffectDialog(const engine::AssetCatalog& catalog, const QString& folder,
     const QString& name, QWidget* parent, bool editing)
     : NewAssetDialog(editing ? tr("Edit Particle Effect") : tr("New Particle Effect"), folder,

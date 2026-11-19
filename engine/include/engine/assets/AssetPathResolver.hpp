@@ -35,6 +35,8 @@ public:
     [[nodiscard]] static std::filesystem::path ResolveMaterial(const AssetDesc& desc, bool instance = false);
 
     /// Default on-disk location for a kind when the caller gave only a logical name.
+    /// Skybox names are passed through; AssetSystem normalization/the importer
+    /// supply .skybox.json, following the same root rules as particle effects.
     [[nodiscard]] static std::filesystem::path DefaultPath(std::string_view name, AssetKind kind);
 
     [[nodiscard]] static const std::filesystem::path& GetRoot();

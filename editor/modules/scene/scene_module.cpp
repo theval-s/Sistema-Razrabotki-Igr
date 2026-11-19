@@ -37,6 +37,7 @@
 
 #include "component_inspectors.hpp"
 #include "inspector_panel.hpp"
+#include "environment_panel.hpp"
 
 namespace {
 
@@ -581,6 +582,9 @@ public:
 
         auto* inspector = new InspectorPanel(context);
         context.addPanel(QStringLiteral("InspectorPanel"), QObject::tr("Inspector"), inspector, Qt::RightDockWidgetArea);
+
+        context.addPanel(QStringLiteral("EnvironmentPanel"), QObject::tr("Environment"),
+                         createEnvironmentPanel(context), Qt::RightDockWidgetArea);
 
         // Edits during play would land in the running copy, which Stop throws away.
         const editor::PlaySession* session = &context.playSession();
