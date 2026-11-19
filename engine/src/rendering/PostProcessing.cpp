@@ -105,6 +105,7 @@ struct PostProcessing::Impl {
     bool failed{};
     std::function<void(RenderingFailure)> resourceFailure;
     std::unordered_set<std::uint64_t> owners;
+    std::unordered_set<std::uint64_t> tonemappingBypassOwners;
     std::unordered_map<std::uint64_t, ShaderRecord> shaders;
     std::unordered_map<std::uint64_t, BufferRecord> buffers;
     std::unordered_map<std::uint64_t, TextureRecord> textures;
@@ -353,6 +354,7 @@ void PostProcessing::Shutdown() noexcept {
     for (auto& schedule : impl_->schedule) schedule.clear();
     impl_->passes.clear();
     impl_->owners.clear();
+    impl_->tonemappingBypassOwners.clear();
     impl_->Collect();
     impl_->ReleaseTargets();
     auto& manager = impl_->context->GetResourceManager();
@@ -386,11 +388,21 @@ PostProcessOwner PostProcessing::CreateOwner() {
 }
 void PostProcessing::ReleaseOwner(PostProcessOwner owner) noexcept {
     if (!impl_->owners.erase(owner.value)) return;
+    impl_->tonemappingBypassOwners.erase(owner.value);
     std::erase_if(impl_->passes, [&](const auto& pair) { return pair.second->owner == owner; });
     impl_->Collect();
 }
 bool PostProcessing::IsOwnerAlive(PostProcessOwner owner) const noexcept {
     return impl_->context && !impl_->failed && impl_->owners.contains(owner.value);
+}
+
+void PostProcessing::SetBuiltinTonemappingEnabled(PostProcessOwner owner, bool enabled) {
+    impl_->RequireSetup(owner);
+    if (enabled) impl_->tonemappingBypassOwners.erase(owner.value);
+    else impl_->tonemappingBypassOwners.insert(owner.value);
+}
+bool PostProcessing::IsBuiltinTonemappingEnabled() const noexcept {
+    return impl_->tonemappingBypassOwners.empty();
 }
 
 PostProcessShader PostProcessing::CreateShader(PostProcessOwner owner, const CompiledShader& shader) {

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
@@ -133,13 +134,15 @@ protected:
         ASSERT_LT(x, desc.Width);
         ASSERT_LT(y, desc.Height);
         ASSERT_TRUE(desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+                    desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM ||
                     desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
         auto* dc = renderer.GetRenderingContext().GetDeviceContext();
         D3D11_MAPPED_SUBRESOURCE mapped{};
         ASSERT_HRESULT_SUCCEEDED(dc->Map(texture, 0, D3D11_MAP_READ, 0, &mapped));
         const auto* row = static_cast<const unsigned char*>(mapped.pData) + y * mapped.RowPitch;
-        if (desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM) {
+        if (desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM || desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM) {
             for (size_t c = 0; c < 4; ++c) result[c] = row[x * 4 + c] / 255.0f;
+            if (desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM) std::swap(result[0], result[2]);
         } else {
             std::array<std::uint16_t, 4> halves{};
             std::memcpy(halves.data(), row + x * 8, 8);
@@ -232,6 +235,100 @@ float4 PSMain(float4 p : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target {
     EXPECT_NEAR(beforeOverlay[1], .25f, .008f);
     EXPECT_NEAR(beforeOverlay[2], .1f, .008f);
     ExpectImage({.4f, .2f, .1f, 1});
+}
+
+TEST_F(PostProcessingNative, CustomTonemappingReplacesReinhardBeforeUiAndSurvivesResize) {
+    renderer.GetWorld().environment.settings.fallbackColor = {4, 1, .25f};
+    const auto shader = Shader(owner, R"(
+Texture2D Source : register(t11); SamplerState PointClamp : register(s0);
+float4 PSMain(float4 p : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target {
+    return float4(1 - exp(-Source.SampleLevel(PointClamp, uv, 0).rgb), 1);
+})");
+    const auto mapper = Effects().AddPass(owner, "custom mapper", PostProcessStage::BeforeTonemap, 1000,
+        [&](PostProcessContext& c, const PostProcessFrame& f) {
+            EXPECT_THROW(Effects().SetBuiltinTonemappingEnabled(owner, true), std::invalid_argument);
+            c.SetPixelShader(shader);
+            c.SetRenderTarget(f.outputColor);
+            c.BindTexture(11, f.inputColor);
+            c.DrawFullscreen();
+        });
+    Effects().SetBuiltinTonemappingEnabled(owner, false);
+    const Pixel mapped{1 - std::exp(-4.f), 1 - std::exp(-1.f), 1 - std::exp(-.25f), 1};
+    ASSERT_NO_FATAL_FAILURE(Render());
+    ExpectImage(mapped); // A second Reinhard application would darken all three channels.
+
+    captured.Reset();
+    width = 111;
+    height = 79;
+    ASSERT_TRUE(renderer.Reinitialize({window, width, height}));
+    ASSERT_NO_FATAL_FAILURE(Render());
+    ExpectImage(mapped);
+    ASSERT_NO_FATAL_FAILURE(Render([&](RenderingContext& context, const FrameContext&) {
+        ComPtr<ID3D11Texture2D> beforeUi;
+        CopyBoundTarget(beforeUi);
+        Pixel pixel{};
+        ReadPixel(beforeUi.Get(), pixel);
+        for (size_t c = 0; c < 4; ++c) EXPECT_NEAR(pixel[c], mapped[c], .012f);
+        ComPtr<ID3D11RenderTargetView> target;
+        context.GetDeviceContext()->OMGetRenderTargets(1, target.GetAddressOf(), nullptr);
+        const Pixel ui{.2f, .4f, .6f, 1};
+        context.GetDeviceContext()->ClearRenderTargetView(target.Get(), ui.data());
+    }));
+    ExpectImage({.2f, .4f, .6f, 1});
+    Effects().SetEnabled(owner, mapper, false);
+    Effects().SetBuiltinTonemappingEnabled(owner, true);
+    ASSERT_NO_FATAL_FAILURE(Render());
+    ExpectImage({.8f, .5f, .2f, 1});
+}
+
+TEST_F(PostProcessingNative, TonemappingBypassWorksWithoutPassesAndIsScopedToLiveOwners) {
+    renderer.GetWorld().environment.settings.fallbackColor = {4, .5f, .25f};
+    Effects().SetEnabled(captureOwner, capturePass, false);
+    const auto captureDirect = [&](RenderingContext&, const FrameContext&) {
+        EXPECT_FALSE(Effects().HasPasses());
+        CopyBoundTarget(captured);
+    };
+    ASSERT_NO_FATAL_FAILURE(Render(captureDirect));
+    ExpectImage({.8f, 1.f / 3, .2f, 1});
+    const auto other = Effects().CreateOwner();
+    Effects().SetBuiltinTonemappingEnabled(owner, false);
+    Effects().SetBuiltinTonemappingEnabled(owner, false);
+    Effects().SetBuiltinTonemappingEnabled(other, false);
+    Effects().SetBuiltinTonemappingEnabled(owner, true);
+    Effects().ReleaseOwner(owner); // Does not release the other owner's bypass.
+    EXPECT_THROW(Effects().SetBuiltinTonemappingEnabled(owner, false), std::invalid_argument);
+    ASSERT_NO_FATAL_FAILURE(Render(captureDirect));
+    ExpectImage({1, .5f, .25f, 1}); // UNORM clamps HDR without applying a tone curve.
+    Effects().ReleaseOwner(other);
+    ASSERT_NO_FATAL_FAILURE(Render(captureDirect));
+    ExpectImage({.8f, 1.f / 3, .2f, 1});
+
+    for (const auto view : {RenderDebugView::Albedo, RenderDebugView::Normals, RenderDebugView::Depth}) {
+        ASSERT_TRUE(renderer.SetDebugView(view));
+        ASSERT_NO_FATAL_FAILURE(Render(captureDirect));
+        Pixel expected{};
+        ReadPixel(captured.Get(), expected);
+        Effects().SetBuiltinTonemappingEnabled(captureOwner, false);
+        ASSERT_NO_FATAL_FAILURE(Render(captureDirect));
+        ExpectImage(expected);
+        Effects().SetBuiltinTonemappingEnabled(captureOwner, true);
+    }
+    Effects().SetBuiltinTonemappingEnabled(captureOwner, false);
+    renderer.Shutdown();
+    EXPECT_TRUE(Effects().IsBuiltinTonemappingEnabled());
+}
+
+TEST_F(PostProcessingNative, RetiringCustomMapperRestoresReinhardInTheSameFrame) {
+    renderer.GetWorld().environment.settings.fallbackColor = {4, 1, .25f};
+    Effects().SetBuiltinTonemappingEnabled(owner, false);
+    Effects().AddPass(owner, "retire mapper", PostProcessStage::BeforeTonemap, 0,
+        [&](PostProcessContext& c, const PostProcessFrame& f) {
+            c.ClearRenderTarget(f.outputColor, {.9f, .9f, .9f, 1});
+            Effects().ReleaseOwner(owner);
+        });
+    ASSERT_NO_FATAL_FAILURE(Render());
+    EXPECT_TRUE(Effects().IsBuiltinTonemappingEnabled());
+    ExpectImage({.8f, .5f, .2f, 1});
 }
 
 TEST_F(PostProcessingNative, PriorityAndEqualPriorityRegistrationOrderChainActualPixels) {

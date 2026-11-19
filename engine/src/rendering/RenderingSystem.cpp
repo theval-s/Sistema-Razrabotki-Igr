@@ -173,7 +173,8 @@ void RenderingSystem::RenderFrame(const FrameContext& frame, const OverlayCallba
                 resources_.BindCBuffers(renderingContext_);
                 renderingContext_.BindSamplers();
                 rendering_detail::InPass("PresentPass", [&] {
-                    presentPass_->RenderTo(world_, renderingContext_, resources_, color, composition);
+                    presentPass_->RenderTo(world_, renderingContext_, resources_, color, composition,
+                                           postProcessing_.IsBuiltinTonemappingEnabled());
                 });
                 renderingContext_.ClearHazardousState();
                 rendering_detail::InPass("AfterTonemap", [&] {
@@ -191,7 +192,13 @@ void RenderingSystem::RenderFrame(const FrameContext& frame, const OverlayCallba
                 });
                 continue;
             }
-            rendering_detail::InPass(PassNames[i], [&] { renderPasses_[i]->Render(world_, renderingContext_, resources_); });
+            rendering_detail::InPass(PassNames[i], [&] {
+                if (renderPasses_[i].get() == presentPass_)
+                    presentPass_->RenderTo(world_, renderingContext_, resources_, resources_.gBuffer.resultTexture,
+                                           presentPass_->GetBackbuffer(), postProcessing_.IsBuiltinTonemappingEnabled());
+                else
+                    renderPasses_[i]->Render(world_, renderingContext_, resources_);
+            });
             if (i + 1 == renderPasses_.size() && overlay) overlay(renderingContext_, frame);
             renderingContext_.ClearHazardousState();
         }

@@ -90,7 +90,7 @@ void PresentPass::Render(RenderWorld& world, RenderingContext& context, Renderin
 }
 
 void PresentPass::RenderTo(RenderWorld& world, RenderingContext& context, RenderingResources& resources,
-                           TextureHandle sceneColor, TextureHandle target) {
+                           TextureHandle sceneColor, TextureHandle target, bool builtinTonemappingEnabled) {
     // In particular detach the scene DSV before binding its SRV, even if the
     // preceding selection pass left a read-only DSV attached.
     context.SetRenderTargets({target}, TextureHandle{});
@@ -109,7 +109,8 @@ void PresentPass::RenderTo(RenderWorld& world, RenderingContext& context, Render
     case RenderDebugView::Depth: source = resources.gBuffer.depthTexture; break;
     default: break;
     }
-    const PresentBufferData parameters{static_cast<uint32_t>(mode), world.camera.nearPlane, world.camera.farPlane};
+    const PresentBufferData parameters{static_cast<uint32_t>(mode), world.camera.nearPlane, world.camera.farPlane,
+                                       builtinTonemappingEnabled ? 1u : 0u};
     context.UpdateCBuffer(presentBuffer_, parameters);
     context.BindCBuffer(BindSlots::CBuffer::Pass0.WithStages(ShaderStage::Pixel), presentBuffer_);
     context.SetShaderResources(BindSlots::Texture::SceneResult, source);

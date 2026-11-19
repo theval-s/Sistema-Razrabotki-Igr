@@ -251,6 +251,12 @@ void LuaRuntime::Impl::RegisterRender() {
             return std::make_tuple(size[0], size[1]);
         });
 
+    render.set_function("SetBuiltinTonemappingEnabled", [this](sol::object enabled) {
+        if (enabled.get_type() != sol::type::boolean)
+            throw std::invalid_argument("SetBuiltinTonemappingEnabled expects a boolean");
+        const auto owner = RenderOwnerForCall(true);
+        RenderBackend()->SetBuiltinTonemappingEnabled(owner, enabled.as<bool>());
+    });
     render.set_function("LoadShader", [this](const std::string& asset) {
         const auto owner = RenderOwnerForCall(true);
         const auto& catalog = bindingsContext.engine->GetAssets().GetCatalog();

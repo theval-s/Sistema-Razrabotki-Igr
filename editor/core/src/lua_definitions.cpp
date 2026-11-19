@@ -473,6 +473,10 @@ function RenderContext:GetTextureSize(texture) end
 ---@class RenderAPI
 ---@field Stage RenderStageConstants
 Render = {}
+---Disable Reinhard for a custom BeforeTonemap mapper; true releases this script's bypass.
+---Call outside render callbacks. Bypass ends automatically on owner fault, teardown or session end.
+---@param enabled boolean
+function Render.SetBuiltinTonemappingEnabled(enabled) end
 ---@param asset string Postprocess definition UUID or logical path.
 ---@return RenderShader
 function Render.LoadShader(asset) end

@@ -117,7 +117,8 @@ TEST_F(LuaRenderTest, ExecutesWithoutUiAndRevokesContextAndBorrowedTextures) {
 TEST_F(LuaRenderTest, CallbackFaultRetiresEveryPassOfOwner) {
     auto desc = Script(R"(
         return {OnStart=function(self)
-            Render.AddFullscreenPass{name='fault', stage=Render.Stage.AfterTonemap, order=-1,
+            Render.SetBuiltinTonemappingEnabled(false)
+            Render.AddFullscreenPass{name='fault', stage=Render.Stage.BeforeTonemap, order=-1,
                 execute=function() error('intentional render callback fault') end}
             Render.AddFullscreenPass{name='must not run', stage=Render.Stage.AfterTonemap,
                 execute=function() error('retired callback executed') end}
@@ -126,7 +127,9 @@ TEST_F(LuaRenderTest, CallbackFaultRetiresEveryPassOfOwner) {
     InstanceId id;
     ASSERT_TRUE(lua.CreateInstance(desc, id, error)) << error;
     ASSERT_TRUE(lua.StartInstance(id, error)) << error;
+    EXPECT_FALSE(rendering->GetRendering().GetPostProcessing().IsBuiltinTonemappingEnabled());
     Render();
+    EXPECT_TRUE(rendering->GetRendering().GetPostProcessing().IsBuiltinTonemappingEnabled());
     EXPECT_FALSE(lua.UpdateInstance(id, 0, error));
     EXPECT_NE(error.find("intentional render callback fault"), std::string::npos) << error;
     EXPECT_NE(error.find("Render.execute"), std::string::npos) << error;
@@ -134,6 +137,80 @@ TEST_F(LuaRenderTest, CallbackFaultRetiresEveryPassOfOwner) {
     EXPECT_FALSE(rendering->GetRendering().GetPostProcessing().HasPasses());
     lua.Shutdown();
     Render(); // Queued native callbacks must not hold a dead sol state.
+}
+
+TEST_F(LuaRenderTest, TonemappingBypassIsValidatedAndReleasedByEachOwnerAndSession) {
+    auto desc = Script(R"(
+        assert(not pcall(function() Render.SetBuiltinTonemappingEnabled(false) end))
+        return {
+            OnStart=function()
+                for _, value in ipairs({0, 1, 'false', {}}) do
+                    assert(not pcall(function() Render.SetBuiltinTonemappingEnabled(value) end))
+                end
+                assert(not pcall(function() Render.SetBuiltinTonemappingEnabled() end))
+                Render.SetBuiltinTonemappingEnabled(false)
+                Render.SetBuiltinTonemappingEnabled(false)
+                Render.AddFullscreenPass{name='check scope', stage=Render.Stage.BeforeTonemap,
+                    execute=function(ctx, frame)
+                        assert(not pcall(function() Render.SetBuiltinTonemappingEnabled(true) end))
+                        ctx:ClearRenderTarget(frame.outputColor, {.2, .3, .4, 1})
+                    end}
+            end,
+            OnUpdate=function() Render.SetBuiltinTonemappingEnabled(true) end,
+            OnDestroy=function()
+                assert(not pcall(function() Render.SetBuiltinTonemappingEnabled(false) end))
+            end
+        }
+    )");
+    auto& effects = rendering->GetRendering().GetPostProcessing();
+    EXPECT_TRUE(effects.IsBuiltinTonemappingEnabled());
+    InstanceId first, second;
+    ASSERT_TRUE(lua.CreateInstance(desc, first, error)) << error;
+    ASSERT_TRUE(lua.CreateInstance(desc, second, error)) << error;
+    ASSERT_TRUE(lua.StartInstance(first, error)) << error;
+    ASSERT_TRUE(lua.StartInstance(second, error)) << error;
+    Render();
+    ASSERT_TRUE(lua.UpdateInstance(first, 0, error)) << error;
+    EXPECT_FALSE(effects.IsBuiltinTonemappingEnabled());
+    ASSERT_TRUE(lua.DestroyInstance(second, error)) << error;
+    EXPECT_TRUE(effects.IsBuiltinTonemappingEnabled());
+    ASSERT_TRUE(lua.DestroyInstance(first, error)) << error;
+
+    ASSERT_TRUE(lua.CreateInstance(desc, first, error)) << error;
+    ASSERT_TRUE(lua.StartInstance(first, error)) << error;
+    EXPECT_FALSE(effects.IsBuiltinTonemappingEnabled());
+    lua.Shutdown();
+    EXPECT_TRUE(effects.IsBuiltinTonemappingEnabled());
+    ASSERT_TRUE(lua.Initialize(root, host, error)) << error;
+    Render();
+    EXPECT_TRUE(effects.IsBuiltinTonemappingEnabled());
+}
+
+TEST_F(LuaRenderTest, StartAndUpdateFaultsRestoreBuiltinTonemapping) {
+    auto failedStart = Script(R"(
+        return {OnStart=function()
+            Render.SetBuiltinTonemappingEnabled(false)
+            error('mapper setup failed')
+        end}
+    )");
+    auto failedUpdate = Script(R"(
+        return {
+            OnStart=function() Render.SetBuiltinTonemappingEnabled(false) end,
+            OnUpdate=function() error('mapper update failed') end
+        }
+    )");
+    auto& effects = rendering->GetRendering().GetPostProcessing();
+    InstanceId id;
+    ASSERT_TRUE(lua.CreateInstance(failedStart, id, error)) << error;
+    EXPECT_FALSE(lua.StartInstance(id, error));
+    EXPECT_NE(error.find("mapper setup failed"), std::string::npos) << error;
+    EXPECT_TRUE(effects.IsBuiltinTonemappingEnabled());
+    ASSERT_TRUE(lua.CreateInstance(failedUpdate, id, error)) << error;
+    ASSERT_TRUE(lua.StartInstance(id, error)) << error;
+    EXPECT_FALSE(effects.IsBuiltinTonemappingEnabled());
+    EXPECT_FALSE(lua.UpdateInstance(id, 0, error));
+    EXPECT_NE(error.find("mapper update failed"), std::string::npos) << error;
+    EXPECT_TRUE(effects.IsBuiltinTonemappingEnabled());
 }
 
 TEST_F(LuaRenderTest, RemovingLaterPassDuringExecuteCancelsItsCallback) {

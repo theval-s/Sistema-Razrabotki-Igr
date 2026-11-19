@@ -79,6 +79,56 @@ function OnStart()
 end
 ```
 
+## Replacing the built-in tone mapper
+
+Call `Render.SetBuiltinTonemappingEnabled(false)` in `OnStart` and register your
+custom tone mapper at `BeforeTonemap`. Give it an `order` higher than your other
+HDR effects (including bloom), so it maps their combined HDR result to `[0, 1]`.
+For example, after creating `tonemap.postprocess.json` and its shader metadata:
+
+```lua
+function OnStart()
+    local shader = Render.LoadShader("game/effects/tonemap.postprocess.json")
+    Render.AddFullscreenPass {
+        name = "Custom tonemap",
+        stage = Render.Stage.BeforeTonemap,
+        order = 1000,
+        execute = function(ctx, frame)
+            ctx:SetPixelShader(shader)
+            ctx:SetRenderTarget(frame.outputColor)
+            ctx:BindTexture(0, frame.inputColor)
+            ctx:DrawFullscreen()
+        end
+    }
+    Render.SetBuiltinTonemappingEnabled(false)
+end
+```
+
+A simple exposure-based mapper for `content/effects/tonemap.hlsl`:
+
+```hlsl
+Texture2D SceneColor : register(t0);
+SamplerState PointClampSampler : register(s0);
+
+float4 PSMain(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target {
+    float3 hdr = max(SceneColor.SampleLevel(PointClampSampler, uv, 0).rgb, 0);
+    return float4(1 - exp(-hdr * 1.0), 1); // Exposure = 1.0
+}
+```
+
+The switch bypasses only Reinhard; presentation copies RGB without an additional
+gamma conversion into the existing 8-bit UNORM target. Values outside `[0, 1]`
+are clamped there. UI still composites afterward, and `AfterTonemap` / `AfterUI`
+passes keep their usual positions. Non-final debug views are unaffected.
+
+The setting belongs to the calling script. `true` releases **that script's**
+bypass; the built-in mapper is enabled by default and whenever no live owner
+requests a bypass. Repeated calls are idempotent. Owner teardown, Lua fault, or
+session end releases the request automatically. Disabling or removing a pass
+does not release it: pair that change with `Render.SetBuiltinTonemappingEnabled(true)`
+if you want Reinhard restored. Call the switch outside render callbacks, such
+as in `OnStart` or `OnUpdate`; calls during rendering or teardown are rejected.
+
 ## Scheduling and commands
 
 Stages run in this order: `BeforeTonemap` on HDR scene color, `AfterTonemap`

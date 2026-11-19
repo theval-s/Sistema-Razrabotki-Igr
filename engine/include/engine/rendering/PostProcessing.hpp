@@ -85,6 +85,10 @@ public:
     [[nodiscard]] PostProcessOwner CreateOwner();
     void ReleaseOwner(PostProcessOwner owner) noexcept;
     [[nodiscard]] bool IsOwnerAlive(PostProcessOwner owner) const noexcept;
+    // Outside rendering only. false requests a bypass; true releases this owner's request.
+    // Reinhard is enabled when no live owner requests a bypass. Retirement releases it immediately.
+    void SetBuiltinTonemappingEnabled(PostProcessOwner owner, bool enabled);
+    [[nodiscard]] bool IsBuiltinTonemappingEnabled() const noexcept;
     [[nodiscard]] PostProcessShader CreateShader(PostProcessOwner owner, const CompiledShader& shader);
     [[nodiscard]] ShaderParameters ReflectParameters(PostProcessOwner owner, PostProcessShader shader,
                                                      const std::string& name) const;
