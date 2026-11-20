@@ -47,7 +47,8 @@ add_test(NAME rendering_skinning_tests COMMAND rendering_skinning_tests)
 
 foreach(render_target IN ITEMS rendering_diagnostics_tests rendering_resource_tests render_debug_view_tests
         render_debug_native_tests asset_event_tests particle_simulation_tests particle_tiles_tests
-        skybox_assets_tests skybox_render_tests)
+        skybox_assets_tests skybox_render_tests shader_parameters_tests lua_render_tests postprocessing_tests
+        procedural_render_tests)
     add_executable(${render_target} ${render_target}.cpp)
     target_link_libraries(${render_target} PRIVATE Engine::EngineStatic GTest::gtest_main d3d11 d3dcompiler dxgi user32)
     target_compile_definitions(${render_target} PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
@@ -139,6 +140,7 @@ if(SRI_BUILD_EDITOR)
     add_executable(content_browser_drop_tests
         content_browser_drop_tests.cpp
         content_rig_dialog_tests.cpp
+        render_pipeline_editor_tests.cpp
         ../editor/modules/content/content_browser.cpp
         ../editor/modules/content/content_browser.hpp
         ../editor/modules/content/asset_filter_model.cpp

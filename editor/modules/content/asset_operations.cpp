@@ -25,7 +25,9 @@
 #include <engine/assets/AssetSystem.hpp>
 #include <engine/assets/MaterialDefinition.hpp>
 #include <engine/assets/ParticleEffectDefinition.hpp>
+#include <engine/assets/PostProcessDefinition.hpp>
 #include <engine/assets/SkyboxDefinition.hpp>
+#include <engine/assets/RenderPipelineDefinition.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
 #include <editor/play_session.hpp>
 #include <engine/assets/ModelImport.hpp>
@@ -181,7 +183,8 @@ std::pair<QString, QString> splitAssetName(const QString& name, const bool dir) 
     //TODO: add if we get more suffixes?
     for (const QLatin1String suffix : {QLatin1String(".skybox.json"), QLatin1String(".particle-effect.json"), QLatin1String(".material-instance.json"), QLatin1String(".material.json"),
                                         QLatin1String(".skinned-mesh.json"), QLatin1String(".skeleton.json"),
-                                        QLatin1String(".animation.json"),
+                                        QLatin1String(".animation.json"), QLatin1String(".pipeline.json"),
+                                        QLatin1String(".postprocess.json"),
                                         QLatin1String(".scene.json")}) {
         if (name.size() > suffix.size() && name.endsWith(suffix, Qt::CaseInsensitive)) {
             return {name.chopped(suffix.size()), name.right(suffix.size())};
@@ -447,6 +450,56 @@ bool AssetOperations::updateSkybox(const QString& path, const engine::SkyboxDefi
         return false;
     }
     return true;
+}
+
+bool AssetOperations::createRenderPipeline(const QString& path, const engine::RenderPipelineDefinition& definition) {
+    if (context_.playSession().isPlaying()) return false;
+    if (!isWithin(cleanPath(path), cleanPath(editor::toQString(context_.project().ContentDir())))) {
+        report(tr("New Render Pipeline"), {tr("Choose a writable project content folder.")});
+        return false;
+    }
+    std::string text, error;
+    if (!engine::SerializeRenderPipelineDefinition(definition, text, error)) {
+        report(tr("New Render Pipeline"), {fromUtf8(error)});
+        return false;
+    }
+    return createFile(tr("New Render Pipeline"), path, text, engine::CatalogAssetKind::RenderPipeline);
+}
+
+bool AssetOperations::updateRenderPipeline(const QString& path, const engine::RenderPipelineDefinition& definition) {
+    if (context_.playSession().isPlaying()) return false;
+    std::string text, error;
+    if (!engine::SerializeRenderPipelineDefinition(definition, text, error)) {
+        report(tr("Edit Render Pipeline"), {fromUtf8(error)});
+        return false;
+    }
+    // Pipelines are script-owned snapshots, recreated on the next Render.LoadPipeline.
+    return updateFile(tr("Edit Render Pipeline"), path, text, engine::CatalogAssetKind::RenderPipeline);
+}
+
+bool AssetOperations::createPostProcess(const QString& path, const engine::PostProcessDefinition& definition) {
+    if (context_.playSession().isPlaying()) return false;
+    if (!isWithin(cleanPath(path), cleanPath(editor::toQString(context_.project().ContentDir())))) {
+        report(tr("New Postprocess"), {tr("Choose a writable project content folder.")});
+        return false;
+    }
+    std::string text, error;
+    if (!engine::SerializePostProcessDefinition(definition, text, error)) {
+        report(tr("New Postprocess"), {fromUtf8(error)});
+        return false;
+    }
+    return createFile(tr("New Postprocess"), path, text, engine::CatalogAssetKind::PostProcess);
+}
+
+bool AssetOperations::updatePostProcess(const QString& path, const engine::PostProcessDefinition& definition) {
+    if (context_.playSession().isPlaying()) return false;
+    std::string text, error;
+    if (!engine::SerializePostProcessDefinition(definition, text, error)) {
+        report(tr("Edit Postprocess"), {fromUtf8(error)});
+        return false;
+    }
+    // The owning script recreates its shader on the next Render.LoadShader.
+    return updateFile(tr("Edit Postprocess"), path, text, engine::CatalogAssetKind::PostProcess);
 }
 
 bool AssetOperations::createMaterial(const QString& path, const engine::MaterialDefinition& definition) {

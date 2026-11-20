@@ -2,17 +2,21 @@
 #include <engine/assets/AssetCooking.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
+#include <engine/assets/PostProcessDefinition.hpp>
+#include <engine/assets/RenderPipelineDefinition.hpp>
 #include <engine/core/Content.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/Pak.hpp>
 #include "animation/AnimationData.hpp"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -237,6 +241,422 @@ TEST_F(AssetCooking, ShaderLibraryRoundTripsAndRejectsDamage) {
     bytes.back() ^= 1;
     EXPECT_FALSE(loaded.Deserialize(bytes, error));
     EXPECT_EQ(loaded.Size(), 2u);
+}
+
+TEST(PostProcessDefinition, DefaultsAndCustomOptionsRoundTrip) {
+    const auto id = NewUuid();
+    const auto minimal = nlohmann::json{{"version", 1}, {"shader", {{"id", id}}}};
+    PostProcessDefinition definition;
+    std::string text, error;
+    ASSERT_TRUE(ParsePostProcessDefinition(minimal.dump(), definition, error)) << error;
+    EXPECT_EQ(definition.version, 1u);
+    EXPECT_EQ(definition.shader.id, id);
+    EXPECT_TRUE(definition.shader.path.empty());
+    EXPECT_EQ(definition.options.entryPoint, "PSMain");
+    EXPECT_TRUE(definition.options.defines.empty());
+    definition.shader.path = "game/shaders/stale-name.hlsl";
+    definition.options = {.entryPoint = "CustomPS", .defines = {{"GAIN", "2"}, {"FLAG", ""}}};
+    ASSERT_TRUE(SerializePostProcessDefinition(definition, text, error)) << error;
+    PostProcessDefinition loaded;
+    ASSERT_TRUE(ParsePostProcessDefinition(text, loaded, error)) << error;
+    EXPECT_EQ(loaded.shader, definition.shader);
+    EXPECT_EQ(loaded.options.entryPoint, "CustomPS");
+    ASSERT_EQ(loaded.options.defines.size(), 2u);
+    EXPECT_EQ(loaded.options.defines[0].name, "GAIN");
+    EXPECT_EQ(loaded.options.defines[0].value, "2");
+    EXPECT_EQ(loaded.options.defines[1].value, "");
+}
+
+TEST(PostProcessDefinition, StrictValidationIsTransactional) {
+    using Json = nlohmann::json;
+    const Json valid = {{"version", 1}, {"shader", {{"id", NewUuid()}}},
+                        {"entryPoint", "CustomPS"}, {"defines", {{{"name", "GAIN"}, {"value", "2"}}}}};
+    std::vector<Json> invalid;
+    const auto change = [&](const auto& mutate) { auto value = valid; mutate(value); invalid.push_back(value); };
+    change([](Json& j) { j["version"] = 2; });
+    change([](Json& j) { j["version"] = 1.0; });
+    change([](Json& j) { j.erase("version"); });
+    change([](Json& j) { j.erase("shader"); });
+    change([](Json& j) { j["shader"]["id"] = "invalid"; });
+    change([](Json& j) { j["shader"]["path"] = 4; });
+    change([](Json& j) { j["shader"]["extra"] = true; });
+    change([](Json& j) { j["stage"] = "vertex"; });
+    change([](Json& j) { j["entryPoint"] = ""; });
+    change([](Json& j) { j["entryPoint"] = "bad-name"; });
+    change([](Json& j) { j["defines"] = Json::object(); });
+    change([](Json& j) { j["defines"][0]["name"] = "2BAD"; });
+    change([](Json& j) { j["defines"][0]["value"] = 2; });
+    change([](Json& j) { j["defines"][0].erase("value"); });
+    change([](Json& j) { j["defines"][0]["extra"] = 1; });
+    change([](Json& j) { j["defines"][0]["value"] = std::string("a\0b", 3); });
+    change([](Json& j) { j["defines"].push_back(j["defines"][0]); });
+    PostProcessDefinition output;
+    output.shader = {NewUuid(), "unchanged"};
+    output.options = {.entryPoint = "Unchanged", .defines = {{"KEEP", "9"}}};
+    const auto original = output;
+    std::string error;
+    std::vector<std::string> texts;
+    for (const auto& json : invalid) texts.push_back(json.dump());
+    texts.push_back(R"({"version":1,"version":1,"shader":{"id":"invalid"}})");
+    texts.push_back(R"({"version":1,"shader":{"id":"invalid","id":"invalid"}})");
+    texts.push_back("{");
+    for (const auto& text : texts) {
+        SCOPED_TRACE(text);
+        EXPECT_FALSE(ParsePostProcessDefinition(text, output, error));
+        EXPECT_FALSE(error.empty());
+        EXPECT_EQ(output.shader, original.shader);
+        EXPECT_EQ(output.options.entryPoint, "Unchanged");
+        ASSERT_EQ(output.options.defines.size(), 1u);
+        EXPECT_EQ(output.options.defines[0].name, "KEEP");
+    }
+    std::string serialized = "unchanged";
+    output.version = 2;
+    EXPECT_FALSE(SerializePostProcessDefinition(output, serialized, error));
+    EXPECT_EQ(serialized, "unchanged");
+}
+
+TEST_F(AssetCooking, PostProcessShaderResolvesOnlyTheShaderUuid) {
+    const auto shaderFile = root / "actual.hlsl";
+    const auto shaderId = NewUuid();
+    ASSERT_TRUE(WriteFileAtomic(shaderFile, "// shader", error));
+    ASSERT_TRUE(WriteAssetMetadata(shaderFile, {shaderId, CatalogAssetKind::Shader}, error));
+    ASSERT_TRUE(catalog.Scan(root, {}, error)) << error;
+    PostProcessDefinition definition;
+    definition.shader = {shaderId, "game/wrong-name.hlsl"};
+    ShaderVariant variant;
+    ASSERT_TRUE(PostProcessShaderVariant(definition, catalog, variant, error)) << error;
+    EXPECT_EQ(variant.file, shaderFile);
+    EXPECT_EQ(variant.stage, ShaderType::Pixel);
+    EXPECT_EQ(variant.options.entryPoint, "PSMain");
+    definition.shader = {NewUuid(), "game/actual.hlsl"};
+    EXPECT_FALSE(PostProcessShaderVariant(definition, catalog, variant, error));
+    EXPECT_EQ(variant.file, shaderFile);
+    const auto meshes = catalog.List(CatalogAssetKind::Mesh);
+    ASSERT_FALSE(meshes.empty());
+    definition.shader.id = meshes.front()->metadata.id;
+    EXPECT_FALSE(PostProcessShaderVariant(definition, catalog, variant, error));
+    EXPECT_EQ(variant.stage, ShaderType::Pixel);
+    const auto original = definition;
+    EXPECT_FALSE(LoadPostProcessDefinition(root / "missing.postprocess.json", definition, error));
+    EXPECT_EQ(definition.shader, original.shader);
+    ASSERT_TRUE(WriteFileAtomic(root / "invalid.postprocess.json", "{}", error));
+    EXPECT_FALSE(LoadPostProcessDefinition(root / "invalid.postprocess.json", definition, error));
+    EXPECT_EQ(definition.shader, original.shader);
+}
+
+TEST_F(AssetCooking, PostProcessDeclarationsCookCustomVariantsAndReflectWithoutHlsl) {
+    const auto shaderFile = root / "fullscreen.hlsl";
+    const auto descriptorFile = root / "custom.postprocess.json";
+    const auto shaderId = NewUuid();
+    const auto descriptorId = NewUuid();
+    ASSERT_TRUE(WriteFileAtomic(shaderFile, R"(
+Texture2D sceneColour : register(t3);
+SamplerState sceneSampler : register(s2);
+cbuffer Parameters : register(b4) { float4 tint; };
+float4 CustomPS(float4 position : SV_Position, float2 uv : TEXCOORD0) : SV_Target {
+    return sceneColour.Sample(sceneSampler, uv) * tint * GAIN;
+}
+)", error)) << error;
+    ASSERT_TRUE(WriteAssetMetadata(shaderFile, {shaderId, CatalogAssetKind::Shader}, error)) << error;
+    PostProcessDefinition definition;
+    definition.shader = {shaderId, "game/old-name.hlsl"};
+    definition.options = {.entryPoint = "CustomPS", .defines = {{"GAIN", "2"}}};
+    std::string descriptor;
+    ASSERT_TRUE(SerializePostProcessDefinition(definition, descriptor, error)) << error;
+    ASSERT_TRUE(WriteFileAtomic(descriptorFile, descriptor, error)) << error;
+    ASSERT_TRUE(WriteAssetMetadata(descriptorFile, {descriptorId, CatalogAssetKind::PostProcess}, error)) << error;
+    EXPECT_EQ(CatalogKindForFile("CUSTOM.POSTPROCESS.JSON"), CatalogAssetKind::PostProcess);
+    ASSERT_TRUE(catalog.Scan(root, {}, error)) << error;
+    ShaderLibrary library;
+    std::vector<std::string> errors;
+    ASSERT_TRUE(CookShaderLibrary(catalog, library, errors)) << (errors.empty() ? "" : errors.front());
+    const auto key = ShaderLibrary::Key(shaderFile, ShaderType::Pixel, definition.options);
+    ASSERT_NE(library.Find(key), nullptr);
+    EXPECT_EQ(library.Find(ShaderLibrary::Key(shaderFile, ShaderType::Pixel, {})), nullptr);
+    EXPECT_EQ(library.Find(ShaderLibrary::Key(shaderFile, ShaderType::Pixel,
+        {.entryPoint = "CustomPS", .defines = {{"GAIN", "3"}}})), nullptr);
+    std::string manifest;
+    ASSERT_TRUE(catalog.SerializeManifest(manifest, error)) << error;
+    const auto shipped = root / "shipped";
+    const auto shippedGame = shipped / "game";
+    fs::create_directories(shippedGame);
+    std::vector<std::uint8_t> bytes;
+    ASSERT_TRUE(library.Serialize(bytes, error)) << error;
+    ASSERT_TRUE(WriteFileAtomic(shipped / ShaderLibraryName,
+        {reinterpret_cast<const char*>(bytes.data()), bytes.size()}, error)) << error;
+    PakWriter writer;
+    writer.AddBytes("custom.postprocess.json", {descriptor.begin(), descriptor.end()}, true);
+    ASSERT_TRUE(writer.Write(shipped / "content.sripak", error)) << error;
+    const auto pack = PakSource::Load(shipped / "content.sripak", error);
+    ASSERT_TRUE(pack) << error;
+    content::Mount(shippedGame, pack);
+    struct UnmountAtExit {
+        fs::path root;
+        ~UnmountAtExit() { content::Unmount(root); }
+    } unmount{shippedGame};
+    AssetCatalog loaded;
+    ASSERT_TRUE(loaded.LoadManifest(manifest, shippedGame, shipped / "engine", error)) << error;
+    const auto* entry = loaded.Find(std::string_view{descriptorId}, CatalogAssetKind::PostProcess);
+    ASSERT_NE(entry, nullptr);
+    ASSERT_NE(loaded.Find(std::string_view{shaderId}, CatalogAssetKind::Shader), nullptr);
+    PostProcessDefinition cookedDefinition;
+    ASSERT_TRUE(LoadPostProcessDefinition(entry->source, cookedDefinition, error)) << error;
+    ShaderVariant variant;
+    ASSERT_TRUE(PostProcessShaderVariant(cookedDefinition, loaded, variant, error)) << error;
+    EXPECT_EQ(variant.file, shippedGame / "fullscreen.hlsl");
+    ASSERT_FALSE(fs::exists(variant.file));
+    fs::remove(shaderFile);
+    GameRootScope shippedRoot{shippedGame};
+    ManifestScope cookedManifest{shipped / "manifest.json"};
+    EXPECT_EQ(ShaderLibrary::Key(variant.file, variant.stage, variant.options), key);
+    const auto compiled = ShaderContext::CompileCpu(variant.file, variant.stage, variant.options);
+    ASSERT_TRUE(compiled.reflection);
+    EXPECT_EQ(compiled.type, ShaderType::Pixel);
+    EXPECT_EQ(compiled.diagnosticContext.entryPoint, "CustomPS");
+    EXPECT_EQ(compiled.bindings.size(), 3u);
+    const auto binding = [&](const char* name, unsigned slot) {
+        bool found = false;
+        for (const auto& item : compiled.bindings)
+            if (item.name == name) { found = true; EXPECT_EQ(item.slot, slot); }
+        EXPECT_TRUE(found) << name;
+    };
+    binding("sceneColour", 3);
+    binding("sceneSampler", 2);
+    binding("Parameters", 4);
+    D3D11_SHADER_BUFFER_DESC buffer{};
+    ASSERT_HRESULT_SUCCEEDED(compiled.reflection->GetConstantBufferByName("Parameters")->GetDesc(&buffer));
+    EXPECT_EQ(buffer.Size, 16u);
+}
+
+TEST(RenderPipelineDefinition, DefaultsAndAllRenderStatesRoundTrip) {
+    const auto id = NewUuid();
+    const auto minimal = nlohmann::json{{"version", 1}, {"shader", {{"id", id}}}};
+    RenderPipelineDefinition definition;
+    std::string text, error;
+    ASSERT_TRUE(ParseRenderPipelineDefinition(minimal.dump(), definition, error)) << error;
+    EXPECT_EQ(definition.version, 1u);
+    EXPECT_EQ(definition.shader.id, id);
+    EXPECT_TRUE(definition.shader.path.empty());
+    EXPECT_EQ(definition.vertexEntryPoint, "VSMain");
+    EXPECT_EQ(definition.pixelEntryPoint, "PSMain");
+    EXPECT_TRUE(definition.defines.empty());
+    EXPECT_EQ(definition.blend, ProceduralBlend::Opaque);
+    EXPECT_EQ(definition.depth, ProceduralDepth::ReadWrite);
+    definition.shader.path = "game/shaders/renamed.hlsl";
+    definition.vertexEntryPoint = "CustomVS";
+    definition.pixelEntryPoint = "CustomPS";
+    definition.defines = {{"GAIN", "2"}, {"FLAG", ""}};
+    for (const auto blend : {ProceduralBlend::Opaque, ProceduralBlend::Alpha, ProceduralBlend::Additive}) {
+        for (const auto depth : {ProceduralDepth::Disabled, ProceduralDepth::ReadOnly, ProceduralDepth::ReadWrite}) {
+            definition.blend = blend;
+            definition.depth = depth;
+            ASSERT_TRUE(SerializeRenderPipelineDefinition(definition, text, error)) << error;
+            RenderPipelineDefinition loaded;
+            ASSERT_TRUE(ParseRenderPipelineDefinition(text, loaded, error)) << error;
+            EXPECT_EQ(loaded.shader, definition.shader);
+            EXPECT_EQ(loaded.vertexEntryPoint, "CustomVS");
+            EXPECT_EQ(loaded.pixelEntryPoint, "CustomPS");
+            EXPECT_EQ(loaded.blend, blend);
+            EXPECT_EQ(loaded.depth, depth);
+            ASSERT_EQ(loaded.defines.size(), 2u);
+            EXPECT_EQ(loaded.defines[0].name, "GAIN");
+            EXPECT_EQ(loaded.defines[0].value, "2");
+            EXPECT_EQ(loaded.defines[1].value, "");
+        }
+    }
+}
+
+TEST(RenderPipelineDefinition, StrictValidationIsTransactional) {
+    using Json = nlohmann::json;
+    const Json valid = {{"version", 1}, {"shader", {{"id", NewUuid()}}},
+        {"vertexEntryPoint", "CustomVS"}, {"pixelEntryPoint", "CustomPS"},
+        {"defines", {{{"name", "GAIN"}, {"value", "2"}}}}, {"blend", "Alpha"}, {"depth", "ReadOnly"}};
+    std::vector<Json> invalid;
+    const auto change = [&](const auto& mutate) { auto value = valid; mutate(value); invalid.push_back(value); };
+    change([](Json& j) { j["version"] = 2; });
+    change([](Json& j) { j["version"] = 1.0; });
+    change([](Json& j) { j.erase("version"); });
+    change([](Json& j) { j.erase("shader"); });
+    change([](Json& j) { j["shader"]["id"] = "invalid"; });
+    change([](Json& j) { j["shader"]["path"] = 4; });
+    change([](Json& j) { j["shader"]["path"] = std::string("a\0b", 3); });
+    change([](Json& j) { j["shader"]["extra"] = true; });
+    change([](Json& j) { j["stage"] = "particle"; });
+    change([](Json& j) { j["vertexEntryPoint"] = ""; });
+    change([](Json& j) { j["pixelEntryPoint"] = "bad-name"; });
+    change([](Json& j) { j["defines"] = Json::object(); });
+    change([](Json& j) { j["defines"][0]["name"] = "2BAD"; });
+    change([](Json& j) { j["defines"][0]["value"] = 2; });
+    change([](Json& j) { j["defines"][0].erase("value"); });
+    change([](Json& j) { j["defines"][0]["extra"] = 1; });
+    change([](Json& j) { j["defines"][0]["value"] = std::string("a\0b", 3); });
+    change([](Json& j) { j["defines"].push_back(j["defines"][0]); });
+    change([](Json& j) { j["blend"] = "Multiply"; });
+    change([](Json& j) { j["blend"] = 0; });
+    change([](Json& j) { j["depth"] = "Always"; });
+    change([](Json& j) { j["depth"] = false; });
+    RenderPipelineDefinition output;
+    output.shader = {NewUuid(), "unchanged"};
+    output.vertexEntryPoint = "KeepVS";
+    output.pixelEntryPoint = "KeepPS";
+    output.defines = {{"KEEP", "9"}};
+    output.blend = ProceduralBlend::Additive;
+    output.depth = ProceduralDepth::Disabled;
+    const auto original = output;
+    std::string error;
+    std::vector<std::string> texts;
+    for (const auto& json : invalid) texts.push_back(json.dump());
+    texts.push_back(R"({"version":1,"version":1,"shader":{"id":"invalid"}})");
+    texts.push_back(R"({"version":1,"shader":{"id":"invalid","id":"invalid"}})");
+    texts.push_back("{");
+    for (const auto& text : texts) {
+        SCOPED_TRACE(text);
+        EXPECT_FALSE(ParseRenderPipelineDefinition(text, output, error));
+        EXPECT_FALSE(error.empty());
+        EXPECT_EQ(output.shader, original.shader);
+        EXPECT_EQ(output.vertexEntryPoint, "KeepVS");
+        EXPECT_EQ(output.pixelEntryPoint, "KeepPS");
+        EXPECT_EQ(output.blend, ProceduralBlend::Additive);
+        EXPECT_EQ(output.depth, ProceduralDepth::Disabled);
+        ASSERT_EQ(output.defines.size(), 1u);
+        EXPECT_EQ(output.defines[0].name, "KEEP");
+    }
+    std::string serialized = "unchanged";
+    output.version = 2;
+    EXPECT_FALSE(SerializeRenderPipelineDefinition(output, serialized, error));
+    EXPECT_EQ(serialized, "unchanged");
+    output.version = 1;
+    output.blend = static_cast<ProceduralBlend>(-1);
+    EXPECT_FALSE(SerializeRenderPipelineDefinition(output, serialized, error));
+    output.blend = ProceduralBlend::Opaque;
+    output.depth = static_cast<ProceduralDepth>(-1);
+    EXPECT_FALSE(SerializeRenderPipelineDefinition(output, serialized, error));
+    EXPECT_EQ(serialized, "unchanged");
+}
+
+TEST_F(AssetCooking, RenderPipelineResolvesOnlyTheShaderUuidAndCatalogRoundTrips) {
+    const auto shaderFile = root / "actual.hlsl";
+    const auto descriptorFile = root / "custom.pipeline.json";
+    const auto shaderId = NewUuid();
+    const auto descriptorId = NewUuid();
+    ASSERT_TRUE(WriteFileAtomic(shaderFile, "// shader", error));
+    ASSERT_TRUE(WriteAssetMetadata(shaderFile, {shaderId, CatalogAssetKind::Shader}, error));
+    RenderPipelineDefinition definition;
+    definition.shader = {shaderId, "game/wrong-name.hlsl"};
+    std::string descriptor;
+    ASSERT_TRUE(SerializeRenderPipelineDefinition(definition, descriptor, error)) << error;
+    ASSERT_TRUE(WriteFileAtomic(descriptorFile, descriptor, error));
+    ASSERT_TRUE(WriteAssetMetadata(descriptorFile, {descriptorId, CatalogAssetKind::RenderPipeline}, error)) << error;
+    EXPECT_EQ(CatalogKindForFile("CUSTOM.PIPELINE.JSON"), CatalogAssetKind::RenderPipeline);
+    AssetMetadata metadata;
+    ASSERT_TRUE(ReadAssetMetadata(descriptorFile, metadata, error)) << error;
+    EXPECT_EQ(metadata.kind, CatalogAssetKind::RenderPipeline);
+    EXPECT_EQ(metadata.id, descriptorId);
+    std::string encoded;
+    ASSERT_TRUE(SerializeAssetMetadata(metadata, encoded, error)) << error;
+    EXPECT_EQ(nlohmann::json::parse(encoded).at("kind"), "renderPipeline");
+    ASSERT_TRUE(catalog.Scan(root, {}, error)) << error;
+    std::string manifest;
+    ASSERT_TRUE(catalog.SerializeManifest(manifest, error)) << error;
+    AssetCatalog loaded;
+    ASSERT_TRUE(loaded.LoadManifest(manifest, root, {}, error)) << error;
+    ASSERT_NE(loaded.Find(std::string_view{descriptorId}, CatalogAssetKind::RenderPipeline), nullptr);
+    std::array<ShaderVariant, 2> variants;
+    ASSERT_TRUE(RenderPipelineShaderVariants(definition, loaded, variants, error)) << error;
+    EXPECT_EQ(variants[0].file, shaderFile);
+    EXPECT_EQ(variants[0].stage, ShaderType::Vertex);
+    EXPECT_EQ(variants[0].options.entryPoint, "VSMain");
+    EXPECT_EQ(variants[1].file, shaderFile);
+    EXPECT_EQ(variants[1].stage, ShaderType::Pixel);
+    EXPECT_EQ(variants[1].options.entryPoint, "PSMain");
+    definition.shader = {NewUuid(), "game/actual.hlsl"};
+    EXPECT_FALSE(RenderPipelineShaderVariants(definition, loaded, variants, error));
+    EXPECT_EQ(variants[0].file, shaderFile);
+    EXPECT_EQ(variants[1].file, shaderFile);
+    definition.shader.id = descriptorId;
+    EXPECT_FALSE(RenderPipelineShaderVariants(definition, loaded, variants, error));
+    EXPECT_EQ(variants[0].stage, ShaderType::Vertex);
+    EXPECT_EQ(variants[1].stage, ShaderType::Pixel);
+    const auto original = definition;
+    EXPECT_FALSE(LoadRenderPipelineDefinition(root / "missing.pipeline.json", definition, error));
+    EXPECT_EQ(definition.shader, original.shader);
+    ASSERT_TRUE(WriteFileAtomic(root / "invalid.pipeline.json", "{}", error));
+    EXPECT_FALSE(LoadRenderPipelineDefinition(root / "invalid.pipeline.json", definition, error));
+    EXPECT_EQ(definition.shader, original.shader);
+}
+
+TEST_F(AssetCooking, RenderPipelineCooksBothCustomVariantsWithIncludesAndRejectsInvalidReferences) {
+    const auto shaderFile = root / "procedural.hlsl";
+    const auto includeFile = root / "procedural.hlsli";
+    const auto descriptorFile = root / "custom.pipeline.json";
+    const auto shaderId = NewUuid();
+    ASSERT_TRUE(WriteFileAtomic(includeFile,
+        "float4 MakePosition(uint id) { return float4(id * GAIN, 0, 0, 1); }\n", error));
+    ASSERT_TRUE(WriteFileAtomic(shaderFile, R"(
+#include "procedural.hlsli"
+float4 CustomVS(uint id : SV_VertexID) : SV_Position { return MakePosition(id); }
+float4 CustomPS(float4 position : SV_Position) : SV_Target { return float4(GAIN, 0, 0, 1); }
+)", error));
+    ASSERT_TRUE(WriteAssetMetadata(shaderFile, {shaderId, CatalogAssetKind::Shader}, error));
+    RenderPipelineDefinition definition;
+    definition.shader = {shaderId, "game/stale-name.hlsl"};
+    definition.vertexEntryPoint = "CustomVS";
+    definition.pixelEntryPoint = "CustomPS";
+    definition.defines = {{"GAIN", "2"}};
+    const auto writeDefinition = [&] {
+        std::string text;
+        return SerializeRenderPipelineDefinition(definition, text, error) &&
+            WriteFileAtomic(descriptorFile, text, error);
+    };
+    ASSERT_TRUE(writeDefinition()) << error;
+    ASSERT_TRUE(WriteAssetMetadata(descriptorFile, {NewUuid(), CatalogAssetKind::RenderPipeline}, error));
+    ASSERT_TRUE(catalog.Scan(root, {}, error)) << error;
+    ShaderLibrary library;
+    std::vector<std::string> errors;
+    ASSERT_TRUE(CookShaderLibrary(catalog, library, errors)) << (errors.empty() ? "" : errors.front());
+    std::array<ShaderVariant, 2> variants;
+    ASSERT_TRUE(RenderPipelineShaderVariants(definition, catalog, variants, error)) << error;
+    for (const auto& variant : variants) {
+        ASSERT_NE(library.Find(ShaderLibrary::Key(variant.file, variant.stage, variant.options)), nullptr);
+        EXPECT_EQ(library.Find(ShaderLibrary::Key(variant.file, variant.stage, {})), nullptr);
+        EXPECT_EQ(library.Find(ShaderLibrary::Key(variant.file, variant.stage,
+            {.entryPoint = variant.options.entryPoint, .defines = {{"GAIN", "3"}}})), nullptr);
+    }
+    std::vector<std::uint8_t> bytes;
+    ASSERT_TRUE(library.Serialize(bytes, error)) << error;
+    const auto cooked = root / "cooked";
+    fs::create_directories(cooked);
+    ASSERT_TRUE(WriteFileAtomic(cooked / ShaderLibraryName,
+        {reinterpret_cast<const char*>(bytes.data()), bytes.size()}, error)) << error;
+    fs::remove(includeFile);
+    ShaderLibrary missingIncludeLibrary;
+    errors.clear();
+    EXPECT_FALSE(CookShaderLibrary(catalog, missingIncludeLibrary, errors));
+    ASSERT_FALSE(errors.empty());
+    EXPECT_NE(errors.back().find("custom.pipeline.json"), std::string::npos);
+    EXPECT_NE(errors.back().find("procedural.hlsli"), std::string::npos);
+    fs::remove(shaderFile);
+    {
+        ManifestScope manifest{cooked / "manifest.json"};
+        for (const auto& variant : variants) {
+            const auto compiled = ShaderContext::CompileCpu(variant.file, variant.stage, variant.options);
+            ASSERT_TRUE(compiled.reflection);
+            EXPECT_EQ(compiled.type, variant.stage);
+            EXPECT_EQ(compiled.diagnosticContext.entryPoint, variant.options.entryPoint);
+        }
+    }
+    definition.shader = {NewUuid(), "game/procedural.hlsl"};
+    ASSERT_TRUE(writeDefinition()) << error;
+    errors.clear();
+    EXPECT_FALSE(CookShaderLibrary(catalog, library, errors));
+    ASSERT_FALSE(errors.empty());
+    EXPECT_NE(errors.back().find("missing or wrong-kind"), std::string::npos);
+    definition.shader.id = catalog.List(CatalogAssetKind::RenderPipeline).front()->metadata.id;
+    ASSERT_TRUE(writeDefinition()) << error;
+    errors.clear();
+    EXPECT_FALSE(CookShaderLibrary(catalog, library, errors));
+    ASSERT_FALSE(errors.empty());
+    EXPECT_NE(errors.back().find("missing or wrong-kind"), std::string::npos);
 }
 
 TEST_F(AssetCooking, CookedBuildReadsShadersFromTheLibraryOnly) {

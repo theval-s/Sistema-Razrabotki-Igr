@@ -87,6 +87,7 @@ bool RenderingSystem::Reinitialize(const NativeSurface& surface, const std::func
                     rendering_detail::Check(E_FAIL, "ReinitializePass", nullptr, "Pass could not recreate resize resources.");
             });
         }
+        rendering_detail::InPass("PostProcessing", [&] { postProcessing_.Resize(surface.width, surface.height); });
         initializedSurface_ = surface;
         diagnostics_.lifecycle = RenderingLifecycle::Ready;
         ready_ = true;
@@ -112,14 +113,25 @@ void RenderingSystem::InitializePasses(const uint32_t width, const uint32_t heig
     renderPasses_.push_back(std::make_unique<SkyboxPass>());
     renderPasses_.push_back(std::move(particles));
     renderPasses_.push_back(std::make_unique<SelectionMaskPass>());
-    renderPasses_.push_back(std::make_unique<PresentPass>());
+    auto present = std::make_unique<PresentPass>();
+    presentPass_ = present.get();
+    renderPasses_.push_back(std::move(present));
     for (size_t i = 0; i < renderPasses_.size(); ++i)
         rendering_detail::InPass(PassNames[i], [&] { renderPasses_[i]->Initialize(manager, renderingContext_, resources_); });
+    rendering_detail::InPass("PostProcessing", [&] {
+        postProcessing_.Initialize(renderingContext_, width, height,
+            [this](RenderingFailure failure) { RecordFailure(std::move(failure)); });
+    });
 }
 
 void RenderingSystem::RenderFrame(const FrameContext& frame, const OverlayCallback& overlay) {
     if (!ready_) return;
+    struct EndPostProcessing {
+        PostProcessing& processing;
+        ~EndPostProcessing() { processing.EndFrame(); }
+    } endPostProcessing{postProcessing_};
     try {
+        postProcessing_.BeginFrame();
         auto* device = renderingContext_.GetDevice();
         rendering_detail::Check(device->GetDeviceRemovedReason(), "GetDeviceRemovedReason", device);
         renderingContext_.ClearState();
@@ -148,7 +160,56 @@ void RenderingSystem::RenderFrame(const FrameContext& frame, const OverlayCallba
         });
         renderingContext_.BindSamplers();
         for (size_t i = 0; i < renderPasses_.size(); ++i) {
-            rendering_detail::InPass(PassNames[i], [&] { renderPasses_[i]->Render(world_, renderingContext_, resources_); });
+            if (renderPasses_[i].get() == particlePass_ && debugView_ == RenderDebugView::Final &&
+                postProcessing_.HasProceduralPasses()) {
+                rendering_detail::InPass("Procedural", [&] {
+                    postProcessing_.ExecuteProcedural(world_, resources_);
+                });
+                // Particles consume scene color/depth as compute SRVs. Detach both outputs,
+                // and restore defaults even when no live particles draw this frame.
+                renderingContext_.ClearState();
+                resources_.BindCBuffers(renderingContext_);
+                renderingContext_.BindSamplers();
+            }
+            if (renderPasses_[i].get() == presentPass_ && postProcessing_.HasPasses() &&
+                debugView_ == RenderDebugView::Final) {
+                TextureHandle color;
+                rendering_detail::InPass("BeforeTonemap", [&] {
+                    color = postProcessing_.Execute(PostProcessStage::BeforeTonemap, resources_.gBuffer.resultTexture,
+                                                    world_, resources_);
+                });
+                const auto composition = postProcessing_.GetCompositionTarget();
+                // Custom passes establish their own state. Rebind engine defaults for presentation.
+                renderingContext_.ClearState();
+                resources_.BindCBuffers(renderingContext_);
+                renderingContext_.BindSamplers();
+                rendering_detail::InPass("PresentPass", [&] {
+                    presentPass_->RenderTo(world_, renderingContext_, resources_, color, composition,
+                                           postProcessing_.IsBuiltinTonemappingEnabled());
+                });
+                renderingContext_.ClearHazardousState();
+                rendering_detail::InPass("AfterTonemap", [&] {
+                    color = postProcessing_.Execute(PostProcessStage::AfterTonemap, composition, world_, resources_);
+                });
+                renderingContext_.SetRenderTargets({color}, {});
+                renderingContext_.SetViewport(resources_.screenWith, resources_.screenHeight);
+                if (overlay) overlay(renderingContext_, frame);
+                renderingContext_.ClearHazardousState();
+                rendering_detail::InPass("AfterUI", [&] {
+                    color = postProcessing_.Execute(PostProcessStage::AfterUI, color, world_, resources_);
+                });
+                rendering_detail::InPass("FinalOutput", [&] {
+                    postProcessing_.CopyTo(color, presentPass_->GetBackbuffer(), resources_.screenWith, resources_.screenHeight);
+                });
+                continue;
+            }
+            rendering_detail::InPass(PassNames[i], [&] {
+                if (renderPasses_[i].get() == presentPass_)
+                    presentPass_->RenderTo(world_, renderingContext_, resources_, resources_.gBuffer.resultTexture,
+                                           presentPass_->GetBackbuffer(), postProcessing_.IsBuiltinTonemappingEnabled());
+                else
+                    renderPasses_[i]->Render(world_, renderingContext_, resources_);
+            });
             if (i + 1 == renderPasses_.size() && overlay) overlay(renderingContext_, frame);
             renderingContext_.ClearHazardousState();
         }
@@ -162,12 +223,14 @@ void RenderingSystem::RenderFrame(const FrameContext& frame, const OverlayCallba
 void RenderingSystem::Shutdown() noexcept {
     ready_ = false;
     renderingContext_.ClearState();
+    postProcessing_.Shutdown();
     for (auto it = renderPasses_.rbegin(); it != renderPasses_.rend(); ++it) {
         try { (*it)->Destroy(renderingContext_.GetResourceManager(), renderingContext_, resources_); }
         catch (...) { /* Cleanup cannot replace the initiating failure. */ }
     }
     renderPasses_.clear();
     particlePass_ = nullptr;
+    presentPass_ = nullptr;
     particleStats_ = {};
     world_.particleEmitters.clear();
     world_.environment = {};
