@@ -641,6 +641,9 @@ returns `CursorMode.Normal`.
 
 ### Time and physics
 
+For raycasts, line of sight and mouse picking, including return values, filters
+and physics snapshot timing, see [raycasting.md](raycasting.md).
+
 `Time.Delta()` and `Time.SimulationTime()` return simulation frame delta and
 elapsed simulation seconds. `Time.RealDelta()` and `Time.RealTime()` return real
 frame delta and elapsed real seconds; `Time.IsPaused()` reports Engine pause.

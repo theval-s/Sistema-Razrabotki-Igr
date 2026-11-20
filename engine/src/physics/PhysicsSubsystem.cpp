@@ -7,6 +7,9 @@
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/TransformedShape.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -26,6 +29,7 @@
 #include <engine/core/FrameContext.hpp>
 #include <engine/rendering/DebugDraw.hpp>
 #include "PhysicsValidation.hpp"
+#include "../scene/RayQueryUtils.hpp"
 #include <engine/core/Log.hpp>
 #include <algorithm>
 #include <cstdarg>
@@ -282,6 +286,7 @@ struct PhysicsSubsystem::Impl {
     Scene* scene = nullptr;
     AssetSystem* assets = nullptr;
     std::size_t observer = 0;
+    bool queriesReady = false;
 
     explicit Impl(const PhysicsConfig& config)
         : allocator(config.tempAllocatorBytes), jobs(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers,
@@ -309,6 +314,7 @@ struct PhysicsSubsystem::Impl {
         failedShapes.erase(entity);
     }
     void Clear() {
+        queriesReady = false;
         while (!bodies.empty()) Remove(bodies.begin()->first);
         failures.clear();
         failedShapes.clear();
@@ -351,7 +357,7 @@ struct PhysicsSubsystem::Impl {
         error.clear();
         return true;
     }
-    void Synchronize(float dt) {
+    void Synchronize(float dt, bool querySync = false) {
         added.clear();
         // The scene lifecycle observer removes bodies when entities or components are removed.
         // TODO: Use change notifications to avoid polling authored body settings.
@@ -371,6 +377,15 @@ struct PhysicsSubsystem::Impl {
             const auto& geometry = input.geometry;
             auto it = bodies.find(entity);
             if (it != bodies.end() && (it->second.settings != settings || it->second.collider != input.collider || it->second.scale != pose.scale || it->second.geometry != geometry)) {
+                // Query synchronization must not turn authored dynamic poses or pending
+                // kinematic targets into teleports, even when the shape is rebuilt.
+                if (querySync && settings.motionType != MotionType::Static) {
+                    JPH::RVec3 position;
+                    JPH::Quat rotation;
+                    api.GetPositionAndRotation(it->second.id, position, rotation);
+                    pose.position = {static_cast<float>(position.GetX()), static_cast<float>(position.GetY()), static_cast<float>(position.GetZ())};
+                    pose.rotation = {rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW()};
+                }
                 Remove(entity); // authoring changes rebuild the shape/body and reset velocity
                 it = bodies.end();
             }
@@ -401,7 +416,8 @@ struct PhysicsSubsystem::Impl {
                 bodies.emplace(entity, Body{id, settings, input.collider, pose.scale, pose.position, pose.rotation, geometry});
                 added.push_back(id);
                 failures.erase(entity);
-            } else if (dt > 0 && settings.motionType != MotionType::Dynamic) {
+            } else if ((dt > 0 && settings.motionType != MotionType::Dynamic) ||
+                       (querySync && settings.motionType == MotionType::Static)) {
                 if (settings.motionType == MotionType::Kinematic && dt > 0)
                     api.MoveKinematic(it->second.id, Position(pose.position), Quat(pose.rotation), dt);
                 else if (it->second.position != pose.position || it->second.rotation != pose.rotation) {
@@ -428,7 +444,62 @@ struct PhysicsSubsystem::Impl {
         error.clear();
         return &it->second;
     }
+    bool PrepareQuery(const PhysicsRaycastOptions& options, std::unordered_set<entt::entity>& ignored,
+                      std::string& error) {
+        if (!detail::QueryIgnoredEntities(*scene, options.filter, ignored, error)) return false;
+        if (!queriesReady) {
+            Synchronize(0, true);
+            queriesReady = true;
+        }
+        return true;
+    }
+    std::optional<RayHit> QueryHit(const Ray& ray, const JPH::RRayCast& cast,
+                                   const JPH::RayCastResult& result) const {
+        const JPH::BodyLockRead lock(world.GetBodyLockInterface(), result.mBodyID);
+        if (!lock.Succeeded()) return std::nullopt;
+        const auto& body = lock.GetBody();
+        const auto entity = static_cast<entt::entity>(body.GetUserData());
+        if (!scene->IsValid(entity)) return std::nullopt;
+        const float distance = result.mFraction * ray.maxDistance;
+        const auto point = cast.GetPointOnRay(result.mFraction);
+        RayHit hit{entity, distance,
+            {static_cast<float>(point.GetX()), static_cast<float>(point.GetY()), static_cast<float>(point.GetZ())},
+            std::nullopt, body.IsSensor()};
+        if (distance > 0) {
+            const auto normal = body.GetWorldSpaceSurfaceNormal(result.mSubShapeID2, point);
+            Vector3 value{normal.GetX(), normal.GetY(), normal.GetZ()};
+            if (detail::FiniteQueryVector(value) && value.LengthSquared() > 0) {
+                value.Normalize();
+                hit.normal = value;
+            }
+        }
+        return hit;
+    }
 };
+
+namespace {
+// Runs after Jolt has acquired its body read lock; do not acquire another lock here.
+class QueryBodyFilter final : public JPH::BodyFilter {
+public:
+    QueryBodyFilter(const Scene& scene, const std::unordered_set<entt::entity>& ignored, bool includeTriggers)
+        : scene_(scene), ignored_(ignored), includeTriggers_(includeTriggers) {}
+    bool ShouldCollideLocked(const JPH::Body& body) const override {
+        const auto entity = static_cast<entt::entity>(body.GetUserData());
+        return (includeTriggers_ || !body.IsSensor()) && scene_.IsValid(entity) && !ignored_.contains(entity);
+    }
+private:
+    const Scene& scene_;
+    const std::unordered_set<entt::entity>& ignored_;
+    bool includeTriggers_;
+};
+JPH::RayCastSettings QuerySettings(const PhysicsRaycastOptions& options) {
+    JPH::RayCastSettings settings;
+    settings.mBackFaceModeTriangles = options.hitBackFaces
+        ? JPH::EBackFaceMode::CollideWithBackFaces : JPH::EBackFaceMode::IgnoreBackFaces;
+    settings.mTreatConvexAsSolid = true;
+    return settings;
+}
+}
 
 PhysicsSubsystem::PhysicsSubsystem(PhysicsConfig config) : config_(config) {}
 PhysicsSubsystem::~PhysicsSubsystem() { Shutdown(); }
@@ -471,6 +542,7 @@ void PhysicsSubsystem::FixedUpdate(const FixedUpdateContext& step) {
     if (!std::isfinite(dt) || dt <= 0) return;
     impl_->Synchronize(dt);
     const auto result = impl_->world.Update(dt, 1, &impl_->allocator, &impl_->jobs);
+    impl_->queriesReady = true;
     if (result != JPH::EPhysicsUpdateError::None) log::Physics().error("Jolt capacity error: {}", static_cast<unsigned>(result));
     auto& events = GetEngine().GetEvents();
     for (auto& [entity, body] : impl_->bodies) {
@@ -489,6 +561,60 @@ void PhysicsSubsystem::FixedUpdate(const FixedUpdateContext& step) {
         }
     }
     impl_->listener.Publish(impl_->world.GetBodyInterface(), events, step.stepIndex);
+}
+bool PhysicsSubsystem::SyncQueries(std::string& error) {
+    error.clear();
+    if (!impl_) { error = "physics is not initialized"; return false; }
+    impl_->Synchronize(0, true);
+    impl_->queriesReady = true;
+    return true;
+}
+bool PhysicsSubsystem::Raycast(const Ray& input, const PhysicsRaycastOptions& options,
+                               std::optional<RayHit>& hit, std::string& error) {
+    hit.reset();
+    error.clear();
+    if (!impl_) { error = "physics is not initialized"; return false; }
+    Ray ray;
+    if (!detail::NormalizeQueryRay(input, ray, error)) return false;
+    std::unordered_set<entt::entity> ignored;
+    if (!impl_->PrepareQuery(options, ignored, error)) return false;
+    const QueryBodyFilter filter(*impl_->scene, ignored, options.includeTriggers);
+    const JPH::RRayCast cast(Position(ray.origin), Vec(ray.direction * ray.maxDistance));
+    JPH::ClosestHitCollisionCollector<JPH::CastRayCollector> collector;
+    impl_->world.GetNarrowPhaseQuery().CastRay(cast, QuerySettings(options), collector, {}, {}, filter);
+    if (collector.HadHit()) hit = impl_->QueryHit(ray, cast, collector.mHit);
+    return true;
+}
+bool PhysicsSubsystem::RaycastAll(const Ray& input, const PhysicsRaycastOptions& options,
+                                  std::vector<RayHit>& hits, std::string& error) {
+    hits.clear();
+    error.clear();
+    if (!impl_) { error = "physics is not initialized"; return false; }
+    Ray ray;
+    if (!detail::NormalizeQueryRay(input, ray, error)) return false;
+    std::unordered_set<entt::entity> ignored;
+    if (!impl_->PrepareQuery(options, ignored, error)) return false;
+    const QueryBodyFilter filter(*impl_->scene, ignored, options.includeTriggers);
+    const JPH::RRayCast cast(Position(ray.origin), Vec(ray.direction * ray.maxDistance));
+    JPH::ClosestHitPerBodyCollisionCollector<JPH::CastRayCollector> collector;
+    impl_->world.GetNarrowPhaseQuery().CastRay(cast, QuerySettings(options), collector, {}, {}, filter);
+    for (const auto& result : collector.mHits)
+        if (auto hit = impl_->QueryHit(ray, cast, result)) hits.push_back(*hit);
+    std::sort(hits.begin(), hits.end(), [](const RayHit& a, const RayHit& b) {
+        return std::tie(a.distance, a.entity) < std::tie(b.distance, b.entity);
+    });
+    return true;
+}
+bool PhysicsSubsystem::Linecast(Vector3 start, Vector3 end, const PhysicsRaycastOptions& options,
+                                std::optional<RayHit>& hit, std::string& error) {
+    hit.reset();
+    error.clear();
+    if (!impl_) { error = "physics is not initialized"; return false; }
+    Ray ray;
+    if (!detail::QuerySegment(start, end, ray, error)) return false;
+    if (ray.maxDistance > 0) return Raycast(ray, options, hit, error);
+    std::unordered_set<entt::entity> ignored;
+    return impl_->PrepareQuery(options, ignored, error);
 }
 bool PhysicsSubsystem::SetLinearVelocity(entt::entity entity, Vector3 velocity, std::string& error) {
     if (!impl_ || !detail::Finite(velocity)) { error = "physics is not initialized or velocity is not finite"; return false; }

@@ -6,6 +6,7 @@
 #include <entt/entity/entity.hpp>
 #include <engine/core/Subsystem.hpp>
 #include <engine/physics/PhysicsComponents.hpp>
+#include <engine/scene/RayQuery.hpp>
 
 namespace engine {
 class DebugDraw;
@@ -19,6 +20,12 @@ struct PhysicsConfig {
     std::uint32_t workerThreads = 1; // bounded independently of enkiTS
 };
 
+struct PhysicsRaycastOptions {
+    QueryFilter filter;
+    bool includeTriggers = false;
+    bool hitBackFaces = false;
+};
+
 /// Register after gameplay subsystems which apply forces during FixedUpdate.
 /// All public operations are main-thread only. No ECS access from Jolt workers.
 class ENGINE_API PhysicsSubsystem final : public Subsystem {
@@ -30,6 +37,21 @@ public:
     void Shutdown() override;
     void FixedUpdate(const FixedUpdateContext& step) override;
     void ResetSimulation() override;
+
+    /// Queries read the current physics poses. The first query after reset prepares bodies.
+    /// Subsequent authored changes become visible at a fixed step or explicit SyncQueries().
+    /// Kinematic targets are applied by simulation, not by queries or SyncQueries().
+    /// Returns success, independently of whether a hit exists. maxDistance must be positive.
+    [[nodiscard]] bool Raycast(const Ray& ray, const PhysicsRaycastOptions& options,
+        std::optional<RayHit>& hit, std::string& error);
+    /// One nearest intersection per entity, sorted by distance.
+    [[nodiscard]] bool RaycastAll(const Ray& ray, const PhysicsRaycastOptions& options,
+        std::vector<RayHit>& hits, std::string& error);
+    /// Coincident finite endpoints produce a successful miss.
+    [[nodiscard]] bool Linecast(DirectX::SimpleMath::Vector3 start, DirectX::SimpleMath::Vector3 end,
+        const PhysicsRaycastOptions& options, std::optional<RayHit>& hit, std::string& error);
+    /// Reconcile new/changed colliders and static transforms without advancing time.
+    [[nodiscard]] bool SyncQueries(std::string& error);
 
     [[nodiscard]] bool CollectColliderTriangles(entt::entity entity,
         std::vector<DirectX::SimpleMath::Vector3>& triangles, std::string& error);

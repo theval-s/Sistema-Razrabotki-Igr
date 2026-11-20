@@ -74,7 +74,7 @@ edits are diagnosed and the affected body is removed. Components are reconciled
 before each step. Changing body settings, collider geometry or scale rebuilds the
 body and resets velocity. Mesh AABBs are not implicitly physical colliders.
 Mesh colliders require MeshRenderer. While its async mesh load is pending, the
-body is absent; it is created on the first fixed step after publication. Changing
+body is absent; it is created on reconciliation after publication. Changing
 the mesh recreates the body. Removed/unavailable mesh data removes its body.
 
 MeshAsset retains shared immutable MeshGeometry (positions and CCW triangle
@@ -150,8 +150,11 @@ Only one preview geometry is cached; unchanged shapes are not cooked each frame.
 
 Bodies are batch-added using Jolt's broadphase interface. Removal of either
 component, destruction of an entity, scene replacement and Shutdown release bodies.
-Queries in SceneQueries remain the existing scene/AABB queries; they also cover
-nonphysical objects.
+Physics ray queries test actual colliders; SceneQueries also provides approximate
+world-AABB queries for nonphysical objects. The first valid physics query after
+reset prepares bodies; later queries read the snapshot until a fixed step or
+explicit SyncQueries reconciles it. Kinematic targets still require a fixed step.
+See [raycasting.md](raycasting.md) for options, timing and Lua examples.
 
 ## Contact callbacks in Lua
 
@@ -237,4 +240,4 @@ No CTest integration or new test suites are required. Check fixed stepping, floo
 contacts, removal, repeated initialization, paused frames and scene replacement.
 
 Not included: interpolated rendering, character controllers, asynchronous shape cooking,
-constraints, ragdolls, Lua physics commands.
+constraints, ragdolls.

@@ -364,6 +364,26 @@ entity = nil
 ---@type table<string, string|number|boolean>
 Properties = nil
 
+---@class Ray
+---@field origin Vector3 World-space origin.
+---@field direction Vector3 World-space direction.
+---@field maxDistance number Distance in metres.
+---@class RayHit
+---@field entity Entity
+---@field distance number Metres.
+---@field point Vector3 World-space point.
+---@field normal? Vector3 World-space normal; absent for distance-zero hits.
+---@field isTrigger boolean
+---@class BoundsQueryOptions
+---@field ignore? Entity[] Dense array of valid current-scene entities.
+---@field ignoreDescendants? boolean Default false.
+---@class PhysicsQueryOptions: BoundsQueryOptions
+---@field includeTriggers? boolean Default false.
+---@field hitBackFaces? boolean Default false; applies to mesh triangles.
+---@class ScreenRayOptions
+---@field camera? Entity Valid current-scene camera; defaults to active camera.
+---@field viewportSize? Vector2 Defaults to render surface size.
+
 Scene = {}
 ---Queues a scene change after gameplay callbacks. Autoloads survive the change.
 ---@param name string Scene name or project scene path.
@@ -404,6 +424,30 @@ function Scene.Destroy(target) end
 ---@param type string Registered C++ controller type.
 ---@param data? table Serializable data.
 function Scene.AttachController(target, type, data) end
+---Approximate world-AABB picking, including nonphysical entities and triggers.
+---Direction is normalized; a miss returns nil and an empty error. Check error first.
+---@param origin Vector3 World-space.
+---@param direction Vector3 World-space, finite and nonzero.
+---@param maxDistance number Positive finite metres.
+---@param options? BoundsQueryOptions
+---@return RayHit? hit
+---@return string error Empty on success.
+function Scene.RaycastBounds(origin, direction, maxDistance, options) end
+---One nearest hit per entity, sorted by distance; a miss returns an empty array.
+---@param origin Vector3 World-space.
+---@param direction Vector3 World-space, finite and nonzero.
+---@param maxDistance number Positive finite metres.
+---@param options? BoundsQueryOptions
+---@return RayHit[]? hits Nil on error.
+---@return string error Empty on success.
+function Scene.RaycastBoundsAll(origin, direction, maxDistance, options) end
+---Viewport-local physical pixels, top-left origin, +Y down; outside the viewport is an error.
+---The ray starts at the near plane and reaches the far plane.
+---@param point Vector2
+---@param options? ScreenRayOptions
+---@return Ray? ray Nil on error.
+---@return string error Empty on success.
+function Scene.ScreenPointToRay(point, options) end
 
 )"
 R"(---Render resources are owned by the live script; create them in OnStart.
@@ -811,7 +855,39 @@ function Audio.IsAvailable() end
 ---@return string
 function Audio.GetDiagnostic() end
 
-Physics = {}
+)"
+R"(Physics = {}
+---Tests current physics bodies; direction is normalized.
+---A miss returns nil and an empty error; check error before treating nil as a miss.
+---The first query after reset prepares bodies; later changes need a fixed step or SyncQueries.
+---@param origin Vector3 World-space.
+---@param direction Vector3 World-space, finite and nonzero.
+---@param maxDistance number Positive finite metres.
+---@param options? PhysicsQueryOptions
+---@return RayHit? hit
+---@return string error Empty on success.
+function Physics.Raycast(origin, direction, maxDistance, options) end
+---One nearest hit per entity, sorted by distance; a miss returns an empty array.
+---@param origin Vector3 World-space.
+---@param direction Vector3 World-space, finite and nonzero.
+---@param maxDistance number Positive finite metres.
+---@param options? PhysicsQueryOptions
+---@return RayHit[]? hits Nil on error.
+---@return string error Empty on success.
+function Physics.RaycastAll(origin, direction, maxDistance, options) end
+---Closest hit along a segment; coincident endpoints are a successful miss.
+---A miss returns nil and an empty error; check error first.
+---@param start Vector3 Finite world-space endpoint.
+---@param endPoint Vector3 Finite world-space endpoint.
+---@param options? PhysicsQueryOptions
+---@return RayHit? hit
+---@return string error Empty on success.
+function Physics.Linecast(start, endPoint, options) end
+---Reconciles bodies and static transforms without advancing time.
+---Kinematic targets take effect only after a fixed step.
+---@return boolean success
+---@return string error Empty on success.
+function Physics.SyncQueries() end
 ---@param target Entity
 ---@param velocity Vector3 Dynamic body; world-space velocity.
 ---@return boolean success

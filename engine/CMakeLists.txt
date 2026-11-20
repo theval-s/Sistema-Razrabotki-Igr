@@ -171,6 +171,7 @@ set(ENGINE_SOURCES
     src/scripting/LuaComponentBindings.cpp
     src/scripting/LuaGameBindings.cpp
     src/scripting/LuaGameplayBindings.cpp
+    src/scripting/LuaQueryBindings.cpp
     src/scripting/LuaSaveGameBindings.cpp
 )
 
@@ -433,6 +434,7 @@ set(ENGINE_CORE_HEADERS
     include/engine/scene/Controller.hpp
     include/engine/scene/StateValue.hpp
     include/engine/scene/SceneQueries.hpp
+    include/engine/scene/RayQuery.hpp
     include/engine/scene/Scene.hpp
     include/engine/scene/EnvironmentSettings.hpp
     include/engine/scene/SceneDocument.hpp

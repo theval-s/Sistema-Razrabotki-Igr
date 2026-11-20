@@ -413,7 +413,7 @@ if(SRI_BUILD_EDITOR)
 endif()
 
 add_executable(lua_runtime_tests lua_runtime_tests.cpp autoload_session_tests.cpp play_mode_tests.cpp
-    runtime_api_tests.cpp gameplay_binding_tests.cpp component_binding_tests.cpp
+    runtime_api_tests.cpp gameplay_binding_tests.cpp query_binding_tests.cpp component_binding_tests.cpp
     persistence_document_tests.cpp persistence_integration_tests.cpp behavior_tree_source_tests.cpp)
 target_link_libraries(lua_runtime_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 set_project_warnings(lua_runtime_tests)
@@ -532,7 +532,8 @@ target_link_libraries(file_system_tests PRIVATE Engine::EngineStatic GTest::gtes
 set_project_warnings(file_system_tests)
 set_target_properties(file_system_tests PROPERTIES FOLDER tests)
 
-add_executable(scene_document_tests scene_document_tests.cpp skybox_scene_tests.cpp)
+add_executable(scene_document_tests scene_document_tests.cpp skybox_scene_tests.cpp
+    scene_query_tests.cpp physics_query_tests.cpp)
 target_link_libraries(scene_document_tests PRIVATE Engine::EngineStatic GTest::gtest_main)
 target_compile_definitions(scene_document_tests PRIVATE SRI_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
 set_project_warnings(scene_document_tests)
