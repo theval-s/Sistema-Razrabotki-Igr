@@ -539,9 +539,13 @@ otherwise valid authored component combinations; see [physics.md](physics.md).
 
 `target:SetActiveCamera()` requires a Camera component;
 `target:IsActiveCamera()` reports whether the entity is the active camera.
-`target:GetMaterialParameters()` returns `{specularColor = Vector3, shininess = number}`.
-`target:SetMaterialParameters({specularColor = ..., shininess = ...})` patches an
-entity-local material override, using nonnegative values. It does not modify shared
+`target:GetMaterialParameters()` returns `{specularColor = Vector3, shininess = number,
+emission = Vector3, lightingWeight = number}`.
+`target:SetMaterialParameters({specularColor = ..., shininess = ..., emission = ...,
+lightingWeight = ...})` patches an entity-local material override. Emission is
+finite nonnegative HDR RGB (values above 1 are allowed); lightingWeight is finite
+and in [0, 1]. Other values are nonnegative. The entire patch is validated before
+an override is allocated. Texture mutation is not exposed by this Lua API. It does not modify shared
 assets. Get requires a MeshRenderer and ready rendering/material resources. On a renderer
 without its own material instance both start from the mesh's first slot material, and the
 override then covers every slot.

@@ -238,9 +238,60 @@ TEST_F(AssetCooking, ShaderLibraryRoundTripsAndRejectsDamage) {
     ASSERT_NE(loaded.Find("one"), nullptr);
     EXPECT_EQ(*loaded.Find("one"), (std::vector<std::uint8_t>{1, 2, 3}));
     EXPECT_EQ(loaded.Find("three"), nullptr);
+    auto legacy = bytes;
+    const std::uint32_t oldShaderVersion = 1;
+    std::memcpy(legacy.data() + 8, &oldShaderVersion, sizeof(oldShaderVersion));
+    EXPECT_FALSE(loaded.Deserialize(legacy, error));
+    EXPECT_NE(error.find("build the game again"), std::string::npos);
+    EXPECT_EQ(loaded.Size(), 2u);
     bytes.back() ^= 1;
     EXPECT_FALSE(loaded.Deserialize(bytes, error));
     EXPECT_EQ(loaded.Size(), 2u);
+}
+
+TEST_F(AssetCooking, AuthoredEmissiveMaterialShaderRecooksAfterIncludedSourceChanges) {
+    const auto shader = root / "glow.hlsl";
+    const auto include = root / "glow.hlsli";
+    const auto material = root / "glow.material.json";
+    ASSERT_TRUE(WriteFileAtomic(include, "float3 AuthoredGlow() { return float3(8, 2, 1); }\n", error));
+    ASSERT_TRUE(WriteFileAtomic(shader, R"(
+#include "engine/MaterialTemplate.hlsl"
+#include "glow.hlsli"
+#if defined(MATERIAL_GBUFFER_PS)
+void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) {
+    surface.emission = AuthoredGlow();
+    surface.lightingWeight = 0;
+}
+#endif
+)", error));
+    const auto shaderId = NewUuid();
+    ASSERT_TRUE(WriteAssetMetadata(shader, {shaderId, CatalogAssetKind::Shader}, error)) << error;
+    MaterialDefinition definition;
+    definition.version = 2;
+    definition.hooks = MaterialHook::GBufferPS;
+    definition.shaderReference = AssetReference{shaderId, "game/glow.hlsl"};
+    definition.shaderFile = definition.shaderReference->path;
+    definition.defaults.emission = Vector3{32, 2, 1};
+    definition.defaults.lightingWeight = 0.0f;
+    definition.defaults.emissionTexture = ""; // explicit null remains valid when cooking
+    std::string text;
+    ASSERT_TRUE(SerializeMaterialDefinition(definition, text, error)) << error;
+    ASSERT_TRUE(WriteFileAtomic(material, text, error)) << error;
+    ASSERT_TRUE(WriteAssetMetadata(material, {NewUuid(), CatalogAssetKind::Material}, error)) << error;
+    ASSERT_TRUE(catalog.Scan(root, {}, error)) << error;
+    ShaderLibrary first, second;
+    std::vector<std::string> errors;
+    ASSERT_TRUE(CookShaderLibrary(catalog, first, errors)) << (errors.empty() ? "" : errors.front());
+    const auto variants = MaterialShaderVariants(shader, definition.hooks);
+    ASSERT_TRUE(variants[2]);
+    const auto key = ShaderLibrary::Key(shader, ShaderType::Pixel, variants[2]->options);
+    const auto* before = first.Find(key);
+    ASSERT_NE(before, nullptr);
+    ASSERT_TRUE(WriteFileAtomic(include, "float3 AuthoredGlow() { return float3(64, 16, 4); }\n", error));
+    ASSERT_TRUE(CookShaderLibrary(catalog, second, errors)) << (errors.empty() ? "" : errors.front());
+    const auto* after = second.Find(key);
+    ASSERT_NE(after, nullptr);
+    EXPECT_NE(*before, *after) << "shipping shader cooking must not reuse stale include contents";
 }
 
 TEST(PostProcessDefinition, DefaultsAndCustomOptionsRoundTrip) {

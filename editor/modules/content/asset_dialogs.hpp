@@ -36,6 +36,7 @@ class AssetPicker;
 namespace content {
 
 class ColorButton;
+class EmissionFields;
 
 /// File dialog filter for images that import as textures.
 [[nodiscard]] QString imageFilter();
@@ -228,6 +229,7 @@ private:
     ColorButton* specular_ = nullptr;
     QCheckBox* override_shininess_ = nullptr;
     QDoubleSpinBox* shininess_ = nullptr;
+    EmissionFields* emission_fields_ = nullptr;
     int version_ = 2;
     std::optional<float> loaded_shininess_;
     double displayed_shininess_ = 0;
@@ -259,6 +261,7 @@ private:
     ColorButton* specular_ = nullptr;
     QCheckBox* override_shininess_ = nullptr;
     QDoubleSpinBox* shininess_ = nullptr;
+    EmissionFields* emission_fields_ = nullptr;
     int version_ = 2;
     std::optional<float> loaded_shininess_;
     double displayed_shininess_ = 0;

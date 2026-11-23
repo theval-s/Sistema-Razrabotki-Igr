@@ -1088,6 +1088,14 @@ bool Engine::SetEntityAlbedoTexture(entt::entity entity, AssetHandle<TextureAsse
     }, error);
 }
 
+bool Engine::SetEntityEmissionTexture(entt::entity entity, AssetHandle<TextureAsset> texture, std::string& error) {
+    const auto ready = impl_->sceneAssets->Peek(texture);
+    if (!ready) { error = "texture asset is not ready in this scene"; return false; }
+    return EditEntityMaterial(entity, [handle = ready->texture](MaterialParameters& parameters) {
+        parameters.emissionTexture = handle;
+    }, error);
+}
+
 MaterialInstanceHandle Engine::GetEntityMaterialOverride(entt::entity entity) const {
     return impl_->sceneRuntime.Find(entity);
 }

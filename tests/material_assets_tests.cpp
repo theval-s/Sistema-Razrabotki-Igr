@@ -74,6 +74,68 @@ TEST(MaterialDefinitions, AcceptsUtf8BomAndBuiltinDefaults) {
     EXPECT_TRUE(material.shaderFile.empty());
 }
 
+TEST(MaterialDefinitions, EmissionHdrSparseNullAndVersionedReferencesRoundTrip) {
+    std::string error, text;
+    MaterialDefinition material;
+    ASSERT_TRUE(ParseMaterialDefinition(R"({"version":1,"hooks":[],"defaults":{
+        "emission":[32,0,1.5],"lightingWeight":0,"emissionTexture":"game/glow.png"}})", material, error)) << error;
+    EXPECT_EQ(material.defaults.emission, (Vector3{32, 0, 1.5f}));
+    EXPECT_EQ(material.defaults.lightingWeight, 0);
+    ASSERT_TRUE(SerializeMaterialDefinition(material, text, error)) << error;
+    MaterialDefinition restored;
+    ASSERT_TRUE(ParseMaterialDefinition(text, restored, error)) << error;
+    EXPECT_EQ(restored.defaults.emission, material.defaults.emission);
+    EXPECT_EQ(restored.defaults.emissionTexture, material.defaults.emissionTexture);
+    material.version = 2;
+    material.defaults.emissionReference = AssetReference{NewUuid(), "game/glow.png"};
+    ASSERT_TRUE(SerializeMaterialDefinition(material, text, error)) << error;
+    ASSERT_TRUE(ParseMaterialDefinition(text, restored, error)) << error;
+    ASSERT_TRUE(restored.defaults.emissionReference);
+    EXPECT_EQ(restored.defaults.emissionReference->id, material.defaults.emissionReference->id);
+    material.version = 1;
+    EXPECT_FALSE(SerializeMaterialDefinition(material, text, error));
+    EXPECT_FALSE(ParseMaterialDefinition(R"({"version":2,"hooks":[],"defaults":{
+        "emissionTexture":"game/glow.png"}})", restored, error));
+    MaterialInstanceDefinition instance;
+    ASSERT_TRUE(ParseMaterialInstanceDefinition(R"({"version":1,"material":"game/base"})", instance, error));
+    EXPECT_FALSE(instance.parameters.emission);
+    EXPECT_FALSE(instance.parameters.lightingWeight);
+    EXPECT_FALSE(instance.parameters.emissionTexture);
+    ASSERT_TRUE(ParseMaterialInstanceDefinition(R"({"version":1,"material":"game/base","parameters":{
+        "emission":[0,0,0],"lightingWeight":1,"emissionTexture":null}})", instance, error));
+    ASSERT_TRUE(SerializeMaterialInstanceDefinition(instance, text, error));
+    ASSERT_TRUE(ParseMaterialInstanceDefinition(text, instance, error));
+    ASSERT_TRUE(instance.parameters.emissionTexture);
+    EXPECT_TRUE(instance.parameters.emissionTexture->empty());
+    EXPECT_EQ(instance.parameters.emission, (Vector3{0, 0, 0}));
+    EXPECT_EQ(instance.parameters.lightingWeight, 1);
+}
+
+TEST(MaterialDefinitions, RejectsInvalidEmissionAndLightingWithoutChangingOutput) {
+    std::string error, text = "unchanged";
+    MaterialDefinition material;
+    for (const auto* parameters : {
+        R"({"emission":[-1,0,0]})", R"({"emission":[0,0]})", R"({"emission":[1e300,0,0]})",
+        R"({"emission":null})", R"({"lightingWeight":-0.01})", R"({"lightingWeight":1.01})",
+        R"({"lightingWeight":null})", R"({"emissionTexture":""})",
+        R"({"emissionTexture":"../escape.png"})", R"({"emissionTexture":42})"}) {
+        SCOPED_TRACE(parameters);
+        material.defaults.shininess = 17.0f;
+        EXPECT_FALSE(ParseMaterialDefinition(std::string(R"({"version":1,"hooks":[],"defaults":)") +
+            parameters + "}", material, error));
+        EXPECT_EQ(material.defaults.shininess, 17);
+    }
+    for (float invalid : {std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN(), -1.0f}) {
+        material.defaults.emission = Vector3{invalid, 0, 0};
+        EXPECT_FALSE(SerializeMaterialDefinition(material, text, error));
+        EXPECT_EQ(text, "unchanged");
+    }
+    material.defaults.emission.reset();
+    material.defaults.lightingWeight = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(SerializeMaterialDefinition(material, text, error));
+    EXPECT_EQ(text, "unchanged");
+}
+
 TEST(MaterialDefinitions, RejectsInvalidMaterialWithoutChangingOutput) {
     MaterialDefinition material;
     std::string error;
@@ -674,6 +736,144 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) { su
     engine.Shutdown();
 }
 
+TEST(MaterialAssetsIntegration, EmissionDependenciesInheritanceClearsFailuresAndReload) {
+    Fixture fixture;
+    ASSERT_NE(fixture.window, nullptr);
+    MaterialDefinition base;
+    base.defaults.emission = Vector3{8, 2, 0};
+    base.defaults.lightingWeight = 0.25f;
+    base.defaults.emissionTexture = "engine/primitives/white";
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("emissive", base));
+    MaterialInstanceDefinition definition;
+    definition.material = fixture.prefix + "/emissive";
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("emissive", definition));
+    Engine engine({.applicationName = "Emission assets", .surface = {fixture.window, 64, 64}, .taskThreads = 2});
+    auto* rendering = engine.AddSubsystem<RenderingSubsystem>();
+    if (!engine.Initialize()) GTEST_SKIP() << "D3D11 hardware/debug layer unavailable";
+    auto& assets = engine.GetAssets();
+    auto& resources = rendering->GetResourceManager();
+    Events events;
+    engine.GetEvents().sink<AssetLoadedEvent>().connect<&Events::Loaded>(events);
+    engine.GetEvents().sink<AssetFailedEvent>().connect<&Events::Failed>(events);
+    const auto handle = assets.RequestMaterialInstance(fixture.prefix + "/emissive");
+    ASSERT_NO_FATAL_FAILURE(WaitFor(assets, handle, events));
+    const auto live = assets.Peek(handle);
+    ASSERT_TRUE(live);
+    const auto gpuHandle = live->instance;
+    const auto resolved = [&] {
+        const auto* instance = resources.TryGetMaterialInstance(gpuHandle);
+        return ResolveMaterialParameters(*resources.TryGetMaterial(instance->material), *instance);
+    };
+    EXPECT_EQ(resolved().parameters.emission, *base.defaults.emission);
+    EXPECT_FLOAT_EQ(resolved().parameters.lightingWeight, 0.25f);
+    ASSERT_TRUE(resolved().emissionTexture);
+    EXPECT_FALSE(resources.TryGetMaterialInstance(gpuHandle)->overrides.emissionTexture);
+    size_t textureEvent = events.loaded.size(), materialEvent = events.loaded.size();
+    for (size_t i = 0; i < events.loaded.size(); ++i) {
+        if (events.loaded[i].kind == AssetKind::Texture) textureEvent = i;
+        if (events.loaded[i].kind == AssetKind::Material &&
+            events.loaded[i].name == fixture.prefix + "/emissive.material.json") materialEvent = i;
+    }
+    EXPECT_LT(textureEvent, materialEvent);
+    std::string error;
+    definition.parameters.emission = Vector3{0, 0, 0};
+    definition.parameters.lightingWeight = 0.0f;
+    definition.parameters.emissionTexture = "";
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("emissive", definition));
+    ASSERT_TRUE(assets.Reload(fixture.prefix + "/emissive", AssetKind::MaterialInstance, error)) << error;
+    EXPECT_EQ(live->instance, gpuHandle);
+    EXPECT_EQ(resolved().parameters.emission, (Vector3{0, 0, 0}));
+    EXPECT_FLOAT_EQ(resolved().parameters.lightingWeight, 0);
+    EXPECT_FALSE(resolved().emissionTexture); // renderer binds white for an empty handle
+    ASSERT_TRUE(resources.TryGetMaterialInstance(gpuHandle)->overrides.emissionTexture);
+
+    // UUID resolution must ignore stale path hints, and reject missing/wrong-kind IDs.
+    const auto* white = assets.GetCatalog().FindPath("engine/primitives/white/texture.png");
+    const auto* parent = assets.GetCatalog().FindPath("engine/primitives/default.material.json");
+    ASSERT_NE(white, nullptr);
+    ASSERT_NE(parent, nullptr);
+    const AssetReference whiteReference{white->metadata.id, "game/old-glow.png"};
+    const AssetReference wrongKind{parent->metadata.id, parent->path};
+    definition.version = 2;
+    definition.materialReference = AssetReference{parent->metadata.id, parent->path};
+    definition.material = parent->path;
+    definition.parameters.emissionTexture = whiteReference.path;
+    definition.parameters.emissionReference = whiteReference;
+    definition.parameters.emission = Vector3{64, 4, 2};
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("emissive", definition));
+    ASSERT_TRUE(assets.Reload(fixture.prefix + "/emissive", AssetKind::MaterialInstance, error)) << error;
+    // UUID loads use the canonical image path; the original legacy folder
+    // spelling may be represented by a separate registry record.
+    const auto uuidTexture = assets.Peek(assets.RequestTexture(whiteReference));
+    ASSERT_TRUE(uuidTexture);
+    EXPECT_EQ(resolved().emissionTexture, uuidTexture->texture);
+    EXPECT_EQ(resolved().parameters.emission, (Vector3{64, 4, 2}));
+    for (const auto& reference : {AssetReference{NewUuid(), "game/missing.png"}, wrongKind}) {
+        definition.parameters.emissionReference = reference;
+        definition.parameters.emissionTexture = reference.path;
+        ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("emissive", definition));
+        EXPECT_FALSE(assets.Reload(fixture.prefix + "/emissive", AssetKind::MaterialInstance, error));
+        EXPECT_FALSE(error.empty());
+        EXPECT_EQ(resolved().emissionTexture, uuidTexture->texture);
+        EXPECT_EQ(resolved().parameters.emission, (Vector3{64, 4, 2}));
+        ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("invalid-emission", definition));
+        EXPECT_FALSE(assets.LoadMaterialInstance(fixture.prefix + "/invalid-emission"));
+    }
+    definition.version = 1;
+    definition.materialReference.reset();
+    definition.material = fixture.prefix + "/emissive";
+    definition.parameters.emissionReference.reset();
+    definition.parameters.emissionTexture = fixture.prefix + "/missing.png";
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("missing-emission", definition));
+    EXPECT_FALSE(assets.LoadMaterialInstance(fixture.prefix + "/missing-emission"));
+    base.defaults.emissionTexture = fixture.prefix + "/missing.png";
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("missing-emission", base));
+    EXPECT_FALSE(assets.LoadMaterial(fixture.prefix + "/missing-emission"));
+
+    // Valid DDS resources with invalid material SRV shapes must fail, not publish.
+    for (bool cube : {false, true}) {
+        const unsigned faces = cube ? 6 : 2;
+        std::string bytes(148 + 4 * faces, '\xff');
+        for (unsigned i = 0; i < 148; ++i) bytes[i] = '\0';
+        const auto word = [&](unsigned offset, unsigned value) {
+            for (unsigned i = 0; i < 4; ++i) bytes[offset + i] = static_cast<char>(value >> (8 * i));
+        };
+        word(0, 0x20534444); word(4, 124); word(8, 0x100f);
+        word(12, 1); word(16, 1); word(20, 4); word(28, 1);
+        word(76, 32); word(80, 4); word(84, 0x30315844); word(108, 0x1000);
+        word(112, cube ? 0xfe00 : 0); word(128, 28); word(132, 3);
+        word(136, cube ? 4 : 0); word(140, cube ? 1 : 2);
+        const std::string name = cube ? "cube" : "array";
+        ASSERT_NO_FATAL_FAILURE(fixture.Write(name + ".dds", bytes));
+        ASSERT_TRUE(assets.LoadTexture(fixture.prefix + "/" + name + ".dds"));
+        base.defaults.emissionTexture = fixture.prefix + "/" + name + ".dds";
+        ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile(name, base));
+        EXPECT_FALSE(assets.LoadMaterial(fixture.prefix + "/" + name));
+        definition.parameters.emissionTexture = *base.defaults.emissionTexture;
+        ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile(name, definition));
+        EXPECT_FALSE(assets.LoadMaterialInstance(fixture.prefix + "/" + name));
+    }
+
+    // Removing the instance override resumes inheritance across base refreshes.
+    definition.parameters = {};
+    ASSERT_NO_FATAL_FAILURE(fixture.InstanceFile("emissive", definition));
+    ASSERT_TRUE(assets.Reload(fixture.prefix + "/emissive", AssetKind::MaterialInstance, error)) << error;
+    base.defaults.emissionTexture = "";
+    base.defaults.emission = Vector3{12, 6, 3};
+    base.defaults.lightingWeight = 1.0f;
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("emissive", base));
+    ASSERT_TRUE(assets.Reload(fixture.prefix + "/emissive", AssetKind::Material, error)) << error;
+    EXPECT_EQ(resolved().parameters.emission, (Vector3{12, 6, 3}));
+    EXPECT_FLOAT_EQ(resolved().parameters.lightingWeight, 1);
+    EXPECT_FALSE(resolved().emissionTexture);
+    base.defaults.emissionTexture = fixture.prefix + "/missing.png";
+    ASSERT_NO_FATAL_FAILURE(fixture.MaterialFile("emissive", base));
+    EXPECT_FALSE(assets.Reload(fixture.prefix + "/emissive", AssetKind::Material, error));
+    EXPECT_EQ(resolved().parameters.emission, (Vector3{12, 6, 3}));
+    EXPECT_EQ(live->instance, gpuHandle);
+    engine.Shutdown();
+}
+
 TEST(MeshMaterialSlots, SectionsUseTheirSlotMaterialElseTheRenderersElseTheDefault) {
     Fixture fixture;
     ASSERT_NE(fixture.window, nullptr) << "could not create hidden D3D test surface";
@@ -799,6 +999,18 @@ TEST(MaterialAssetsIntegration, CookedBuildRendersFromThePrecompiledShaderLibrar
     AssetPathResolver::SetGameRoot(game);
     AssetCatalog catalog;
     std::string error;
+    MaterialDefinition authored;
+    std::string materialText;
+    ASSERT_TRUE(ReadTextFile(game / "materials/enchanted.material.json", materialText, error)) << error;
+    ASSERT_TRUE(ParseMaterialDefinition(materialText, authored, error)) << error;
+    AssetMetadata white;
+    ASSERT_TRUE(ReadAssetMetadata(AssetPathResolver::GetRoot() / "engine/primitives/white/texture.png", white, error));
+    authored.defaults.emission = Vector3{16, 8, 4};
+    authored.defaults.lightingWeight = 0.0f;
+    authored.defaults.emissionReference = AssetReference{white.id, "engine/primitives/white/texture.png"};
+    authored.defaults.emissionTexture = authored.defaults.emissionReference->path;
+    ASSERT_TRUE(SerializeMaterialDefinition(authored, materialText, error)) << error;
+    ASSERT_TRUE(WriteFileAtomic(game / "materials/enchanted.material.json", materialText, error)) << error;
     ASSERT_TRUE(catalog.Scan(game, AssetPathResolver::GetRoot() / "engine", error)) << error;
     ShaderLibrary library;
     std::vector<std::string> errors;
@@ -825,6 +1037,9 @@ TEST(MaterialAssetsIntegration, CookedBuildRendersFromThePrecompiledShaderLibrar
     EXPECT_TRUE(loaded->shaders.gBufferPassVS);
     EXPECT_TRUE(loaded->shaders.gBufferPassPS);
     EXPECT_TRUE(loaded->shaders.skinnedShadowPassVS);
+    EXPECT_EQ(loaded->defaultParameters.parameters.emission, (Vector3{16, 8, 4}));
+    EXPECT_FLOAT_EQ(loaded->defaultParameters.parameters.lightingWeight, 0);
+    EXPECT_TRUE(loaded->defaultParameters.emissionTexture);
     engine.Shutdown();
 }
 

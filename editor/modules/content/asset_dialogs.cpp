@@ -159,6 +159,121 @@ std::vector<engine::ShaderDefine> shaderDefines(const QTableWidget* table) {
 
 }  // namespace
 
+// Shared sparse emission controls for both material and instance inspectors.
+class EmissionFields : public QObject {
+public:
+    EmissionFields(QFormLayout* form, const engine::AssetCatalog& catalog, QObject* owner,
+                   const std::function<void()>& changed) : QObject(owner) {
+        texture = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Texture, QObject::tr("(none)"));
+        texture->setObjectName(QStringLiteral("emissionTexture"));
+        mode = albedoMode();
+        mode->setObjectName(QStringLiteral("emissionTextureMode"));
+        auto* row = new QHBoxLayout;
+        row->addWidget(mode);
+        row->addWidget(texture, 1);
+        form->addRow(QObject::tr("Emission texture"), row);
+        texture->setEnabled(false);
+        QObject::connect(mode, &QComboBox::currentIndexChanged, owner, [this, changed] {
+            texture->setEnabled(mode->currentIndex() == 1);
+            changed();
+        });
+        QObject::connect(texture, &QComboBox::currentIndexChanged, owner, [this, changed] {
+            if (texture->reference()) {
+                retainedTexture.reset();
+                retainedReference.reset();
+            }
+            changed();
+        });
+        overrideEmission = new QCheckBox(QObject::tr("Emission (HDR RGB)"));
+        overrideEmission->setObjectName(QStringLiteral("overrideEmission"));
+        auto* rgb = new QHBoxLayout;
+        for (int i = 0; i != 3; ++i) {
+            components[i] = new QDoubleSpinBox;
+            components[i]->setObjectName(QStringLiteral("emission%1").arg(i));
+            components[i]->setRange(0, std::numeric_limits<float>::max());
+            components[i]->setDecimals(6);
+            components[i]->setEnabled(false);
+            QObject::connect(overrideEmission, &QCheckBox::toggled, components[i], &QWidget::setEnabled);
+            rgb->addWidget(components[i]);
+        }
+        form->addRow(overrideEmission, rgb);
+        overrideWeight = new QCheckBox(QObject::tr("Lighting weight"));
+        overrideWeight->setObjectName(QStringLiteral("overrideLightingWeight"));
+        weight = new QDoubleSpinBox;
+        weight->setObjectName(QStringLiteral("lightingWeight"));
+        weight->setRange(0, 1);
+        weight->setDecimals(6);
+        weight->setValue(1);
+        weight->setEnabled(false);
+        QObject::connect(overrideWeight, &QCheckBox::toggled, weight, &QWidget::setEnabled);
+        form->addRow(overrideWeight, weight);
+    }
+
+    void setEmission(const DirectX::SimpleMath::Vector3& value) {
+        components[0]->setValue(value.x); components[1]->setValue(value.y); components[2]->setValue(value.z);
+    }
+    void load(const engine::MaterialParameterOverrides& p) {
+        const QSignalBlocker block(texture);
+        retainedTexture = p.emissionTexture;
+        retainedReference = p.emissionReference;
+        mode->setCurrentIndex(!p.emissionTexture ? 0 : p.emissionTexture->empty() ? 2 : 1);
+        if (p.emissionTexture && !p.emissionTexture->empty() &&
+            !selectReference(texture, p.emissionReference, *p.emissionTexture))
+            texture->setCurrentIndex(-1);
+        overrideEmission->setChecked(p.emission.has_value());
+        if (p.emission) setEmission(*p.emission);
+        overrideWeight->setChecked(p.lightingWeight.has_value());
+        if (p.lightingWeight) weight->setValue(*p.lightingWeight);
+        loadedEmission = p.emission;
+        loadedWeight = p.lightingWeight;
+        for (int i = 0; i != 3; ++i) displayed[i] = components[i]->value();
+        displayedWeight = weight->value();
+    }
+    void save(engine::MaterialParameterOverrides& p, int version) const {
+        if (mode->currentIndex() == 2) p.emissionTexture = "";
+        if (mode->currentIndex() == 1) {
+            if (const auto reference = texture->reference()) {
+                p.emissionTexture = reference->path;
+                if (version == 2) p.emissionReference = reference;
+            } else if (retainedTexture && !retainedTexture->empty()) {
+                p.emissionTexture = retainedTexture;
+                if (version == 2) p.emissionReference = retainedReference;
+            }
+        }
+        if (overrideEmission->isChecked()) {
+            const bool unchanged = loadedEmission && components[0]->value() == displayed[0] &&
+                components[1]->value() == displayed[1] && components[2]->value() == displayed[2];
+            p.emission = unchanged ? *loadedEmission : DirectX::SimpleMath::Vector3(
+                static_cast<float>(components[0]->value()), static_cast<float>(components[1]->value()),
+                static_cast<float>(components[2]->value()));
+        }
+        if (overrideWeight->isChecked())
+            p.lightingWeight = loadedWeight && weight->value() == displayedWeight
+                ? *loadedWeight : static_cast<float>(weight->value());
+    }
+    bool missingTexture() const {
+        return mode->currentIndex() == 1 && !texture->reference() &&
+            (!retainedTexture || retainedTexture->empty());
+    }
+    void inherited(const engine::MaterialPBRParameters& p) {
+        if (!overrideEmission->isChecked()) setEmission(p.emission);
+        if (!overrideWeight->isChecked()) weight->setValue(p.lightingWeight);
+    }
+private:
+    editor::AssetPicker* texture = nullptr;
+    QComboBox* mode = nullptr;
+    QCheckBox* overrideEmission = nullptr;
+    QCheckBox* overrideWeight = nullptr;
+    QDoubleSpinBox* components[3]{};
+    QDoubleSpinBox* weight = nullptr;
+    std::optional<std::string> retainedTexture;
+    std::optional<engine::AssetReference> retainedReference;
+    std::optional<DirectX::SimpleMath::Vector3> loadedEmission;
+    std::optional<float> loadedWeight;
+    double displayed[3]{};
+    double displayedWeight = 1;
+};
+
 // The extensions CatalogKindForFile() takes as textures, meshes and audio clips.
 const QString ImagePatterns = QStringLiteral("*.png *.jpg *.jpeg *.tif *.tiff *.dds *.bmp");
 const QString ModelPatterns = QStringLiteral("*.fbx *.gltf *.glb *.obj *.dae *.blend *.ply");
@@ -531,6 +646,11 @@ MaterialInstanceDialog::MaterialInstanceDialog(const engine::AssetCatalog& catal
     shininess_->setEnabled(false);
     connect(override_shininess_, &QCheckBox::toggled, shininess_, &QWidget::setEnabled);
     form()->addRow(override_shininess_, shininess_);
+    emission_fields_ = new EmissionFields(form(), catalog, this, [this] { validate(); });
+    connect(findChild<QCheckBox*>(QStringLiteral("overrideEmission")), &QCheckBox::toggled,
+            this, [this](bool enabled) { if (!enabled) showInherited(); });
+    connect(findChild<QCheckBox*>(QStringLiteral("overrideLightingWeight")), &QCheckBox::toggled,
+            this, [this](bool enabled) { if (!enabled) showInherited(); });
 
     connect(material_, &QComboBox::currentIndexChanged, this, [this] {
         showInherited();
@@ -571,6 +691,7 @@ void MaterialInstanceDialog::load(const engine::MaterialInstanceDefinition& defi
     if (definition.parameters.shininess) shininess_->setValue(*definition.parameters.shininess);
     loaded_shininess_ = definition.parameters.shininess;
     displayed_shininess_ = shininess_->value();
+    emission_fields_->load(definition.parameters);
     validate();
 }
 
@@ -595,6 +716,7 @@ engine::MaterialInstanceDefinition MaterialInstanceDialog::definition() const {
         definition.parameters.shininess = loaded_shininess_ && shininess_->value() == displayed_shininess_
             ? *loaded_shininess_ : static_cast<float>(shininess_->value());
     }
+    emission_fields_->save(definition.parameters, version_);
     return definition;
 }
 
@@ -609,6 +731,7 @@ QString MaterialInstanceDialog::problem() const {
             : tr("%1 isn't in the asset catalog. Choose an albedo texture.").arg(pending_albedo_);
     }
     if (albedo_mode_->currentIndex() == 1 && !albedo_->reference()) return tr("Choose an albedo texture.");
+    if (emission_fields_->missingTexture()) return tr("Choose an emission texture.");
     return {};
 }
 
@@ -624,6 +747,8 @@ void MaterialInstanceDialog::showInherited() {
         engine::ParseMaterialDefinition(text, definition, error)) {
         inherited.specularColor = definition.defaults.specularColor.value_or(inherited.specularColor);
         inherited.shininess = definition.defaults.shininess.value_or(inherited.shininess);
+        inherited.emission = definition.defaults.emission.value_or(inherited.emission);
+        inherited.lightingWeight = definition.defaults.lightingWeight.value_or(inherited.lightingWeight);
     }
     if (!override_specular_->isChecked()) {
         specular_->setValue(inherited.specularColor);
@@ -631,6 +756,7 @@ void MaterialInstanceDialog::showInherited() {
     if (!override_shininess_->isChecked()) {
         shininess_->setValue(inherited.shininess);
     }
+    emission_fields_->inherited(inherited);
 }
 
 MaterialDialog::MaterialDialog(const engine::AssetCatalog& catalog, const QString& folder, const QString& name,
@@ -680,6 +806,7 @@ MaterialDialog::MaterialDialog(const engine::AssetCatalog& catalog, const QStrin
     shininess_->setValue(defaults.shininess);
     connect(override_shininess_, &QCheckBox::toggled, shininess_, &QWidget::setEnabled);
     form()->addRow(override_shininess_, shininess_);
+    emission_fields_ = new EmissionFields(form(), catalog, this, [this] { validate(); });
 
     const auto shader_changed = [this] {
         const bool shader = shader_->reference().has_value();
@@ -715,6 +842,7 @@ void MaterialDialog::load(const engine::MaterialDefinition& definition) {
     if (definition.defaults.shininess) shininess_->setValue(*definition.defaults.shininess);
     loaded_shininess_ = definition.defaults.shininess;
     displayed_shininess_ = shininess_->value();
+    emission_fields_->load(definition.defaults);
     validate();
 }
 
@@ -744,6 +872,7 @@ engine::MaterialDefinition MaterialDialog::definition() const {
     if (override_shininess_->isChecked()) definition.defaults.shininess =
         loaded_shininess_ && shininess_->value() == displayed_shininess_
             ? *loaded_shininess_ : static_cast<float>(shininess_->value());
+    emission_fields_->save(definition.defaults, version_);
     return definition;
 }
 
@@ -752,6 +881,7 @@ QString MaterialDialog::problem() const {
         return problem;
     }
     if (albedo_mode_->currentIndex() == 1 && !albedo_->reference()) return tr("Choose an albedo texture.");
+    if (emission_fields_->missingTexture()) return tr("Choose an emission texture.");
     if (shader_->currentIndex() < 0) return tr("Choose a shader or standard shading.");
     const bool hooked = gbuffer_vs_->isChecked() || gbuffer_ps_->isChecked() || shadow_vs_->isChecked();
     return shader_->reference() && !hooked ? tr("Pick the hooks the shader implements.") : QString();

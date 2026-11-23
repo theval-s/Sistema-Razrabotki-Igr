@@ -50,12 +50,15 @@ struct ENGINE_API RenderingResourceManager {
     MaterialHandle CreateMaterial(const MaterialDesc& desc);
     /// Main-thread upload path for the asset importer: no file I/O or compilation.
     /// Takes ownership of the shader handles on success; they must not be shared.
+    /// Raw G-buffer pixel shaders must write float4 SV_Target0..3 (material ABI 2);
+    /// declared EngineMaterial buffers must match Common.hlsl. Invalid contracts
+    /// return an empty handle and log an actionable diagnostic.
     MaterialHandle RegisterMaterial(const ShaderSet& shaders, const MaterialParameters& defaults);
     bool DestroyMaterial(MaterialHandle material);
     /// Consumes a prepared material, retaining the live handle and all its instances.
     bool ReplaceMaterial(MaterialHandle live, MaterialHandle staged);
     [[nodiscard]] MaterialInstanceHandle CreateMaterialInstance(MaterialHandle material);
-    /// Advanced escape hatch: fixes every supplied PBR/texture value as an explicit override.
+    /// Advanced escape hatch: fixes every supplied surface/texture value as an explicit override.
     /// Those fields will not follow subsequent material-default changes.
     bool SetMaterialInstanceParameters(MaterialInstanceHandle instance, const MaterialParameters& parameters);
     /// Changes an authored instance without replacing its handle (scene renderers retain that handle).

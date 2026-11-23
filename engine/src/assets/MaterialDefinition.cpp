@@ -33,6 +33,22 @@ void from_json(const Json& j, MaterialParameterOverrides& value) {
         value.specularColor = Vector3{color[0], color[1], color[2]};
     }
     if (j.contains("shininess")) value.shininess = j.at("shininess").get<float>();
+    if (j.contains("emission")) {
+        const auto color = j.at("emission").get<std::array<float, 3>>();
+        value.emission = Vector3{color[0], color[1], color[2]};
+    }
+    if (j.contains("lightingWeight")) value.lightingWeight = j.at("lightingWeight").get<float>();
+    if (j.contains("emissionTexture")) {
+        const auto& texture = j.at("emissionTexture");
+        if (texture.is_null()) value.emissionTexture = "";
+        else if (texture.is_object()) {
+            std::string error;
+            AssetReference ref;
+            if (!ParseAssetReference(texture.dump(), ref, error)) throw std::invalid_argument(error);
+            value.emissionTexture = ref.path;
+            value.emissionReference = std::move(ref);
+        } else value.emissionTexture = texture.get<std::string>();
+    }
 }
 
 void to_json(Json& j, const MaterialParameterOverrides& value) {
@@ -48,6 +64,16 @@ void to_json(Json& j, const MaterialParameterOverrides& value) {
     if (value.specularColor)
         j["specularColor"] = {value.specularColor->x, value.specularColor->y, value.specularColor->z};
     if (value.shininess) j["shininess"] = *value.shininess;
+    if (value.emission) j["emission"] = {value.emission->x, value.emission->y, value.emission->z};
+    if (value.lightingWeight) j["lightingWeight"] = *value.lightingWeight;
+    if (value.emissionTexture) {
+        if (value.emissionTexture->empty()) j["emissionTexture"] = nullptr;
+        else if (value.emissionReference) {
+            std::string text, error;
+            if (!SerializeAssetReference(*value.emissionReference, text, error)) throw std::invalid_argument(error);
+            j["emissionTexture"] = Json::parse(text);
+        } else j["emissionTexture"] = *value.emissionTexture;
+    }
 }
 
 void from_json(const Json& j, MaterialDefinition& value) {
@@ -132,8 +158,11 @@ Json Read(std::string_view text) {
                                         (version == 2 ? "UUID reference" : "path") + " in this version");
     };
     checkRef(root, root.contains("material") ? "material" : "shaderFile");
-    if (root.contains("defaults")) checkRef(root.at("defaults"), "albedoTexture");
-    if (root.contains("parameters")) checkRef(root.at("parameters"), "albedoTexture");
+    for (const auto* field : {"defaults", "parameters"}) {
+        if (!root.contains(field)) continue;
+        checkRef(root.at(field), "albedoTexture");
+        checkRef(root.at(field), "emissionTexture");
+    }
     return root;
 }
 

@@ -323,16 +323,28 @@ void RegisterComponentBindings(sol::state& lua, LuaBindingsContext& context) {
     entity.set_function("SetMaterialParameters", [&context](const LuaEntityHandle& e, sol::table data) {
         Checked(e, context); Require(context.engine != nullptr, "Engine unavailable");
         // Validate the complete patch before EditEntityMaterial allocates an override.
-        Vector3 color{}; float shininess = 0;
-        Fields f{data, true}; f("specularColor", color); f("shininess", shininess); f.Finish();
-        Require(color.x >= 0 && color.y >= 0 && color.z >= 0 && shininess >= 0, "Invalid material parameters");
+        Vector3 color{}, emission{}; float shininess = 0, lightingWeight = 1;
+        Fields f{data, true}; f("specularColor", color); f("shininess", shininess);
+        f("emission", emission); f("lightingWeight", lightingWeight); f.Finish();
+        // Check the original double as well, before conversion could round an out-of-range value to 1.
+        const sol::object weightField = data["lightingWeight"];
+        if (weightField.valid() && weightField.get_type() != sol::type::nil)
+            Require(weightField.as<double>() >= 0 && weightField.as<double>() <= 1, "Invalid lighting weight");
+        Require(color.x >= 0 && color.y >= 0 && color.z >= 0 && shininess >= 0 &&
+                emission.x >= 0 && emission.y >= 0 && emission.z >= 0 &&
+                lightingWeight >= 0 && lightingWeight <= 1, "Invalid material parameters");
         const sol::object colorField = data["specularColor"], shineField = data["shininess"];
+        const sol::object emissionField = data["emission"];
         const bool hasColor = colorField.valid() && colorField.get_type() != sol::type::nil;
         const bool hasShininess = shineField.valid() && shineField.get_type() != sol::type::nil;
+        const bool hasEmission = emissionField.valid() && emissionField.get_type() != sol::type::nil;
+        const bool hasWeight = weightField.valid() && weightField.get_type() != sol::type::nil;
         std::string error;
         const bool edited = context.engine->EditEntityMaterial(e.Resolve(), [&](MaterialParameters& p) {
             if (hasColor) p.parameters.specularColor = color;
             if (hasShininess) p.parameters.shininess = shininess;
+            if (hasEmission) p.parameters.emission = emission;
+            if (hasWeight) p.parameters.lightingWeight = lightingWeight;
         }, error);
         Require(edited, error.c_str());
     });
@@ -359,6 +371,8 @@ void RegisterComponentBindings(sol::state& lua, LuaBindingsContext& context) {
         sol::table result = lua.create_table();
         result["specularColor"] = Vector3(parameters.parameters.specularColor);
         result["shininess"] = parameters.parameters.shininess;
+        result["emission"] = Vector3(parameters.parameters.emission);
+        result["lightingWeight"] = parameters.parameters.lightingWeight;
         return result;
     });
 }

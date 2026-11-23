@@ -32,11 +32,11 @@ See `docs/scene-assets.md` for metadata generation and scene loading.
 ~~~
 
 `shaderFile` (when hooks are used), the base `material`, and non-null
-`albedoTexture` all use this object form in version 2. A null albedo texture
+`albedoTexture` and `emissionTexture` all use this object form in version 2. A null texture
 still means clear the inherited texture; omission still means inherit. Version
 1 string references remain readable for existing projects and tests. Code that
 authors new definitions sets `definition.version = 2` and fills the matching
-`shaderReference`, `materialReference` or `albedoReference` as appropriate.
+`shaderReference`, `materialReference`, `albedoReference` or `emissionReference` as appropriate.
 
 The rest of this document describes the retained version 1 path-based format
 and the common material parameter behavior. New files should use version 2.
@@ -119,11 +119,11 @@ For example, game/materials/polished.material-instance.json:
 Version and material are required. Parameters is optional. Material must
 reference a material, not another instance; instance chains are not supported.
 
-At upload time the loader copies Material::defaultParameters, then replaces only
-the fields present in parameters. The base material is never modified. In this
-example the texture and specular color are inherited, while shininess is 96.
-The runtime MaterialInstance::parameters is a resolved snapshot; the asset's
-definition.parameters still contains only the authored shininess override.
+Runtime instances retain sparse overrides, resolved over `Material::defaultParameters`
+when binding a draw. The base material is never modified. In this example the
+texture and specular color are inherited, while shininess is 96. Reloading the
+base material updates inherited fields; explicit overrides remain intact.
+The asset's `definition.parameters` contains only the authored shininess override.
 
 | Authored field | Meaning |
 | --- | --- |
@@ -132,20 +132,67 @@ definition.parameters still contains only the authored shininess override.
 | "albedoTexture": null | Clear the texture handle; the renderer uses its fallback texture |
 | Missing specularColor / shininess | Inherit that field |
 | "specularColor": [0, 0, 0] / "shininess": 0 | Explicit zero override, **not** inheritance |
+| Missing emission / lightingWeight / emissionTexture | Inherit that field |
+| "emissionTexture": null | Clear the inherited emission texture; sample white instead |
+| "emission": [0, 0, 0] / "lightingWeight": 0 | Explicit overrides, not inheritance |
 
 For a material, absent defaults use the existing renderer defaults: no explicit
-texture, specular color [0.25, 0.25, 0.25], shininess 32.
+texture, specular color [0.25, 0.25, 0.25], shininess 32, emission [0, 0, 0]
+and lightingWeight 1.
 Colors have exactly three finite non-negative floats, shininess is a finite
 non-negative float. The color override replaces the whole vector.
+Emission is finite nonnegative HDR RGB with no upper-one cap; lightingWeight is
+finite and in [0, 1]. The emission texture multiplies emission by its sampled RGB;
+an absent or cleared texture uses white, so the authored emission remains visible.
+
+The deferred composition is `C = emission + (1-w)*albedo + w*lighting`,
+where `w` is lightingWeight. Thus zero is unlit, one is lit, and intermediate
+values blend. HDR emission contributes to the scene color and can drive bloom
+when the configured post-processing pipeline enables it. G-buffer surface hooks
+remain source-compatible: the renderer initializes `surface.emission` and
+`surface.lightingWeight` from the material before `PatchGBufferSurface`, which
+may modify them per pixel.
+
+```hlsl
+void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) {
+    float pulse = 0.5 + 0.5 * sin(Frame.simulationTimeSeconds * 3);
+    surface.emission += float3(6, 1.2, 0.2) * pulse;
+    surface.lightingWeight = 0; // Unlit albedo plus emission.
+}
+```
+
+Unlit surfaces still write depth/normals, cast shadows, and pass through tone
+mapping and postprocessing. Emission is added once regardless of light count;
+it is unaffected by shadows and does not illuminate nearby objects. Neither
+lighting weight nor albedo alpha enables transparency.
+
+Material pixel shaders receive albedo at `t0` and emission texture at `t1`.
+The built-in surface samples both with the mesh UVs and `LinearWrapSampler`. As
+with albedo, ordinary image textures are sRGB-decoded on sampling; DDS uses its
+declared format. The emission multiplier and shader output are linear HDR RGB.
+
+The material constant buffer at b2 is 32 bytes: specular RGB at offset 0,
+shininess at 12, emission RGB at 16, and lighting weight at 28. G-buffer normal
+alpha stores lighting weight. MRT3 is seeded with HDR scene color (emission and
+the unlit contribution). `ENGINE_MATERIAL_ABI_VERSION` is 2.
+`EncodeMaterialSurface(surface)`, defined in `ShaderTypes.hlsl`, produces a
+`GBufferOutput` whose `sceneColor` is `SV_Target3`. Raw G-buffer shaders must
+write `float4` outputs at `SV_Target0` through `SV_Target3`. If a raw shader
+declares b2, it must use the canonical 32-byte
+`EngineMaterial { EngineMaterialData Material; }` layout.
+Rebuild cooked games after this ABI change: shader library version 2 rejects
+older precompiled shaders with a rebuild diagnostic.
 
 CustomBuffer is caller-owned GPU state at b8, so it has no JSON representation.
 Set it at runtime through RenderingResourceManager::SetMaterialInstanceParameters
-when the host owns such a buffer. Version 1 covers the current renderer's single
-albedo slot and PBR fields; it does not introduce arbitrary uniforms/texture slots.
+when the host owns such a buffer. Both JSON versions support the fixed
+albedo/emission texture slots and surface fields, rather than arbitrary uniforms or texture slots.
 
 For scene mesh renderers, prefer `Engine::EditEntityMaterial` to editing a loaded
 material instance directly. It clones on first edit and keeps the override local
-to the entity; `SetEntityAlbedoTexture` requires a ready scene texture asset.
+to the entity; `SetEntityAlbedoTexture` and `SetEntityEmissionTexture` require a
+ready scene texture asset. Clear the emission texture through
+`EditEntityMaterial`, setting its emission texture handle to empty.
 These overrides are transient and do not alter authored scene JSON. See
 `docs/scene-assets.md` for the complete API and lifetime contract.
 

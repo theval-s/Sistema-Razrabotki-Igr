@@ -295,23 +295,25 @@ SkinnedMeshCpu ReadSkinnedMesh(Reader& in) {
     return mesh;
 }
 
-void WriteHeader(std::vector<std::uint8_t>& result, AssetKind kind, const std::vector<std::uint8_t>& body) {
+void WriteHeader(std::vector<std::uint8_t>& result, AssetKind kind, const std::vector<std::uint8_t>& body,
+                 std::uint32_t version = CookedFormatVersion) {
     result.clear();
     result.reserve(HeaderSize + body.size());
     Writer header(result);
     header.Value(Magic);
-    header.Value(CookedFormatVersion);
+    header.Value(version);
     header.Value(static_cast<std::uint32_t>(kind));
     header.Value(static_cast<std::uint64_t>(body.size()));
     header.Value(Hash(body));
     result.insert(result.end(), body.begin(), body.end());
 }
 
-std::span<const std::uint8_t> ReadHeader(std::span<const std::uint8_t> bytes, AssetKind kind) {
+std::span<const std::uint8_t> ReadHeader(std::span<const std::uint8_t> bytes, AssetKind kind,
+                                       std::uint32_t version = CookedFormatVersion) {
     Require(bytes.size() >= HeaderSize, "not a cooked asset (too short)");
     Reader header(bytes.first(HeaderSize));
     Require(header.Value<std::array<char, 8>>() == Magic, "not a cooked asset");
-    Require(header.Value<std::uint32_t>() == CookedFormatVersion,
+    Require(header.Value<std::uint32_t>() == version,
             "cooked by a different engine version; build the game again");
     Require(header.Value<std::uint32_t>() == static_cast<std::uint32_t>(kind), "cooked asset has the wrong kind");
     const auto size = header.Value<std::uint64_t>();
@@ -432,7 +434,7 @@ bool ShaderLibrary::Serialize(std::vector<std::uint8_t>& bytes, std::string& err
             out.Text(key);
             out.Array(std::span<const std::uint8_t>(bytecode));
         }
-        WriteHeader(bytes, AssetKind::Shader, body);
+        WriteHeader(bytes, AssetKind::Shader, body, CookedShaderFormatVersion);
         error.clear();
         return true;
     } catch (const std::exception& e) {
@@ -443,7 +445,7 @@ bool ShaderLibrary::Serialize(std::vector<std::uint8_t>& bytes, std::string& err
 
 bool ShaderLibrary::Deserialize(std::span<const std::uint8_t> bytes, std::string& error) {
     try {
-        Reader in(ReadHeader(bytes, AssetKind::Shader));
+        Reader in(ReadHeader(bytes, AssetKind::Shader, CookedShaderFormatVersion));
         std::map<std::string, std::vector<std::uint8_t>> shaders;
         for (auto count = in.Count(2 * sizeof(std::uint32_t)); count != 0; --count) {
             auto key = in.Text();

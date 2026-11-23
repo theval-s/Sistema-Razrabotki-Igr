@@ -15,6 +15,10 @@ using DirectX::SimpleMath::Vector3;
 struct MaterialPBRParameters {
     Vector3 specularColor{0.25f, 0.25f, 0.25f};
     float shininess = 32.0f;
+    // Linear HDR RGB, added independently of all scene lighting.
+    Vector3 emission{0.0f, 0.0f, 0.0f};
+    // Blend from unlit albedo (0) to engine lighting (1).
+    float lightingWeight = 1.0f;
 };
 
 enum class MaterialHook : uint8_t {
@@ -45,6 +49,8 @@ struct MaterialParameters {
     MaterialPBRParameters parameters;
     // Caller-owned constant buffer bound at b8. The caller uploads its contents.
     BufferHandle customBuffer;
+    // Multiplies emission; an empty handle selects the white fallback.
+    TextureHandle emissionTexture;
 };
 
 // shaderFile uses executable-relative engine/... or game/... shader roots.
@@ -74,6 +80,9 @@ struct MaterialInstance {
         std::optional<float> shininess;
         // absent = inherit; present texture handle = override; present null handle = clear.
         std::optional<TextureHandle> albedoTexture;
+        std::optional<Vector3> emission;
+        std::optional<float> lightingWeight;
+        std::optional<TextureHandle> emissionTexture;
     } overrides;
     // Caller-owned runtime state, independent of authored overrides.
     BufferHandle customBuffer;
@@ -85,6 +94,9 @@ inline MaterialParameters ResolveMaterialParameters(const Material& material, co
     if (instance.overrides.specularColor) result.parameters.specularColor = *instance.overrides.specularColor;
     if (instance.overrides.shininess) result.parameters.shininess = *instance.overrides.shininess;
     if (instance.overrides.albedoTexture) result.albedoTexture = *instance.overrides.albedoTexture;
+    if (instance.overrides.emission) result.parameters.emission = *instance.overrides.emission;
+    if (instance.overrides.lightingWeight) result.parameters.lightingWeight = *instance.overrides.lightingWeight;
+    if (instance.overrides.emissionTexture) result.emissionTexture = *instance.overrides.emissionTexture;
     if (instance.customBuffer) result.customBuffer = instance.customBuffer;
     return result;
 }

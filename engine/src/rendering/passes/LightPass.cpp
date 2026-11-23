@@ -57,7 +57,7 @@ void LightPass::Render(RenderWorld& world, RenderingContext& context, RenderingR
     context.SetRasterizerState(RasterizerState::CullFront);
     context.SetBlendState(BlendState::Additive);
     context.SetDepthState(DepthState::ReadOnly);
-    context.ClearRenderTargetView(gBuffer.resultTexture, {0, 0, 0, 1});
+    // Geometry has already seeded HDR with emission and the unlit contribution.
 
     context.SetRenderTargets({gBuffer.resultTexture}, gBuffer.depthTexture, true);
 

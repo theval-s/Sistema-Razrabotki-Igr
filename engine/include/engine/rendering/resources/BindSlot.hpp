@@ -66,6 +66,8 @@ struct BindSlots {
 
     struct Texture {
         constexpr static BindSlot Albedo{0, ShaderStage::Pixel};
+        // Material geometry pass only; t1 is reused for normals during lighting.
+        constexpr static BindSlot Emission{1, ShaderStage::Pixel};
         constexpr static BindSlot Normal{1, ShaderStage::Pixel};
         constexpr static BindSlot Material{2, ShaderStage::Pixel};
         constexpr static BindSlot Depth{3, ShaderStage::Pixel};

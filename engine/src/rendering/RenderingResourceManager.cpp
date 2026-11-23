@@ -2,9 +2,12 @@
 
 #include "RenderingFailureUtils.hpp"
 #include <climits>
+#include <cmath>
+#include <cstring>
 #include <utility>
 
 #include <engine/assets/AssetPathResolver.hpp>
+#include <engine/core/Log.hpp>
 #include <engine/core/PathUtils.hpp>
 
 namespace engine {
@@ -14,6 +17,91 @@ bool IsMaterialTexture(ID3D11ShaderResourceView* view) {
     D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
     view->GetDesc(&desc);
     return desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D;
+}
+
+bool ValidMaterialTexture(const RenderingResourceManager& resources, TextureHandle handle) {
+    if (!handle) return true;
+    const auto* texture = resources.TryGetTexture(handle);
+    return texture && IsMaterialTexture(texture->GetSRV());
+}
+
+bool ValidEmission(const Vector3& emission) {
+    return std::isfinite(emission.x) && emission.x >= 0 &&
+           std::isfinite(emission.y) && emission.y >= 0 &&
+           std::isfinite(emission.z) && emission.z >= 0;
+}
+
+bool ValidLightingWeight(float weight) {
+    return std::isfinite(weight) && weight >= 0 && weight <= 1;
+}
+
+bool ValidSurface(const MaterialPBRParameters& parameters) {
+    return ValidEmission(parameters.emission) && ValidLightingWeight(parameters.lightingWeight);
+}
+
+bool ValidSurface(const MaterialInstance::Overrides& overrides) {
+    return (!overrides.emission || ValidEmission(*overrides.emission)) &&
+           (!overrides.lightingWeight || ValidLightingWeight(*overrides.lightingWeight));
+}
+
+// Validate at material registration, including raw native ShaderSet users.
+// Missing MRT3 writes cannot be repaired by a clear or a write mask: they can
+// retain the contribution of previously drawn, now-occluded geometry.
+bool ValidateMaterialShader(const ShaderContext& shader, bool gBufferPixel) {
+    const auto reject = [](const char* reason) {
+        log::Render().error("Material shader ABI 2: {} Recompile with MaterialTemplate.hlsl or use "
+                           "GBufferOutput/EncodeMaterialSurface from ShaderTypes.hlsl.", reason);
+        return false;
+    };
+    ComPtr<ID3D11ShaderReflection> reflection;
+    if (!shader.blob || FAILED(D3DReflect(shader.blob->GetBufferPointer(), shader.blob->GetBufferSize(),
+                                         IID_PPV_ARGS(&reflection))))
+        return reject("Cannot reflect material shader.");
+    D3D11_SHADER_DESC desc{};
+    if (FAILED(reflection->GetDesc(&desc))) return reject("Cannot inspect material shader.");
+    if (gBufferPixel) {
+        unsigned targets = 0;
+        for (UINT i = 0; i < desc.OutputParameters; ++i) {
+            D3D11_SIGNATURE_PARAMETER_DESC output{};
+            if (FAILED(reflection->GetOutputParameterDesc(i, &output)))
+                return reject("Cannot inspect G-buffer outputs.");
+            if (output.SystemValueType != D3D_NAME_TARGET) continue;
+            if (output.SemanticIndex > 3 || output.ComponentType != D3D_REGISTER_COMPONENT_FLOAT32 ||
+                output.Mask != 15 || (output.ReadWriteMask & output.Mask) != 0)
+                return reject("G-buffer pixel shaders must write float4 SV_Target0 through SV_Target3.");
+            targets |= 1u << output.SemanticIndex;
+        }
+        if (targets != 15)
+            return reject("G-buffer pixel shaders must write float4 SV_Target0 through SV_Target3.");
+    }
+    for (UINT i = 0; i < desc.BoundResources; ++i) {
+        D3D11_SHADER_INPUT_BIND_DESC binding{};
+        if (FAILED(reflection->GetResourceBindingDesc(i, &binding))) return reject("Cannot inspect bindings.");
+        if (binding.Type != D3D_SIT_CBUFFER || binding.BindPoint != 2) continue;
+        auto* buffer = reflection->GetConstantBufferByName(binding.Name);
+        D3D11_SHADER_BUFFER_DESC bufferDesc{};
+        auto* variable = buffer->GetVariableByName("Material");
+        D3D11_SHADER_VARIABLE_DESC variableDesc{};
+        D3D11_SHADER_TYPE_DESC typeDesc{};
+        auto* type = variable->GetType();
+        if (std::strcmp(binding.Name, "EngineMaterial") != 0 ||
+            FAILED(buffer->GetDesc(&bufferDesc)) || bufferDesc.Size != 32 || bufferDesc.Variables != 1 ||
+            FAILED(variable->GetDesc(&variableDesc)) || variableDesc.StartOffset != 0 ||
+            FAILED(type->GetDesc(&typeDesc)) || typeDesc.Class != D3D_SVC_STRUCT || typeDesc.Members != 4)
+            return reject("EngineMaterial at b2 must match the 32-byte Common.hlsl layout.");
+        constexpr const char* names[] = {"specularColor", "shininess", "emission", "lightingWeight"};
+        constexpr UINT offsets[] = {0, 12, 16, 28};
+        constexpr UINT columns[] = {3, 1, 3, 1};
+        for (UINT member = 0; member < 4; ++member) {
+            D3D11_SHADER_TYPE_DESC field{};
+            if (FAILED(type->GetMemberTypeByIndex(member)->GetDesc(&field)) ||
+                std::strcmp(type->GetMemberTypeName(member), names[member]) != 0 ||
+                field.Offset != offsets[member] || field.Type != D3D_SVT_FLOAT ||
+                field.Rows != 1 || field.Columns != columns[member] || field.Elements != 0)
+                return reject("EngineMaterial members must match Common.hlsl offsets and types.");
+        }
+    }
+    return true;
 }
 } // namespace
 
@@ -158,6 +246,8 @@ MaterialHandle RenderingResourceManager::CreateMaterial(const MaterialDesc& desc
         static_cast<uint8_t>(MaterialHook::GBufferPS) | static_cast<uint8_t>(MaterialHook::ShadowVS);
     if ((static_cast<uint8_t>(desc.hooks) & ~knownHooks) ||
         (desc.hooks != MaterialHook::None && desc.shaderFile.empty()) ||
+        !ValidSurface(desc.defaults.parameters) ||
+        !ValidMaterialTexture(*this, desc.defaults.emissionTexture) ||
         (desc.defaults.albedoTexture && (!texture || !IsMaterialTexture(texture->srv_.Get()))) ||
         (desc.defaults.customBuffer && (!buffers_.Contains(desc.defaults.customBuffer) ||
             buffers_.Get(desc.defaults.customBuffer).type != BufferType::Constant))) return {};
@@ -205,6 +295,8 @@ MaterialHandle RenderingResourceManager::RegisterMaterial(const ShaderSet& shade
         !validShader(shaders.gBufferPassPS, ShaderType::Pixel) ||
         !validShader(shaders.skinnedGBufferPassVS, ShaderType::Vertex) ||
         !validShader(shaders.skinnedShadowPassVS, ShaderType::Vertex) ||
+        !ValidSurface(defaults.parameters) ||
+        !ValidMaterialTexture(*this, defaults.emissionTexture) ||
         (defaults.albedoTexture && (!texture || !IsMaterialTexture(texture->srv_.Get()))) ||
         (defaults.customBuffer && (!buffers_.Contains(defaults.customBuffer) ||
                                   buffers_.Get(defaults.customBuffer).type != BufferType::Constant))) return {};
@@ -219,6 +311,10 @@ MaterialHandle RenderingResourceManager::RegisterMaterial(const ShaderSet& shade
         }
     });
     if (shared) return {};
+    for (auto handle : {shaders.shadowPassVS, shaders.gBufferPassVS, shaders.gBufferPassPS,
+                        shaders.skinnedGBufferPassVS, shaders.skinnedShadowPassVS}) {
+        if (handle && !ValidateMaterialShader(shaders_.Get(handle), handle == shaders.gBufferPassPS)) return {};
+    }
     return materials_.Add(Material{.shaders = shaders, .defaultParameters = defaults});
 }
 
@@ -247,7 +343,9 @@ bool RenderingResourceManager::SetMaterialInstanceOverrides(const MaterialInstan
                                                               const MaterialInstance::Overrides& overrides) {
     auto* instance = materialInstances_.TryGet(handle);
     const auto* texture = textures_.TryGet(overrides.albedoTexture.value_or(TextureHandle{}));
-    if (!instance || (overrides.albedoTexture && *overrides.albedoTexture &&
+    if (!instance || !ValidSurface(overrides) ||
+        !ValidMaterialTexture(*this, overrides.emissionTexture.value_or(TextureHandle{})) ||
+        (overrides.albedoTexture && *overrides.albedoTexture &&
         (!texture || !IsMaterialTexture(texture->srv_.Get())))) return false;
     instance->overrides = overrides;
     return true;
@@ -266,11 +364,15 @@ bool RenderingResourceManager::SetMaterialInstanceParameters(const MaterialInsta
                                                                const MaterialParameters& parameters) {
     auto* instance = materialInstances_.TryGet(handle);
     const auto* texture = textures_.TryGet(parameters.albedoTexture);
-    if (!instance || (parameters.albedoTexture && (!texture || !IsMaterialTexture(texture->srv_.Get()))) ||
+    if (!instance || !ValidSurface(parameters.parameters) ||
+        !ValidMaterialTexture(*this, parameters.emissionTexture) ||
+        (parameters.albedoTexture && (!texture || !IsMaterialTexture(texture->srv_.Get()))) ||
         (parameters.customBuffer && (!buffers_.Contains(parameters.customBuffer) ||
             buffers_.Get(parameters.customBuffer).type != BufferType::Constant))) return false;
     instance->overrides = {.specularColor = parameters.parameters.specularColor,
-        .shininess = parameters.parameters.shininess, .albedoTexture = parameters.albedoTexture};
+        .shininess = parameters.parameters.shininess, .albedoTexture = parameters.albedoTexture,
+        .emission = parameters.parameters.emission, .lightingWeight = parameters.parameters.lightingWeight,
+        .emissionTexture = parameters.emissionTexture};
     instance->customBuffer = parameters.customBuffer;
     return true;
 }
@@ -279,6 +381,8 @@ bool RenderingResourceManager::ReplaceMaterial(const MaterialHandle live, const 
     auto* current = materials_.TryGet(live);
     auto* replacement = materials_.TryGet(staged);
     if (!current || !replacement || live == staged || replacement->instanceCount != 0) return false;
+    if (!ValidSurface(replacement->defaultParameters.parameters) ||
+        !ValidMaterialTexture(*this, replacement->defaultParameters.emissionTexture)) return false;
     const auto* texture = textures_.TryGet(replacement->defaultParameters.albedoTexture);
     if (replacement->defaultParameters.albedoTexture &&
         (!texture || !IsMaterialTexture(texture->srv_.Get()))) return false;
@@ -298,7 +402,8 @@ bool RenderingResourceManager::UpdateMaterialInstance(const MaterialInstanceHand
                                                        const MaterialInstance::Overrides& overrides) {
     auto* instance = materialInstances_.TryGet(handle);
     const auto* texture = textures_.TryGet(overrides.albedoTexture.value_or(TextureHandle{}));
-    if (!instance || !materials_.Contains(material) ||
+    if (!instance || !materials_.Contains(material) || !ValidSurface(overrides) ||
+        !ValidMaterialTexture(*this, overrides.emissionTexture.value_or(TextureHandle{})) ||
         (overrides.albedoTexture && *overrides.albedoTexture &&
             (!texture || !IsMaterialTexture(texture->srv_.Get())))) return false;
     if (instance->material != material) {

@@ -18,6 +18,9 @@ struct CpuPayload;
 
 /// Bumped whenever a cooked layout changes; builds from another version are rejected.
 inline constexpr std::uint32_t CookedFormatVersion = 1;
+/// Shader libraries also depend on engine shader interfaces, not just the file
+/// encoding. Version 2 requires the four-target material ABI and 32-byte b2.
+inline constexpr std::uint32_t CookedShaderFormatVersion = 2;
 
 /// Kinds sri-build stores as a cooked payload rather than a copy of the source.
 [[nodiscard]] ENGINE_API bool IsCookedKind(AssetKind kind);

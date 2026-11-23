@@ -7,6 +7,7 @@
 #include <engine/engine.hpp>
 #include <engine/rendering/PostProcessing.hpp>
 #include <engine/rendering/RenderingSubsystem.hpp>
+#include <engine/rendering/RenderingResourceManager.hpp>
 #include <engine/scripting/LuaRuntime.hpp>
 #include <gtest/gtest.h>
 
@@ -113,6 +114,93 @@ TEST_F(LuaRenderTest, ExecutesWithoutUiAndRevokesContextAndBorrowedTextures) {
     ASSERT_TRUE(lua.DestroyInstance(id, error)) << error;
     Render();
     EXPECT_FALSE(rendering->GetRendering().GetPostProcessing().HasPasses());
+}
+
+TEST_F(LuaRenderTest, MaterialEmissionPatchValidatesAtomicallyAndClonesPerEntity) {
+    ASSERT_TRUE(CreateNewFile(root / "base.material.json",
+        R"({"version":1,"hooks":[],"defaults":{"emission":[1,2,3],"lightingWeight":0.75}})", error)) << error;
+    ASSERT_TRUE(CreateNewFile(root / "shared.material-instance.json",
+        R"({"version":1,"material":"game/base.material.json"})", error)) << error;
+    auto& assets = host.GetSceneAssets();
+    const auto loaded = assets.LoadMaterialInstance("game/shared.material-instance.json");
+    ASSERT_TRUE(loaded);
+    const auto assetHandle = assets.RequestMaterialInstance("game/shared.material-instance.json");
+    ASSERT_TRUE(assets.IsReady(assetHandle));
+    const auto first = host.GetScene().CreateEntity("first material");
+    const auto second = host.GetScene().CreateEntity("second material");
+    MeshRenderer renderer;
+    renderer.materialInstance = assetHandle;
+    ASSERT_NE(host.GetScene().AddComponent<MeshRenderer>(first, renderer), nullptr);
+    ASSERT_NE(host.GetScene().AddComponent<MeshRenderer>(second, renderer), nullptr);
+
+    auto desc = Script(R"(
+        local first, second, step
+        local function check(e, r, g, b, w)
+            local p = e:GetMaterialParameters()
+            assert(p.emission.x == r and p.emission.y == g and p.emission.z == b)
+            assert(p.lightingWeight == w)
+        end
+        local function rejected(e, r, g, b, w)
+            local bad = {
+                {emission=Vector3.new(-1,2,3), lightingWeight=0},
+                {emission=Vector3.new(0/0,2,3), lightingWeight=0},
+                {emission=Vector3.new(math.huge,2,3), lightingWeight=0},
+                {emission=Vector3.new(9,8,7), lightingWeight=-0.1},
+                {emission=Vector3.new(9,8,7), lightingWeight=1.1},
+                {emission=Vector3.new(9,8,7), lightingWeight=math.huge},
+                {emission=Vector3.new(9,8,7), lightingWeight=0/0},
+                {emission=Vector3.new(9,8,7), unexpected=1},
+            }
+            for _, patch in ipairs(bad) do
+                assert(not pcall(function() e:SetMaterialParameters(patch) end))
+                check(e, r, g, b, w)
+            end
+        end
+        return {
+            OnStart=function()
+                first, second = Scene.FindByName('first material'), Scene.FindByName('second material')
+                check(first, 1, 2, 3, 0.75)
+                rejected(first, 1, 2, 3, 0.75)
+                check(first, 1, 2, 3, 0.75)
+                check(second, 1, 2, 3, 0.75)
+                step = 0
+            end,
+            OnUpdate=function()
+                if step == 0 then
+                    first:SetMaterialParameters{emission=Vector3.new(8,4,2), lightingWeight=0}
+                    check(first, 8, 4, 2, 0)
+                    check(second, 1, 2, 3, 0.75)
+                    step = 1
+                else
+                    rejected(first, 8, 4, 2, 0)
+                    check(first, 8, 4, 2, 0)
+                    first:SetMaterialParameters{lightingWeight=1}
+                    check(first, 8, 4, 2, 1)
+                    check(second, 1, 2, 3, 0.75)
+                end
+            end
+        }
+    )");
+    InstanceId id;
+    ASSERT_TRUE(lua.CreateInstance(desc, id, error)) << error;
+    ASSERT_TRUE(lua.StartInstance(id, error)) << error;
+    EXPECT_FALSE(host.GetEntityMaterialOverride(first)) << "invalid patches must not allocate a clone";
+    EXPECT_FALSE(host.GetEntityMaterialOverride(second));
+    ASSERT_TRUE(lua.UpdateInstance(id, 0, error)) << error;
+    const auto clone = host.GetEntityMaterialOverride(first);
+    ASSERT_TRUE(clone);
+    EXPECT_NE(clone, loaded->instance);
+    EXPECT_FALSE(host.GetEntityMaterialOverride(second));
+    ASSERT_TRUE(lua.UpdateInstance(id, 0, error)) << error;
+    EXPECT_EQ(host.GetEntityMaterialOverride(first), clone);
+    const auto& resources = rendering->GetResourceManager();
+    const auto* shared = resources.TryGetMaterialInstance(loaded->instance);
+    ASSERT_NE(shared, nullptr);
+    const auto* material = resources.TryGetMaterial(shared->material);
+    ASSERT_NE(material, nullptr);
+    const auto original = ResolveMaterialParameters(*material, *shared);
+    EXPECT_EQ(original.parameters.emission, Vector3(1, 2, 3));
+    EXPECT_FLOAT_EQ(original.parameters.lightingWeight, 0.75f);
 }
 
 TEST_F(LuaRenderTest, CallbackFaultRetiresEveryPassOfOwner) {

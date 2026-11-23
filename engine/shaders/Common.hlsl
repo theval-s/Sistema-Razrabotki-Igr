@@ -27,6 +27,8 @@ cbuffer EngineView : register(b1) {
 struct EngineMaterialData {
     float3 specularColor;
     float shininess;
+    float3 emission;
+    float lightingWeight;
 };
 
 cbuffer EngineMaterial : register(b2) {

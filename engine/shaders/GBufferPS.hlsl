@@ -2,6 +2,7 @@
 #include "ShaderTypes.hlsl"
 
 Texture2D albedoTexture : register(t0);
+Texture2D emissionTexture : register(t1);
 
 
 #ifdef MATERIAL_HAS_HOOK
@@ -16,10 +17,8 @@ GBufferOutput PSMain(GBufferInput input) {
     surface.normal = input.normal;
     surface.specularColor = Material.specularColor;
     surface.shininess = Material.shininess;
+    surface.emission = Material.emission * emissionTexture.Sample(LinearWrapSampler, input.tex).rgb;
+    surface.lightingWeight = Material.lightingWeight;
     PatchGBufferSurface(input, surface);
-    GBufferOutput output;
-    output.diffuse = surface.albedo;
-    output.normal = float4(normalize(surface.normal) * 0.5 + 0.5, 1.0);
-    output.material = float4(surface.specularColor, surface.shininess / 256.0);
-    return output;
+    return EncodeMaterialSurface(surface);
 }

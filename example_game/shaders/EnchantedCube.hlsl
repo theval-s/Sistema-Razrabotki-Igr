@@ -47,5 +47,6 @@ void PatchGBufferSurface(GBufferInput input, inout MaterialSurface surface) {
     surface.albedo = float4(saturate(violet + (glint + sparkle) * float3(0.45, 0.55, 0.85)), 1.0);
     surface.specularColor = float3(0.75, 0.48, 0.95);
     surface.shininess = 100.0;
+    surface.emission = (glint + sparkle) * float3(2.0, 3.5, 6.0);
 }
 

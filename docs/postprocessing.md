@@ -155,6 +155,11 @@ write `frame.outputColor`. Frame also provides `depth`, `normals`,
 are reflected at frame boundaries. Removing a pass or retiring its owner also
 cancels callbacks that have not yet run in the current frame.
 
+`frame.normals` stores the encoded world normal (`normal * 0.5 + 0.5`) in RGB
+and the material's lighting weight in alpha (`0` unlit, `1` lit). Use depth to
+distinguish geometry from background. Unlit and emissive contributions are
+already included in the HDR `inputColor` at `BeforeTonemap`.
+
 `ctx:SetPixelShader(shader)`, `ctx:SetRenderTarget(texture)`,
 `ctx:BindTexture(slot, texture)`, `ctx:BindConstantBuffer(slot, buffer)`, and
 `ctx:DrawFullscreen()` explicitly specify the draw. Texture slots are pixel

@@ -205,6 +205,8 @@ function Quaternion:Compose(other) end
 ---@class MaterialParametersSnapshot
 ---@field specularColor Vector3 Nonnegative RGB.
 ---@field shininess number Nonnegative.
+---@field emission Vector3 Finite nonnegative HDR RGB.
+---@field lightingWeight number Lighting blend weight in [0, 1].
 ---@class AnimationPlaybackState
 ---@field ready boolean
 ---@field playing boolean
@@ -313,7 +315,7 @@ function Entity:IsActiveCamera() end
 ---@return MaterialParametersSnapshot
 function Entity:GetMaterialParameters() end
 ---Patches an entity-local material override; does not edit the shared material asset.
----@param data {specularColor?: Vector3, shininess?: number}
+---@param data {specularColor?: Vector3, shininess?: number, emission?: Vector3, lightingWeight?: number}
 function Entity:SetMaterialParameters(data) end
 ---True only for a live, started, healthy script receiver; attachment changes reconcile at safe points.
 ---@return boolean
