@@ -11,6 +11,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QStringList>
@@ -18,6 +19,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QStyle>
+#include <QTableWidget>
 #include <QToolButton>
 #include <QTimer>
 #include <QTreeWidget>
@@ -98,12 +100,179 @@ QComboBox* albedoMode() {
 }
 
 bool selectReference(editor::AssetPicker* picker, const std::optional<engine::AssetReference>& reference,
-                     const std::string& path) {
+                      const std::string& path) {
     if (reference) return picker->selectId(reference->id);  // UUID is authoritative; path may be stale
     return path.empty() || picker->selectPath(QString::fromStdString(path));
 }
 
+QTableWidget* shaderDefinesForm(QFormLayout* form, const QString& prefix, QObject* owner,
+                               const std::function<void()>& changed) {
+    auto* table = new QTableWidget(0, 2);
+    table->setObjectName(prefix + QStringLiteral("Defines"));
+    table->setHorizontalHeaderLabels({NewAssetDialog::tr("Name"), NewAssetDialog::tr("Value")});
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    form->addRow(NewAssetDialog::tr("Defines"), table);
+    auto* buttons = new QHBoxLayout;
+    auto* add = new QPushButton(NewAssetDialog::tr("Add"));
+    add->setObjectName(prefix + QStringLiteral("AddDefine"));
+    auto* remove = new QPushButton(NewAssetDialog::tr("Remove"));
+    remove->setObjectName(prefix + QStringLiteral("RemoveDefine"));
+    buttons->addWidget(add);
+    buttons->addWidget(remove);
+    buttons->addStretch();
+    form->addRow(buttons);
+    QObject::connect(table, &QTableWidget::itemChanged, owner, [changed] { changed(); });
+    QObject::connect(add, &QPushButton::clicked, owner, [table, changed] {
+        const int row = table->rowCount();
+        table->insertRow(row);
+        table->setCurrentCell(row, 0);
+        changed();
+    });
+    QObject::connect(remove, &QPushButton::clicked, owner, [table, changed] {
+        if (table->currentRow() >= 0) table->removeRow(table->currentRow());
+        changed();
+    });
+    return table;
+}
+
+void loadShaderDefines(QTableWidget* table, const std::vector<engine::ShaderDefine>& defines) {
+    const QSignalBlocker blocker(table);
+    table->setRowCount(0);
+    for (const auto& define : defines) {
+        const int row = table->rowCount();
+        table->insertRow(row);
+        table->setItem(row, 0, new QTableWidgetItem(QString::fromStdString(define.name)));
+        table->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(define.value)));
+    }
+}
+
+std::vector<engine::ShaderDefine> shaderDefines(const QTableWidget* table) {
+    std::vector<engine::ShaderDefine> result;
+    for (int row = 0; row < table->rowCount(); ++row) {
+        const auto* name = table->item(row, 0);
+        const auto* value = table->item(row, 1);
+        result.push_back({name ? name->text().toStdString() : std::string{},
+                          value ? value->text().toStdString() : std::string{}});
+    }
+    return result;
+}
+
 }  // namespace
+
+// Shared sparse emission controls for both material and instance inspectors.
+class EmissionFields : public QObject {
+public:
+    EmissionFields(QFormLayout* form, const engine::AssetCatalog& catalog, QObject* owner,
+                   const std::function<void()>& changed) : QObject(owner) {
+        texture = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Texture, QObject::tr("(none)"));
+        texture->setObjectName(QStringLiteral("emissionTexture"));
+        mode = albedoMode();
+        mode->setObjectName(QStringLiteral("emissionTextureMode"));
+        auto* row = new QHBoxLayout;
+        row->addWidget(mode);
+        row->addWidget(texture, 1);
+        form->addRow(QObject::tr("Emission texture"), row);
+        texture->setEnabled(false);
+        QObject::connect(mode, &QComboBox::currentIndexChanged, owner, [this, changed] {
+            texture->setEnabled(mode->currentIndex() == 1);
+            changed();
+        });
+        QObject::connect(texture, &QComboBox::currentIndexChanged, owner, [this, changed] {
+            if (texture->reference()) {
+                retainedTexture.reset();
+                retainedReference.reset();
+            }
+            changed();
+        });
+        overrideEmission = new QCheckBox(QObject::tr("Emission (HDR RGB)"));
+        overrideEmission->setObjectName(QStringLiteral("overrideEmission"));
+        auto* rgb = new QHBoxLayout;
+        for (int i = 0; i != 3; ++i) {
+            components[i] = new QDoubleSpinBox;
+            components[i]->setObjectName(QStringLiteral("emission%1").arg(i));
+            components[i]->setRange(0, std::numeric_limits<float>::max());
+            components[i]->setDecimals(6);
+            components[i]->setEnabled(false);
+            QObject::connect(overrideEmission, &QCheckBox::toggled, components[i], &QWidget::setEnabled);
+            rgb->addWidget(components[i]);
+        }
+        form->addRow(overrideEmission, rgb);
+        overrideWeight = new QCheckBox(QObject::tr("Lighting weight"));
+        overrideWeight->setObjectName(QStringLiteral("overrideLightingWeight"));
+        weight = new QDoubleSpinBox;
+        weight->setObjectName(QStringLiteral("lightingWeight"));
+        weight->setRange(0, 1);
+        weight->setDecimals(6);
+        weight->setValue(1);
+        weight->setEnabled(false);
+        QObject::connect(overrideWeight, &QCheckBox::toggled, weight, &QWidget::setEnabled);
+        form->addRow(overrideWeight, weight);
+    }
+
+    void setEmission(const DirectX::SimpleMath::Vector3& value) {
+        components[0]->setValue(value.x); components[1]->setValue(value.y); components[2]->setValue(value.z);
+    }
+    void load(const engine::MaterialParameterOverrides& p) {
+        const QSignalBlocker block(texture);
+        retainedTexture = p.emissionTexture;
+        retainedReference = p.emissionReference;
+        mode->setCurrentIndex(!p.emissionTexture ? 0 : p.emissionTexture->empty() ? 2 : 1);
+        if (p.emissionTexture && !p.emissionTexture->empty() &&
+            !selectReference(texture, p.emissionReference, *p.emissionTexture))
+            texture->setCurrentIndex(-1);
+        overrideEmission->setChecked(p.emission.has_value());
+        if (p.emission) setEmission(*p.emission);
+        overrideWeight->setChecked(p.lightingWeight.has_value());
+        if (p.lightingWeight) weight->setValue(*p.lightingWeight);
+        loadedEmission = p.emission;
+        loadedWeight = p.lightingWeight;
+        for (int i = 0; i != 3; ++i) displayed[i] = components[i]->value();
+        displayedWeight = weight->value();
+    }
+    void save(engine::MaterialParameterOverrides& p, int version) const {
+        if (mode->currentIndex() == 2) p.emissionTexture = "";
+        if (mode->currentIndex() == 1) {
+            if (const auto reference = texture->reference()) {
+                p.emissionTexture = reference->path;
+                if (version == 2) p.emissionReference = reference;
+            } else if (retainedTexture && !retainedTexture->empty()) {
+                p.emissionTexture = retainedTexture;
+                if (version == 2) p.emissionReference = retainedReference;
+            }
+        }
+        if (overrideEmission->isChecked()) {
+            const bool unchanged = loadedEmission && components[0]->value() == displayed[0] &&
+                components[1]->value() == displayed[1] && components[2]->value() == displayed[2];
+            p.emission = unchanged ? *loadedEmission : DirectX::SimpleMath::Vector3(
+                static_cast<float>(components[0]->value()), static_cast<float>(components[1]->value()),
+                static_cast<float>(components[2]->value()));
+        }
+        if (overrideWeight->isChecked())
+            p.lightingWeight = loadedWeight && weight->value() == displayedWeight
+                ? *loadedWeight : static_cast<float>(weight->value());
+    }
+    bool missingTexture() const {
+        return mode->currentIndex() == 1 && !texture->reference() &&
+            (!retainedTexture || retainedTexture->empty());
+    }
+    void inherited(const engine::MaterialPBRParameters& p) {
+        if (!overrideEmission->isChecked()) setEmission(p.emission);
+        if (!overrideWeight->isChecked()) weight->setValue(p.lightingWeight);
+    }
+private:
+    editor::AssetPicker* texture = nullptr;
+    QComboBox* mode = nullptr;
+    QCheckBox* overrideEmission = nullptr;
+    QCheckBox* overrideWeight = nullptr;
+    QDoubleSpinBox* components[3]{};
+    QDoubleSpinBox* weight = nullptr;
+    std::optional<std::string> retainedTexture;
+    std::optional<engine::AssetReference> retainedReference;
+    std::optional<DirectX::SimpleMath::Vector3> loadedEmission;
+    std::optional<float> loadedWeight;
+    double displayed[3]{};
+    double displayedWeight = 1;
+};
 
 // The extensions CatalogKindForFile() takes as textures, meshes and audio clips.
 const QString ImagePatterns = QStringLiteral("*.png *.jpg *.jpeg *.tif *.tiff *.dds *.bmp");
@@ -477,6 +646,11 @@ MaterialInstanceDialog::MaterialInstanceDialog(const engine::AssetCatalog& catal
     shininess_->setEnabled(false);
     connect(override_shininess_, &QCheckBox::toggled, shininess_, &QWidget::setEnabled);
     form()->addRow(override_shininess_, shininess_);
+    emission_fields_ = new EmissionFields(form(), catalog, this, [this] { validate(); });
+    connect(findChild<QCheckBox*>(QStringLiteral("overrideEmission")), &QCheckBox::toggled,
+            this, [this](bool enabled) { if (!enabled) showInherited(); });
+    connect(findChild<QCheckBox*>(QStringLiteral("overrideLightingWeight")), &QCheckBox::toggled,
+            this, [this](bool enabled) { if (!enabled) showInherited(); });
 
     connect(material_, &QComboBox::currentIndexChanged, this, [this] {
         showInherited();
@@ -517,6 +691,7 @@ void MaterialInstanceDialog::load(const engine::MaterialInstanceDefinition& defi
     if (definition.parameters.shininess) shininess_->setValue(*definition.parameters.shininess);
     loaded_shininess_ = definition.parameters.shininess;
     displayed_shininess_ = shininess_->value();
+    emission_fields_->load(definition.parameters);
     validate();
 }
 
@@ -541,6 +716,7 @@ engine::MaterialInstanceDefinition MaterialInstanceDialog::definition() const {
         definition.parameters.shininess = loaded_shininess_ && shininess_->value() == displayed_shininess_
             ? *loaded_shininess_ : static_cast<float>(shininess_->value());
     }
+    emission_fields_->save(definition.parameters, version_);
     return definition;
 }
 
@@ -555,6 +731,7 @@ QString MaterialInstanceDialog::problem() const {
             : tr("%1 isn't in the asset catalog. Choose an albedo texture.").arg(pending_albedo_);
     }
     if (albedo_mode_->currentIndex() == 1 && !albedo_->reference()) return tr("Choose an albedo texture.");
+    if (emission_fields_->missingTexture()) return tr("Choose an emission texture.");
     return {};
 }
 
@@ -570,6 +747,8 @@ void MaterialInstanceDialog::showInherited() {
         engine::ParseMaterialDefinition(text, definition, error)) {
         inherited.specularColor = definition.defaults.specularColor.value_or(inherited.specularColor);
         inherited.shininess = definition.defaults.shininess.value_or(inherited.shininess);
+        inherited.emission = definition.defaults.emission.value_or(inherited.emission);
+        inherited.lightingWeight = definition.defaults.lightingWeight.value_or(inherited.lightingWeight);
     }
     if (!override_specular_->isChecked()) {
         specular_->setValue(inherited.specularColor);
@@ -577,6 +756,7 @@ void MaterialInstanceDialog::showInherited() {
     if (!override_shininess_->isChecked()) {
         shininess_->setValue(inherited.shininess);
     }
+    emission_fields_->inherited(inherited);
 }
 
 MaterialDialog::MaterialDialog(const engine::AssetCatalog& catalog, const QString& folder, const QString& name,
@@ -626,6 +806,7 @@ MaterialDialog::MaterialDialog(const engine::AssetCatalog& catalog, const QStrin
     shininess_->setValue(defaults.shininess);
     connect(override_shininess_, &QCheckBox::toggled, shininess_, &QWidget::setEnabled);
     form()->addRow(override_shininess_, shininess_);
+    emission_fields_ = new EmissionFields(form(), catalog, this, [this] { validate(); });
 
     const auto shader_changed = [this] {
         const bool shader = shader_->reference().has_value();
@@ -661,6 +842,7 @@ void MaterialDialog::load(const engine::MaterialDefinition& definition) {
     if (definition.defaults.shininess) shininess_->setValue(*definition.defaults.shininess);
     loaded_shininess_ = definition.defaults.shininess;
     displayed_shininess_ = shininess_->value();
+    emission_fields_->load(definition.defaults);
     validate();
 }
 
@@ -690,6 +872,7 @@ engine::MaterialDefinition MaterialDialog::definition() const {
     if (override_shininess_->isChecked()) definition.defaults.shininess =
         loaded_shininess_ && shininess_->value() == displayed_shininess_
             ? *loaded_shininess_ : static_cast<float>(shininess_->value());
+    emission_fields_->save(definition.defaults, version_);
     return definition;
 }
 
@@ -698,6 +881,7 @@ QString MaterialDialog::problem() const {
         return problem;
     }
     if (albedo_mode_->currentIndex() == 1 && !albedo_->reference()) return tr("Choose an albedo texture.");
+    if (emission_fields_->missingTexture()) return tr("Choose an emission texture.");
     if (shader_->currentIndex() < 0) return tr("Choose a shader or standard shading.");
     const bool hooked = gbuffer_vs_->isChecked() || gbuffer_ps_->isChecked() || shadow_vs_->isChecked();
     return shader_->reference() && !hooked ? tr("Pick the hooks the shader implements.") : QString();
@@ -757,6 +941,148 @@ QString SkyboxDialog::problem() const {
     if (const auto base = NewAssetDialog::problem(); !base.isEmpty()) return base;
     std::string error;
     if (!engine::ValidateSkyboxDefinition(value_, error)) return QString::fromStdString(error);
+    return {};
+}
+
+PostProcessDialog::PostProcessDialog(const engine::AssetCatalog& catalog, const QString& folder,
+    const QString& name, QWidget* parent, bool editing)
+    : NewAssetDialog(editing ? tr("Edit Postprocess") : tr("New Postprocess"), folder,
+                     QStringLiteral(".postprocess.json"), name, parent, editing) {
+    auto* help = new QLabel(tr("Choose an HLSL pixel shader and its entry point. "
+        "Pass stage, order and runtime parameters are configured in Lua. "
+        "Settings apply on the next Render.LoadShader call; restart Play to reload."));
+    help->setWordWrap(true);
+    form()->addRow(help);
+    shader_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Shader);
+    shader_->setObjectName(QStringLiteral("postprocessShader"));
+    shader_->setCurrentIndex(-1);
+    form()->addRow(tr("Shader"), shader_);
+    missing_ = new QLabel;
+    missing_->setObjectName(QStringLiteral("postprocessMissingShader"));
+    missing_->setWordWrap(true);
+    missing_->hide();
+    form()->addRow(missing_);
+    entry_ = new QLineEdit;
+    entry_->setObjectName(QStringLiteral("postprocessEntry"));
+    form()->addRow(tr("Pixel entry point"), entry_);
+    defines_ = shaderDefinesForm(form(), QStringLiteral("postprocess"), this, [this] { validate(); });
+    connect(shader_, &QComboBox::currentIndexChanged, this, [this] {
+        if (const auto chosen = shader_->reference()) {
+            value_.shader = *chosen;
+            missing_->hide();
+        }
+        validate();
+    });
+    connect(entry_, &QLineEdit::textChanged, this, &PostProcessDialog::validate);
+    load(value_);
+}
+
+void PostProcessDialog::load(const engine::PostProcessDefinition& definition) {
+    value_ = definition;
+    const QSignalBlocker shaderBlocker(shader_), entryBlocker(entry_);
+    shader_->reload();
+    if (!shader_->selectId(value_.shader.id)) shader_->setCurrentIndex(-1);
+    missing_->setText(tr("Unresolved shader: %1 (%2). The reference is preserved until you choose a replacement.")
+        .arg(QString::fromStdString(value_.shader.path), QString::fromStdString(value_.shader.id.ToString())));
+    missing_->setVisible(shader_->currentIndex() < 0 &&
+                         (value_.shader.id.IsValid() || !value_.shader.path.empty()));
+    entry_->setText(QString::fromStdString(value_.options.entryPoint));
+    loadShaderDefines(defines_, value_.options.defines);
+    validate();
+}
+
+engine::PostProcessDefinition PostProcessDialog::definition() const {
+    auto result = value_;
+    result.options.entryPoint = entry_->text().toStdString();
+    result.options.defines = shaderDefines(defines_);
+    return result;
+}
+
+QString PostProcessDialog::problem() const {
+    if (const auto base = NewAssetDialog::problem(); !base.isEmpty()) return base;
+    std::string error;
+    if (!engine::ValidatePostProcessDefinition(definition(), error)) return QString::fromStdString(error);
+    return {};
+}
+
+RenderPipelineDialog::RenderPipelineDialog(const engine::AssetCatalog& catalog, const QString& folder,
+    const QString& name, QWidget* parent, bool editing)
+    : NewAssetDialog(editing ? tr("Edit Render Pipeline") : tr("New Render Pipeline"), folder,
+                     QStringLiteral(".pipeline.json"), name, parent, editing) {
+    auto* help = new QLabel(tr("Choose one HLSL shader containing both vertex and pixel entry points. "
+        "Depth uses reverse-Z. Alpha uses straight alpha; additive uses ONE + ONE. "
+        "Settings apply on the next pipeline load; restart Play to reload."));
+    help->setWordWrap(true);
+    form()->addRow(help);
+    shader_ = new editor::AssetPicker(catalog, engine::CatalogAssetKind::Shader);
+    shader_->setObjectName(QStringLiteral("pipelineShader"));
+    shader_->setCurrentIndex(-1);
+    form()->addRow(tr("Shader"), shader_);
+    missing_ = new QLabel;
+    missing_->setObjectName(QStringLiteral("pipelineMissingShader"));
+    missing_->setWordWrap(true);
+    missing_->hide();
+    form()->addRow(missing_);
+    vertex_ = new QLineEdit;
+    vertex_->setObjectName(QStringLiteral("pipelineVertexEntry"));
+    form()->addRow(tr("Vertex entry point"), vertex_);
+    pixel_ = new QLineEdit;
+    pixel_->setObjectName(QStringLiteral("pipelinePixelEntry"));
+    form()->addRow(tr("Pixel entry point"), pixel_);
+    blend_ = new QComboBox;
+    blend_->setObjectName(QStringLiteral("pipelineBlend"));
+    blend_->addItems({QStringLiteral("Opaque"), QStringLiteral("Alpha"), QStringLiteral("Additive")});
+    form()->addRow(tr("Blend"), blend_);
+    depth_ = new QComboBox;
+    depth_->setObjectName(QStringLiteral("pipelineDepth"));
+    depth_->addItems({QStringLiteral("Disabled"), QStringLiteral("ReadOnly"), QStringLiteral("ReadWrite")});
+    form()->addRow(tr("Depth"), depth_);
+    defines_ = shaderDefinesForm(form(), QStringLiteral("pipeline"), this, [this] { validate(); });
+    connect(shader_, &QComboBox::currentIndexChanged, this, [this] {
+        if (const auto chosen = shader_->reference()) {
+            value_.shader = *chosen;
+            missing_->hide();
+        }
+        validate();
+    });
+    connect(vertex_, &QLineEdit::textChanged, this, &RenderPipelineDialog::validate);
+    connect(pixel_, &QLineEdit::textChanged, this, &RenderPipelineDialog::validate);
+    connect(blend_, &QComboBox::currentIndexChanged, this, &RenderPipelineDialog::validate);
+    connect(depth_, &QComboBox::currentIndexChanged, this, &RenderPipelineDialog::validate);
+    load(value_);
+}
+
+void RenderPipelineDialog::load(const engine::RenderPipelineDefinition& definition) {
+    value_ = definition;
+    const QSignalBlocker a(shader_), b(vertex_), c(pixel_), d(blend_), e(depth_);
+    shader_->reload();
+    if (!shader_->selectId(value_.shader.id)) shader_->setCurrentIndex(-1);
+    missing_->setText(tr("Unresolved shader: %1 (%2). The reference is preserved until you choose a replacement.")
+        .arg(QString::fromStdString(value_.shader.path), QString::fromStdString(value_.shader.id.ToString())));
+    missing_->setVisible(shader_->currentIndex() < 0 &&
+                         (value_.shader.id.IsValid() || !value_.shader.path.empty()));
+    vertex_->setText(QString::fromStdString(value_.vertexEntryPoint));
+    pixel_->setText(QString::fromStdString(value_.pixelEntryPoint));
+    blend_->setCurrentIndex(static_cast<int>(value_.blend));
+    depth_->setCurrentIndex(static_cast<int>(value_.depth));
+    loadShaderDefines(defines_, value_.defines);
+    validate();
+}
+
+engine::RenderPipelineDefinition RenderPipelineDialog::definition() const {
+    auto result = value_;
+    result.vertexEntryPoint = vertex_->text().toStdString();
+    result.pixelEntryPoint = pixel_->text().toStdString();
+    if (blend_->currentIndex() >= 0) result.blend = static_cast<engine::ProceduralBlend>(blend_->currentIndex());
+    if (depth_->currentIndex() >= 0) result.depth = static_cast<engine::ProceduralDepth>(depth_->currentIndex());
+    result.defines = shaderDefines(defines_);
+    return result;
+}
+
+QString RenderPipelineDialog::problem() const {
+    if (const auto base = NewAssetDialog::problem(); !base.isEmpty()) return base;
+    std::string error;
+    if (!engine::ValidateRenderPipelineDefinition(definition(), error)) return QString::fromStdString(error);
     return {};
 }
 

@@ -68,6 +68,12 @@ void SelectionMaskPass::Render(RenderWorld& world, RenderingContext& context, Re
                 boundVS = draw.vertexShader;
             }
             const auto params = ResolveMaterialParameters(*draw.material, *draw.instance);
+            resources.materialCBuffer.Update(context, [&](MaterialBufferData& data) {
+                data.specularColor = params.parameters.specularColor;
+                data.shininess = params.parameters.shininess;
+                data.emission = params.parameters.emission;
+                data.lightingWeight = params.parameters.lightingWeight;
+            });
             if (params.customBuffer) context.BindCBuffer(BindSlots::CBuffer::MaterialCustomBuffer, params.customBuffer);
             else context.UnbindCBuffer(BindSlots::CBuffer::MaterialCustomBuffer);
             context.SetShaderResources(BindSlots::Texture::Albedo,

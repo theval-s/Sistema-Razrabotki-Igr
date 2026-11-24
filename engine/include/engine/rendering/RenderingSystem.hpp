@@ -8,6 +8,7 @@
 #include <engine/engine_export.hpp>
 #include <engine/rendering/RenderingDiagnostics.hpp>
 #include <engine/rendering/RenderDebugView.hpp>
+#include <engine/rendering/PostProcessing.hpp>
 
 #include <engine/rendering/passes/GBufferPass.hpp>
 #include <engine/rendering/passes/LightPass.hpp>
@@ -49,6 +50,7 @@ struct ENGINE_API RenderingSystem {
     [[nodiscard]] RenderingContext& GetRenderingContext();
     [[nodiscard]] RenderingResourceManager& GetResourceManager();
     [[nodiscard]] RenderWorld& GetWorld();
+    [[nodiscard]] PostProcessing& GetPostProcessing() noexcept { return postProcessing_; }
     /// Engine thread. Changing either budget clears live particles. Invalid limits leave them intact.
     [[nodiscard]] bool SetParticleBudget(ParticleBudget budget);
     [[nodiscard]] ParticleBudget GetParticleBudget() const noexcept { return particleBudget_; }
@@ -79,6 +81,7 @@ private:
     void RecordFailure(RenderingFailure failure);
 
     RenderingContext renderingContext_{};
+    PostProcessing postProcessing_{};
     RenderWorld world_{};
     RenderingResources resources_{0, 0};
     ParticleBudget particleBudget_{};
@@ -86,6 +89,7 @@ private:
     ParticlePreview particlePreview_{};
     float particlePrewarmRemaining_{};
     ParticlePass* particlePass_{}; // owned by renderPasses_
+    PresentPass* presentPass_{}; // owned by renderPasses_
     std::vector<std::unique_ptr<RenderPass>> renderPasses_{};
     bool ready_ = false;
     RenderingDiagnostics diagnostics_{};

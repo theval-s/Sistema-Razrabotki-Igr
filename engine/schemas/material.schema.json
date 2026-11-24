@@ -43,6 +43,24 @@
         },
         "shininess": {
           "$ref": "#/definitions/number"
+        },
+        "emission": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {"$ref": "#/definitions/number"}
+        },
+        "lightingWeight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "emissionTexture": {
+          "anyOf": [
+            {"$ref": "#/definitions/reference"},
+            {"$ref": "#/definitions/assetReference"},
+            {"type": "null"}
+          ]
         }
       }
     }

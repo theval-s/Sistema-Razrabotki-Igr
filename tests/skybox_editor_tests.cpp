@@ -15,6 +15,8 @@
 
 #include <DockManager.h>
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
@@ -102,6 +104,49 @@ TEST_F(SkyboxEditorTests, CubemapChoicesAndDropsAreDdsOnlyAndUnresolvedReference
     EXPECT_EQ(content::splitAssetName("Sky.skybox.json", false).first, "Sky");
     EXPECT_FALSE(editor::assetIcon(engine::CatalogAssetKind::Skybox).isNull());
     EXPECT_EQ(editor::assetKindName(engine::CatalogAssetKind::Skybox), "Skyboxes");
+}
+
+TEST_F(SkyboxEditorTests, MaterialEmissionOverridesPreserveSparseClearAndMissingReferences) {
+    engine::AssetCatalog catalog;
+    content::MaterialInstanceDialog dialog(catalog, editor::toQString(project.ContentDir()), "Instance", nullptr);
+    engine::MaterialInstanceDefinition source;
+    source.version = 2;
+    source.parameters.emission = DirectX::SimpleMath::Vector3(4.25f, 2.f, 0.5f);
+    source.parameters.lightingWeight = 0.25f;
+    source.parameters.emissionTexture = "game/missing.png";
+    source.parameters.emissionReference = engine::AssetReference{engine::NewUuid(), "game/missing.png"};
+    dialog.load(source);
+    auto result = dialog.definition();
+    ASSERT_TRUE(result.parameters.emission);
+    EXPECT_EQ(*result.parameters.emission, *source.parameters.emission);
+    EXPECT_EQ(result.parameters.lightingWeight, source.parameters.lightingWeight);
+    ASSERT_TRUE(result.parameters.emissionReference);
+    EXPECT_EQ(result.parameters.emissionReference->id, source.parameters.emissionReference->id);
+    auto* mode = dialog.findChild<QComboBox*>("emissionTextureMode");
+    auto* emission = dialog.findChild<QCheckBox*>("overrideEmission");
+    ASSERT_NE(mode, nullptr);
+    ASSERT_NE(emission, nullptr);
+    mode->setCurrentIndex(2);
+    emission->setChecked(false);
+    result = dialog.definition();
+    ASSERT_TRUE(result.parameters.emissionTexture);
+    EXPECT_TRUE(result.parameters.emissionTexture->empty());
+    EXPECT_FALSE(result.parameters.emissionReference);
+    EXPECT_FALSE(result.parameters.emission);
+    mode->setCurrentIndex(0);
+    EXPECT_FALSE(dialog.definition().parameters.emissionTexture);
+
+    content::MaterialDialog material(catalog, editor::toQString(project.ContentDir()), "Material", nullptr);
+    engine::MaterialDefinition defaults;
+    defaults.version = 1;
+    defaults.defaults.emissionTexture = "";
+    defaults.defaults.emission = DirectX::SimpleMath::Vector3(3.f, 0.f, 1.f);
+    material.load(defaults);
+    const auto saved = material.definition();
+    EXPECT_EQ(saved.version, 1);
+    EXPECT_EQ(saved.defaults.emissionTexture, defaults.defaults.emissionTexture);
+    ASSERT_TRUE(saved.defaults.emission);
+    EXPECT_EQ(*saved.defaults.emission, *defaults.defaults.emission);
 }
 
 TEST_F(SkyboxEditorTests, EnvironmentEditsPreserveMissingUuidAndHdrAndParticipateInHistory) {

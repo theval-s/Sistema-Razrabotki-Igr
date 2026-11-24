@@ -11,6 +11,8 @@
 #include <engine/assets/MaterialDefinition.hpp>
 #include <engine/assets/ModelImport.hpp>
 #include <engine/assets/ParticleEffectDefinition.hpp>
+#include <engine/assets/PostProcessDefinition.hpp>
+#include <engine/assets/RenderPipelineDefinition.hpp>
 #include <engine/assets/SkyboxDefinition.hpp>
 
 #include "asset_operations.hpp"
@@ -24,6 +26,7 @@ class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QTableWidget;
 class QTimer;
 
 namespace editor {
@@ -33,6 +36,7 @@ class AssetPicker;
 namespace content {
 
 class ColorButton;
+class EmissionFields;
 
 /// File dialog filter for images that import as textures.
 [[nodiscard]] QString imageFilter();
@@ -83,6 +87,41 @@ protected:
 private:
     engine::SkyboxDefinition value_;
     editor::AssetPicker* cubemap_ = nullptr;
+    QLabel* missing_ = nullptr;
+};
+
+class PostProcessDialog : public NewAssetDialog {
+public:
+    PostProcessDialog(const engine::AssetCatalog& catalog, const QString& folder, const QString& name,
+                      QWidget* parent, bool editing = false);
+    void load(const engine::PostProcessDefinition& definition);
+    [[nodiscard]] engine::PostProcessDefinition definition() const;
+protected:
+    [[nodiscard]] QString problem() const override;
+private:
+    engine::PostProcessDefinition value_;
+    editor::AssetPicker* shader_ = nullptr;
+    QLineEdit* entry_ = nullptr;
+    QTableWidget* defines_ = nullptr;
+    QLabel* missing_ = nullptr;
+};
+
+class RenderPipelineDialog : public NewAssetDialog {
+public:
+    RenderPipelineDialog(const engine::AssetCatalog& catalog, const QString& folder, const QString& name,
+                         QWidget* parent, bool editing = false);
+    void load(const engine::RenderPipelineDefinition& definition);
+    [[nodiscard]] engine::RenderPipelineDefinition definition() const;
+protected:
+    [[nodiscard]] QString problem() const override;
+private:
+    engine::RenderPipelineDefinition value_;
+    editor::AssetPicker* shader_ = nullptr;
+    QLineEdit* vertex_ = nullptr;
+    QLineEdit* pixel_ = nullptr;
+    QComboBox* blend_ = nullptr;
+    QComboBox* depth_ = nullptr;
+    QTableWidget* defines_ = nullptr;
     QLabel* missing_ = nullptr;
 };
 
@@ -190,6 +229,7 @@ private:
     ColorButton* specular_ = nullptr;
     QCheckBox* override_shininess_ = nullptr;
     QDoubleSpinBox* shininess_ = nullptr;
+    EmissionFields* emission_fields_ = nullptr;
     int version_ = 2;
     std::optional<float> loaded_shininess_;
     double displayed_shininess_ = 0;
@@ -221,6 +261,7 @@ private:
     ColorButton* specular_ = nullptr;
     QCheckBox* override_shininess_ = nullptr;
     QDoubleSpinBox* shininess_ = nullptr;
+    EmissionFields* emission_fields_ = nullptr;
     int version_ = 2;
     std::optional<float> loaded_shininess_;
     double displayed_shininess_ = 0;

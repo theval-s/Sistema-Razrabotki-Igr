@@ -8,6 +8,8 @@
 #include <engine/assets/AssetCooking.hpp>
 #include <engine/assets/AssetPathResolver.hpp>
 #include <engine/assets/AssetPipeline.hpp>
+#include <engine/assets/PostProcessDefinition.hpp>
+#include <engine/assets/RenderPipelineDefinition.hpp>
 #include <engine/core/Content.hpp>
 #include <engine/core/FileSystem.hpp>
 #include <engine/core/Pak.hpp>
@@ -330,6 +332,22 @@ namespace {
         validateSkeletal(engine::CatalogAssetKind::AnimationClip, engine::AssetKind::AnimationClip, clips);
         validateSkeletal(engine::CatalogAssetKind::SkinnedMesh, engine::AssetKind::SkinnedMesh, meshes);
 
+        for (const auto* entry : catalog.List(engine::CatalogAssetKind::PostProcess)) {
+            engine::PostProcessDefinition definition;
+            engine::ShaderVariant variant;
+            if (!engine::LoadPostProcessDefinition(entry->source, definition, error) ||
+                !engine::PostProcessShaderVariant(definition, catalog, variant, error))
+                errors.push_back(entry->path + ": " + error);
+        }
+
+        for (const auto* entry : catalog.List(engine::CatalogAssetKind::RenderPipeline)) {
+            engine::RenderPipelineDefinition definition;
+            std::array<engine::ShaderVariant, 2> variants;
+            if (!engine::LoadRenderPipelineDefinition(entry->source, definition, error) ||
+                !engine::RenderPipelineShaderVariants(definition, catalog, variants, error))
+                errors.push_back(entry->path + ": " + error);
+        }
+
         for (const auto* entry : catalog.List(engine::CatalogAssetKind::Skybox)) {
             engine::CpuPayload payload;
             engine::AssetDesc desc;
@@ -476,6 +494,22 @@ namespace {
             }
         }
 
+        const auto checkMaterialTextures = [&](const engine::MaterialParameterOverrides& parameters,
+                                                const std::string& context) {
+            const auto check = [&](const std::optional<std::string>& path,
+                                   const std::optional<engine::AssetReference>& reference, const char* field) {
+                if (!path || path->empty()) return;
+                const auto* entry = reference ? catalog.Find(reference->id, engine::CatalogAssetKind::Texture)
+                                              : catalog.FindPath(engine::AssetPathResolver::ToName(
+                                                  engine::AssetPathResolver::ResolveTexture({.path =
+                                                      engine::AssetPathResolver::DefaultPath(*path, engine::AssetKind::Texture)})));
+                if (!entry || entry->metadata.kind != engine::CatalogAssetKind::Texture)
+                    errors.push_back(context + ": " + field + " references missing or wrong-kind texture " +
+                        (reference ? reference->id.ToString() : *path));
+            };
+            check(parameters.albedoTexture, parameters.albedoReference, "albedoTexture");
+            check(parameters.emissionTexture, parameters.emissionReference, "emissionTexture");
+        };
         engine::MaterialImporter materialImporter;
 
         for (const auto* material :
@@ -498,7 +532,30 @@ namespace {
             )) {
 
                 errors.push_back(material->path + ": " + error);
+            } else {
+                checkMaterialTextures(payload.material.definition.defaults, material->path);
             }
+        }
+        for (const auto* instance : catalog.List(engine::CatalogAssetKind::MaterialInstance)) {
+            engine::AssetDesc desc;
+            desc.name = instance->path;
+            desc.path = instance->source;
+            desc.catalog = &catalog;
+            engine::CpuPayload payload;
+            error.clear();
+            if (!engine::MaterialInstanceImporter{}.ReadCpu(desc, nullptr, payload, error)) {
+                errors.push_back(instance->path + ": " + error);
+                continue;
+            }
+            const auto& definition = payload.materialInstance;
+            checkMaterialTextures(definition.parameters, instance->path);
+            const auto* parent = definition.materialReference
+                ? catalog.Find(definition.materialReference->id, engine::CatalogAssetKind::Material)
+                : catalog.FindPath(engine::AssetPathResolver::ToName(engine::AssetPathResolver::ResolveMaterial({
+                    .path = engine::AssetPathResolver::DefaultPath(definition.material, engine::AssetKind::Material)})));
+            if (!parent || parent->metadata.kind != engine::CatalogAssetKind::Material)
+                errors.push_back(instance->path + ": material references missing or wrong-kind asset " +
+                    definition.material);
         }
 
         return errors.empty();

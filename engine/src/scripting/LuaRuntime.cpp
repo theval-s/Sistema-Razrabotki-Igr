@@ -2,6 +2,11 @@
 #include <engine/scripting/LuaRuntime.hpp>
 #include "LuaBehaviorTree.hpp"
 #include <engine/assets/AssetSystem.hpp>
+#include <engine/assets/PostProcessDefinition.hpp>
+#include <engine/assets/RenderPipelineDefinition.hpp>
+#include <engine/rendering/PostProcessing.hpp>
+#include <engine/rendering/RenderingSubsystem.hpp>
+#include "../rendering/RenderingFailureUtils.hpp"
 #include <engine/core/Content.hpp>
 #include <chrono>
 
@@ -171,6 +176,7 @@ namespace engine {
             bool faulted = false;
             bool destroying = false;
             UiOwner uiOwner;
+            PostProcessOwner renderOwner;
             std::string failure;
 
 
@@ -228,6 +234,34 @@ namespace engine {
             }
         };
         std::shared_ptr<UiLink> uiLink;
+        struct RenderCallbackRecord {
+            std::uint64_t id;
+            PostProcessOwner owner;
+            InstanceId instance;
+            sol::protected_function function;
+            PostProcessPass pass;
+            std::string name;
+        };
+        std::vector<RenderCallbackRecord> renderCallbacks;
+        std::uint64_t nextRenderCallback = 1;
+        std::exception_ptr renderDeviceFailure;
+        bool renderExecuting = false;
+        PostProcessing* RenderBackend() const noexcept {
+            auto* host = bindingsContext.engine;
+            auto* subsystem = host ? host->GetSubsystem<RenderingSubsystem>() : nullptr;
+            return subsystem ? &subsystem->GetRendering().GetPostProcessing() : nullptr;
+        }
+        void RetireRender(Instance& instance) noexcept {
+            if (instance.renderOwner.value) {
+                if (auto* backend = RenderBackend()) backend->ReleaseOwner(instance.renderOwner);
+                std::erase_if(renderCallbacks, [&](const auto& entry) { return entry.owner == instance.renderOwner; });
+            }
+        }
+        PostProcessOwner RenderOwnerForCall(bool setup = false);
+        void CheckRenderHandle(PostProcessOwner owner, std::uint64_t handleSession);
+        void RegisterRender();
+        template<class Context, class Frame>
+        void DispatchRender(std::uint64_t callback, Context&, const Frame&);
         std::shared_ptr<UiDispatcher> uiDispatcher;
         UiSubsystem* ui = nullptr;
         std::weak_ptr<void> uiLifetime;
@@ -249,7 +283,7 @@ namespace engine {
         void FailPersistenceUi(Instance& instance, const std::string& error) {
             // Preserve the established retry policy in runtimes without UI. UI-owning
             // receivers must retire their documents/modal capture on a hook failure.
-            if (!instance.uiOwner.IsEmpty()) {
+            if (!instance.uiOwner.IsEmpty() || instance.renderOwner.value) {
                 instance.faulted = true;
                 instance.failure = error;
             }
@@ -267,10 +301,13 @@ namespace engine {
                 // reported Lua error, rather than leave a live, undispatchable UI.
                 if (owner && std::uncaught_exceptions() > exceptions) {
                     owner->faulted = true;
-                    try { owner->failure = "Native exception escaped a script callback"; }
+                    try { if (owner->failure.empty()) owner->failure = "Native exception escaped a script callback"; }
                     catch (...) {} // Retirement must still happen on allocation failure.
                 }
-                if (owner && owner->faulted) runtime.RetireUi(*owner);
+                if (owner && owner->faulted) {
+                    runtime.RetireRender(*owner);
+                    runtime.RetireUi(*owner);
+                }
                 runtime.activeUiOwner = previous;
             }
         };
@@ -486,6 +523,7 @@ namespace engine {
     }
 
     #include "LuaUiBindings.inl"
+    #include "LuaRenderBindings.inl"
 
     LuaRuntime::LuaRuntime()
         : impl_(std::make_unique<Impl>()) {
@@ -635,6 +673,7 @@ namespace engine {
             }
             impl_->RegisterAutoloadDispatch();
             impl_->RegisterUi();
+            impl_->RegisterRender();
             sol::table entity = (*impl_->state)["Entity"];
             entity.set_function("HasScript", [this](const LuaEntityHandle& handle) { return HasScript(handle); });
             entity.set_function("HasScriptMethod", [this](const LuaEntityHandle& handle, const std::string& name) {
@@ -727,7 +766,10 @@ namespace engine {
             }
             catch (...) {
                 // Shutdown must release every Lua reference even if diagnostics fail.
-                if (auto* record = impl_->instances.TryGet(*it); record && *record) impl_->RetireUi(**record);
+                if (auto* record = impl_->instances.TryGet(*it); record && *record) {
+                    impl_->RetireRender(**record);
+                    impl_->RetireUi(**record);
+                }
                 impl_->instances.Remove(*it);
             }
         }
@@ -738,6 +780,8 @@ namespace engine {
         if (auto* ui = impl_->Ui(); ui && !impl_->uiSession.IsEmpty())
             UiRuntimeAccess::EndSession(*ui, impl_->uiSession);
         impl_->uiCallbacks.clear();
+        impl_->renderCallbacks.clear();
+        impl_->renderDeviceFailure = {};
         impl_->uiModels.clear();
         if (impl_->uiLink) impl_->uiLink->runtime = nullptr;
         impl_->uiDispatcher.reset();
@@ -1285,6 +1329,7 @@ namespace engine {
         if (record.active) return SetError(error, "Cannot destroy an active script instance", false);
         Impl::Scope scope(*impl_, record.desc.owner ? record.desc.owner->GetScene() : nullptr);
         record.destroying = true;
+        impl_->RetireRender(record);
         struct ReleaseUi {
             Impl& runtime; UiOwner owner;
             ~ReleaseUi() {
@@ -1325,7 +1370,10 @@ namespace engine {
                 }
                 catch (...) {
                     // Keep cleanup progressing even if diagnostic allocation fails.
-                    if (auto* remaining = impl_->instances.TryGet(handle); remaining && *remaining) impl_->RetireUi(**remaining);
+                    if (auto* remaining = impl_->instances.TryGet(handle); remaining && *remaining) {
+                        impl_->RetireRender(**remaining);
+                        impl_->RetireUi(**remaining);
+                    }
                     impl_->instances.Remove(handle);
                 }
             }

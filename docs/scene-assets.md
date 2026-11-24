@@ -287,6 +287,9 @@ eight corners into world space, including parents and rotation. Ray direction is
 normalized internally; hits are sorted nearest-first and report nonnegative world
 distance. Both queries include boundary hits. They are broad-phase AABB queries,
 not triangle-accurate tests.
+The newer `RaycastBounds` and `RaycastBoundsAll` add filtering and explicit
+success/error results; they also support posed renderer bounds. For collider
+queries, camera rays, and Lua picking see [raycasting.md](raycasting.md).
 
 ## Per-entity material edits
 

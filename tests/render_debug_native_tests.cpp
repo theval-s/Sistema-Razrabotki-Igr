@@ -905,6 +905,24 @@ TEST(RenderDebugNative, ParticlePreviewUsesRealDeltaFiltersOwnersAndPreservesPau
         for (const auto& pixel : hdr.pixels) peak = std::max(peak, pixel[channel]);
         return peak;
     };
+    const auto expectFrozen = [&](const std::vector<Pixel>& expected) {
+        ASSERT_EQ(hdr.pixels.size(), expected.size());
+        // HDR storage is FP16: unchanged particles can round to adjacent values
+        // across draws. Keep simulation-step/population checks exact above.
+        const auto orderedHalf = [](float value) {
+            const auto bits = DirectX::PackedVector::XMConvertFloatToHalf(value);
+            return (bits & 0x8000) ? -int(bits & 0x7fff) : int(bits);
+        };
+        for (size_t i = 0; i < expected.size(); ++i) {
+            for (size_t c = 0; c < 4; ++c) {
+                const float actual = hdr.pixels[i][c], reference = expected[i][c];
+                ASSERT_TRUE(std::isfinite(actual) && std::isfinite(reference));
+                ASSERT_LE(std::abs(orderedHalf(actual) - orderedHalf(reference)), 1)
+                    << "Pixel (" << i % hdr.width << ", " << i / hdr.width
+                    << "), channel " << c << ": " << actual << " vs " << reference;
+            }
+        }
+    };
 
     ASSERT_NO_FATAL_FAILURE(render());
     pause();
@@ -924,7 +942,7 @@ TEST(RenderDebugNative, ParticlePreviewUsesRealDeltaFiltersOwnersAndPreservesPau
     for (int i = 0; i < 3; ++i) {
         ASSERT_NO_FATAL_FAILURE(render());
         ASSERT_NO_FATAL_FAILURE(sample(2, 2));
-        EXPECT_EQ(hdr.pixels, frozen);
+        ASSERT_NO_FATAL_FAILURE(expectFrozen(frozen));
     }
     ASSERT_TRUE(renderer.Reinitialize({files.window, 240, 180}));
     ASSERT_NO_FATAL_FAILURE(render());
@@ -935,7 +953,7 @@ TEST(RenderDebugNative, ParticlePreviewUsesRealDeltaFiltersOwnersAndPreservesPau
     EXPECT_GT(channelPeak(0), 1);
     const auto resized = hdr.pixels;
     ASSERT_NO_FATAL_FAILURE(render());
-    EXPECT_EQ(hdr.pixels, resized);
+    ASSERT_NO_FATAL_FAILURE(expectFrozen(resized));
 
     preview.allEmitters = true;
     preview.paused = false;
@@ -985,7 +1003,7 @@ TEST(RenderDebugNative, ParticlePreviewUsesRealDeltaFiltersOwnersAndPreservesPau
     realDelta = 0.25;
     const auto warmed = hdr.pixels;
     ASSERT_NO_FATAL_FAILURE(render());
-    EXPECT_EQ(hdr.pixels, warmed);
+    ASSERT_NO_FATAL_FAILURE(expectFrozen(warmed));
     EXPECT_EQ(renderer.GetParticleStats().simulationStep, 17u);
 
     // A pending warm-up and burst must not survive the reset boundary.

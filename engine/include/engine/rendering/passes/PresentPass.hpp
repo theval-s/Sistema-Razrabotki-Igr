@@ -13,6 +13,9 @@ struct ENGINE_API PresentPass : RenderPass {
         RenderingResources& resources) override;
 
     void Render(RenderWorld& world, RenderingContext& context, RenderingResources& resources) override;
+    void RenderTo(RenderWorld& world, RenderingContext& context, RenderingResources& resources,
+                  TextureHandle sceneColor, TextureHandle target, bool builtinTonemappingEnabled = true);
+    [[nodiscard]] TextureHandle GetBackbuffer() const noexcept { return backBufferView_; }
 
     bool PreReinitialize(RenderingResourceManager& resourceManager, RenderingContext& context,
         RenderingResources& resources) override;
@@ -25,7 +28,7 @@ private:
         uint32_t debugView = 0;
         float nearPlane = 0.0f;
         float farPlane = 0.0f;
-        float padding = 0.0f;
+        uint32_t builtinTonemappingEnabled = 1;
     };
     static_assert(sizeof(PresentBufferData) == 16);
     BufferHandle presentBuffer_;

@@ -181,6 +181,8 @@ public:
         const std::function<void(MaterialParameters&)>& edit, std::string& error);
     [[nodiscard]] ENGINE_API bool SetEntityAlbedoTexture(entt::entity entity,
         AssetHandle<TextureAsset> texture, std::string& error);
+    [[nodiscard]] ENGINE_API bool SetEntityEmissionTexture(entt::entity entity,
+        AssetHandle<TextureAsset> texture, std::string& error);
     /// Transient clone owned by the active scene runtime; empty if none exists.
     [[nodiscard]] ENGINE_API MaterialInstanceHandle GetEntityMaterialOverride(entt::entity entity) const;
     /// Discards the transient clone so the entity uses its authored material instance again.

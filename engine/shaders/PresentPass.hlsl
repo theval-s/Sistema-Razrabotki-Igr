@@ -37,7 +37,7 @@ cbuffer PresentParameters : register(b5) {
     uint DebugView;
     float NearPlane;
     float FarPlane;
-    float PresentPadding;
+    uint BuiltinTonemappingEnabled;
 };
 #ifdef SELECTION_OUTLINE
 Texture2D<float2> SelectionMask : register(t16);
@@ -67,7 +67,7 @@ float4 PSMain(PS_IN input) : SV_Target
             float linearDepth = 1 - saturate((z - NearPlane) / (FarPlane - NearPlane));
             result = isfinite(linearDepth) ? linearDepth.xxx : float3(0, 0, 0);
         }
-    } else if (DebugView != 1 && DebugView != 2) {
+    } else if (DebugView == 0 && BuiltinTonemappingEnabled != 0) {
         result = ReinhardTonemap(result);
     }
     // Albedo is stored color; normals already contain worldNormal * .5 + .5.

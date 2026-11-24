@@ -448,7 +448,7 @@ bool AssetSystem::ReloadReady(LoadJob& job, std::string& error) {
         }
         const bool committed = resources.UpdateMaterialInstance(record->value->instance, job.resolvedMaterial,
             MaterialInstanceImporter::MakeOverrides(job.payload.materialInstance.parameters,
-                job.resolvedParameters.albedoTexture));
+                job.resolvedParameters.albedoTexture, job.resolvedParameters.emissionTexture));
         resources.DestroyMaterialInstance(staged.materialInstance);
         if (!committed) { error = "cannot update the loaded material instance"; return false; }
         record->value->definition = std::move(job.payload.materialInstance);
@@ -874,6 +874,9 @@ AssetSystem::DependencyState AssetSystem::ResolveDependencies(LoadJob& job, bool
         if (overrides.albedoTexture && !overrides.albedoTexture->empty())
             job.textureDependency = overrides.albedoReference
                 ? RequestTexture(*overrides.albedoReference) : RequestTexture(*overrides.albedoTexture);
+        if (overrides.emissionTexture && !overrides.emissionTexture->empty())
+            job.emissionTextureDependency = overrides.emissionReference
+                ? RequestTexture(*overrides.emissionReference) : RequestTexture(*overrides.emissionTexture);
     }
     const auto resolve = [&]<typename T>(AssetHandle<T> handle, entt::resource<T>& value,
                                         std::string_view name) -> DependencyState {
@@ -901,6 +904,8 @@ AssetSystem::DependencyState AssetSystem::ResolveDependencies(LoadJob& job, bool
     }
     if (overrides.specularColor) parameters.parameters.specularColor = *overrides.specularColor;
     if (overrides.shininess) parameters.parameters.shininess = *overrides.shininess;
+    if (overrides.emission) parameters.parameters.emission = *overrides.emission;
+    if (overrides.lightingWeight) parameters.parameters.lightingWeight = *overrides.lightingWeight;
     if (overrides.albedoTexture) {
         parameters.albedoTexture = {}; // explicit null clears an inherited texture
         if (!overrides.albedoTexture->empty()) {
@@ -909,6 +914,16 @@ AssetSystem::DependencyState AssetSystem::ResolveDependencies(LoadJob& job, bool
             if (state != DependencyState::Ready) return state;
             if (validateTexture(*texture, false) != DependencyState::Ready) return DependencyState::Failed;
             parameters.albedoTexture = texture->texture;
+        }
+    }
+    if (overrides.emissionTexture) {
+        parameters.emissionTexture = {}; // explicit null selects the runtime white fallback
+        if (!overrides.emissionTexture->empty()) {
+            entt::resource<TextureAsset> texture;
+            const auto state = resolve(job.emissionTextureDependency, texture, *overrides.emissionTexture);
+            if (state != DependencyState::Ready) return state;
+            if (validateTexture(*texture, false) != DependencyState::Ready) return DependencyState::Failed;
+            parameters.emissionTexture = texture->texture;
         }
     }
     job.resolvedParameters = parameters;

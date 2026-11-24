@@ -73,9 +73,12 @@ void GBufferPass::Render(RenderWorld& world, RenderingContext& context, Renderin
     context.ClearRenderTargetView(gBuffer.albedoTexture);
     context.ClearRenderTargetView(gBuffer.normalTexture);
     context.ClearRenderTargetView(gBuffer.materialTexture);
+    context.ClearRenderTargetView(gBuffer.resultTexture, {0, 0, 0, 1});
     context.ClearDepthView(gBuffer.depthTexture);
 
-    context.SetRenderTargets({gBuffer.albedoTexture, gBuffer.normalTexture, gBuffer.materialTexture}, gBuffer.depthTexture);
+    context.SetRenderTargets({gBuffer.albedoTexture, gBuffer.normalTexture, gBuffer.materialTexture,
+                              gBuffer.resultTexture}, gBuffer.depthTexture);
+    context.SetBlendState(BlendState::Opaque);
     context.SetDepthState(DepthState::ReadWrite);
     world.BindCameraView(context, resources);
 
@@ -97,11 +100,15 @@ void GBufferPass::Render(RenderWorld& world, RenderingContext& context, Renderin
             resources.materialCBuffer.Update(context, [&](MaterialBufferData& data){
                 data.specularColor = params.parameters.specularColor;
                 data.shininess = params.parameters.shininess;
+                data.emission = params.parameters.emission;
+                data.lightingWeight = params.parameters.lightingWeight;
             });
             if (params.customBuffer) context.BindCBuffer(BindSlots::CBuffer::MaterialCustomBuffer, params.customBuffer);
             else context.UnbindCBuffer(BindSlots::CBuffer::MaterialCustomBuffer);
             context.SetShaderResources(BindSlots::Texture::Albedo,
                 params.albedoTexture ? params.albedoTexture : resources.defaultAlbedoTexture_);
+            context.SetShaderResources(BindSlots::Texture::Emission,
+                params.emissionTexture ? params.emissionTexture : resources.defaultAlbedoTexture_);
             boundInstance = draw.item->materialInstance;
         }
         const auto& ri = *draw.item;

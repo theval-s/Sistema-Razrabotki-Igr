@@ -32,6 +32,10 @@ Style styleOf(const engine::CatalogAssetKind kind) {
         return {"IMG", QColor(0x3d, 0x9a, 0x5b)};
     case engine::CatalogAssetKind::Shader:
         return {"HLSL", QColor(0x7a, 0x52, 0xb3)};
+    case engine::CatalogAssetKind::PostProcess:
+        return {"POST", QColor(0x9a, 0x60, 0xb8)};
+    case engine::CatalogAssetKind::RenderPipeline:
+        return {"PIPE", QColor(0x83, 0x65, 0xb8)};
     case engine::CatalogAssetKind::Material:
         return {"MAT", QColor(0x2f, 0x7f, 0xc1)};
     case engine::CatalogAssetKind::ParticleEffect:
@@ -123,6 +127,10 @@ QString assetKindName(const engine::CatalogAssetKind kind) {
         return QObject::tr("Textures");
     case engine::CatalogAssetKind::Shader:
         return QObject::tr("Shaders");
+    case engine::CatalogAssetKind::PostProcess:
+        return QObject::tr("Postprocessing");
+    case engine::CatalogAssetKind::RenderPipeline:
+        return QObject::tr("Render Pipelines");
     case engine::CatalogAssetKind::Material:
         return QObject::tr("Materials");
     case engine::CatalogAssetKind::ParticleEffect:

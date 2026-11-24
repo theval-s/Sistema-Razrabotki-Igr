@@ -309,8 +309,9 @@ For many enemies that should avoid each other, use DetourCrowd agents instead of
 
 ## Limits and troubleshooting
 
-- **Sight is distance only.** Lua has no raycast API yet, so enemies notice the player through
-  walls.
+- **Sight is distance only in these examples.** Enemies notice the player through walls.
+  Add a collider-based line-of-sight check using the example in
+  [raycasting.md](raycasting.md#line-of-sight); treat query errors as blocked, not clear.
 - **A script error stops the tree.** The Log panel names the tree, the entity and the node, and
   `BT.GetStatus(entity)` returns `Faulted`. During Play, the Behavior Tree panel shows the error
   and marks the node (see [behavior-trees.md](behavior-trees.md#watch-a-tree-during-play)). The tree stays stopped until it is disabled and

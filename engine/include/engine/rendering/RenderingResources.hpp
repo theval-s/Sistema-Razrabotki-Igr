@@ -1,5 +1,7 @@
 ﻿#pragma once
 #include <array>
+#include <cstddef>
+#include <type_traits>
 #include <SimpleMath.h>
 
 #include <engine/engine_export.hpp>
@@ -41,7 +43,18 @@ struct FrameBufferData {
 struct MaterialBufferData {
     Vector3 specularColor;
     float shininess;
+    Vector3 emission;
+    float lightingWeight = 1.0f;
 };
+// EngineMaterial at b2: keep these offsets in sync with Common.hlsl.
+static_assert(std::is_standard_layout_v<MaterialBufferData>);
+static_assert(std::is_trivially_copyable_v<MaterialBufferData>);
+static_assert(sizeof(Vector3) == 12);
+static_assert(offsetof(MaterialBufferData, specularColor) == 0);
+static_assert(offsetof(MaterialBufferData, shininess) == 12);
+static_assert(offsetof(MaterialBufferData, emission) == 16);
+static_assert(offsetof(MaterialBufferData, lightingWeight) == 28);
+static_assert(sizeof(MaterialBufferData) == 32);
 
 struct ObjectBufferData {
     Matrix worldMatrix;

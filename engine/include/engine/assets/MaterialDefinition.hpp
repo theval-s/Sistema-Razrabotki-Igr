@@ -20,6 +20,11 @@ struct MaterialParameterOverrides {
     std::optional<AssetReference> albedoReference; // version 2 authored UUID reference
     std::optional<Vector3> specularColor;
     std::optional<float> shininess;
+    std::optional<Vector3> emission;
+    std::optional<float> lightingWeight;
+    // Same inheritance/explicit-clear and versioned reference rules as albedo.
+    std::optional<std::string> emissionTexture;
+    std::optional<AssetReference> emissionReference;
 };
 
 struct MaterialDefinition {

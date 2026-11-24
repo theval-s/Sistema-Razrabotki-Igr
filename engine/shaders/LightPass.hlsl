@@ -156,9 +156,11 @@ float SpecularTerm(float3 viewDir, float3 reflectDir, float shininess) {
 
 float4 PSMain(PS_IN input) : SV_Target {
     float2 uv = input.pos.xy / View.viewportSize;
-    float3 diffuse = diffuseMap.Sample(LinearWrapSampler, uv).rgb;
-
     float4 normalTex = normalMap.Load(int3(int2(input.pos.xy), 0));
+    float lightingWeight = saturate(normalTex.a);
+    // Background and unlit pixels need no light/shadow/normal evaluation.
+    if (lightingWeight == 0) return 0;
+    float3 diffuse = diffuseMap.Sample(LinearWrapSampler, uv).rgb;
     float3 normal = Normalize0(normalTex.xyz * 2.0 - 1.0);
 
     float4 materialTex = materialMap.Sample(LinearWrapSampler, uv);
@@ -185,7 +187,7 @@ float4 PSMain(PS_IN input) : SV_Target {
         float3 ambientColor = diffuse * 0.1;
         float shadow = CalculateShadow(worldPos, n, l);
         float3 finalColor = (diffuseColor + specularColor) * shadow + ambientColor;
-        return float4(finalColor * Light.intensity, 1);
+        return float4(finalColor * (Light.intensity * lightingWeight), 1);
     }
     if (Light.lightType == 1) {
         // point
@@ -210,7 +212,7 @@ float4 PSMain(PS_IN input) : SV_Target {
         float3 diffuseColor = materialDiffuse * lightColor * max(dot(l, n), 0);
         float3 specularColor = m_specularColor * lightColor * SpecularTerm(v, r, shininess);
         float3 finalColor = diffuseColor + specularColor;
-        return float4(finalColor, 1);
+        return float4(finalColor * lightingWeight, 1);
     }
     if (Light.lightType == 2) {
         //spot light
@@ -238,7 +240,7 @@ float4 PSMain(PS_IN input) : SV_Target {
         float3 diffuseColor = materialDiffuse * lightColor * max(dot(l, n), 0);
         float3 specularColor = m_specularColor * lightColor * SpecularTerm(v, r, shininess);
         float3 finalColor = diffuseColor + specularColor;
-        return float4(finalColor, 1);
+        return float4(finalColor * lightingWeight, 1);
     }
     return float4(0, 0, 0, 1);
 }

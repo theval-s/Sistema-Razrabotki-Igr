@@ -5,6 +5,7 @@
 #include <engine/input/InputSubsystem.hpp>
 #include <engine/physics/PhysicsSubsystem.hpp>
 #include <engine/scripting/LuaEntityHandle.hpp>
+#include "LuaBindingGroups.hpp"
 
 #include <cmath>
 #include <memory>
@@ -288,6 +289,7 @@ void RegisterGameplayBindings(sol::state& lua, LuaBindingsContext& context) {
     physics.set_function("Teleport", [&context](sol::object e, sol::object v, sol::object q) {
         return PhysicsCommand(context, e, v, q, 3);
     });
+    RegisterQueryBindings(lua, context);
     auto navigation = lua.create_named_table("Navigation");
     navigation.set_function("FindPath", [&context](Vector3 start, Vector3 goal, sol::optional<LuaEntityHandle> region) {
         if (!context.engine || (region && (!region->IsValid() || !region->BelongsTo(context.engine->GetScene()))))

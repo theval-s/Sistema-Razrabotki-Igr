@@ -40,6 +40,8 @@ std::string_view KindName(CatalogAssetKind kind) {
     case CatalogAssetKind::NavMesh: return "navMesh";
     case CatalogAssetKind::ParticleEffect: return "particleEffect";
     case CatalogAssetKind::Skybox: return "skybox";
+    case CatalogAssetKind::PostProcess: return "postProcess";
+    case CatalogAssetKind::RenderPipeline: return "renderPipeline";
     }
     return {};
 }
@@ -110,7 +112,8 @@ AssetMetadata MetadataFromJson(const Json& j) {
                                   CatalogAssetKind::UiDocument, CatalogAssetKind::UiStylesheet, CatalogAssetKind::UiTemplate, CatalogAssetKind::Font,
                                   CatalogAssetKind::BehaviorTree, CatalogAssetKind::AudioClip, CatalogAssetKind::Skeleton,
                                   CatalogAssetKind::AnimationClip, CatalogAssetKind::SkinnedMesh, CatalogAssetKind::NavMesh,
-                                  CatalogAssetKind::ParticleEffect, CatalogAssetKind::Skybox}) {
+                                  CatalogAssetKind::ParticleEffect, CatalogAssetKind::Skybox, CatalogAssetKind::PostProcess,
+                                  CatalogAssetKind::RenderPipeline}) {
         if (kind == KindName(candidate)) { meta.kind = candidate; found = true; break; }
     }
     if (!found || ((j.contains("centerOnLoad") || j.contains("materials")) && meta.kind != CatalogAssetKind::Mesh))
@@ -159,6 +162,8 @@ std::optional<CatalogAssetKind> CatalogKindForFile(const std::filesystem::path& 
     if (name.ends_with(".material.json")) return CatalogAssetKind::Material;
     if (name.ends_with(".particle-effect.json")) return CatalogAssetKind::ParticleEffect;
     if (name.ends_with(".skybox.json")) return CatalogAssetKind::Skybox;
+    if (name.ends_with(".postprocess.json")) return CatalogAssetKind::PostProcess;
+    if (name.ends_with(".pipeline.json")) return CatalogAssetKind::RenderPipeline;
     if (name.ends_with(".scene.json")) return CatalogAssetKind::Scene;
     if (name.ends_with(".skeleton.json")) return CatalogAssetKind::Skeleton;
     if (name.ends_with(".animation.json")) return CatalogAssetKind::AnimationClip;

@@ -210,7 +210,8 @@ public:
 class MaterialInstanceImporter final : public IAssetImporter {
 public:
     static MaterialInstance::Overrides MakeOverrides(const MaterialParameterOverrides& authored,
-                                                      TextureHandle explicitTexture);
+                                                      TextureHandle explicitTexture,
+                                                      TextureHandle explicitEmissionTexture = {});
     bool ReadCpu(const AssetDesc& desc, ID3D11Device* device, CpuPayload& payload,
                  std::string& error) const override;
     bool UploadGpu(const UploadTransfer& transfer, const CpuPayload& payload,
@@ -255,6 +256,7 @@ struct LoadJob final : public enki::ITaskSet {
     /// Materials/particle effects: require TEXTURE2D SRV; reject cubes/arrays
     /// before publication. Inspect native SRV/resource descriptors, not Texture::desc.
     AssetHandle<TextureAsset> textureDependency;
+    AssetHandle<TextureAsset> emissionTextureDependency;
     std::vector<AssetHandle<MaterialInstanceAsset>> meshMaterials;
     MaterialParameters resolvedParameters;
     MaterialHandle resolvedMaterial;
